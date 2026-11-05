@@ -922,6 +922,7 @@ impl Backend {
             )
             .await;
         }
+        self.sweep_pending_exports(generation).await;
         self.request_code_lens_refresh().await;
     }
 }

@@ -24,6 +24,7 @@ pub(crate) struct ValidatedScript {
     pub(crate) ast: ParsedFile,
     pub(crate) use_sites: Vec<cwtools_info::IndexedUseSite>,
     pub(crate) tracked_uses: Option<UsedInstances>,
+    pub(crate) covered_export_revision: Option<u64>,
 }
 
 pub(crate) fn code_lens_refresh_needed(
@@ -728,16 +729,33 @@ impl Backend {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn index_parsed_file(
         &self,
         uri: &str,
         parsed: &ParsedFile,
         parsed_version: Option<i32>,
     ) -> Vec<cwtools_info::IndexedUseSite> {
+        self.index_parsed_file_checked(uri, parsed, parsed_version, None)
+    }
+
+    fn index_parsed_file_checked(
+        &self,
+        uri: &str,
+        parsed: &ParsedFile,
+        parsed_version: Option<i32>,
+        source_hash: Option<u64>,
+    ) -> Vec<cwtools_info::IndexedUseSite> {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
-        let (refresh, use_sites) =
-            self.index_parsed_file_as(uri, parsed, parsed_version, &logical_path, false);
+        let (refresh, use_sites) = self.index_parsed_file_as_checked(
+            uri,
+            parsed,
+            parsed_version,
+            source_hash,
+            &logical_path,
+            false,
+        );
         if refresh {
             self.refresh_open_reference_sites();
         }
@@ -754,6 +772,25 @@ impl Backend {
         uri: &str,
         parsed: &ParsedFile,
         parsed_version: Option<i32>,
+        logical_path: &str,
+        base_game: bool,
+    ) -> (bool, Vec<cwtools_info::IndexedUseSite>) {
+        self.index_parsed_file_as_checked(
+            uri,
+            parsed,
+            parsed_version,
+            None,
+            logical_path,
+            base_game,
+        )
+    }
+
+    fn index_parsed_file_as_checked(
+        &self,
+        uri: &str,
+        parsed: &ParsedFile,
+        parsed_version: Option<i32>,
+        source_hash: Option<u64>,
         logical_path: &str,
         base_game: bool,
     ) -> (bool, Vec<cwtools_info::IndexedUseSite>) {
@@ -780,7 +817,7 @@ impl Backend {
             )
         });
         let mut use_sites = Vec::new();
-        let refresh = self.replace_indexed_file(uri, parsed_version, |info| {
+        let refresh = self.replace_indexed_file_checked(uri, parsed_version, source_hash, |info| {
             if let (Some(ruleset), Some(collected)) = (ruleset.as_ref(), collected) {
                 info.index_file_with_precomputed_instances(
                     uri,
@@ -808,24 +845,52 @@ impl Backend {
         parsed_version: Option<i32>,
         index: impl FnOnce(&mut cwtools_info::InfoService),
     ) -> bool {
-        if let Some(version) = parsed_version
-            && self
-                .state
-                .documents
-                .lock()
-                .get(uri)
-                .is_some_and(|doc| doc.version != version)
+        self.replace_indexed_file_checked(uri, parsed_version, None, index)
+    }
+
+    fn replace_indexed_file_checked(
+        &self,
+        uri: &str,
+        parsed_version: Option<i32>,
+        source_hash: Option<u64>,
+        index: impl FnOnce(&mut cwtools_info::InfoService),
+    ) -> bool {
+        // Never wait for either lock while holding the other: a validation can hold
+        // the index read lock for a long traversal while edits need the documents lock.
+        let (mut info, documents) = loop {
+            let info = self.state.info_service.write();
+            if parsed_version.is_none() {
+                break (info, None);
+            }
+            if let Some(docs) = self.state.documents.try_lock() {
+                break (info, Some(docs));
+            }
+            drop(info);
+            std::thread::yield_now();
+        };
+        if let (Some(version), Some(docs)) = (parsed_version, documents.as_ref())
+            && (!docs.get(uri).is_some_and(|doc| doc.version == version)
+                || source_hash.is_some_and(|hash| docs.content_hash(uri) != Some(hash)))
         {
             return false;
         }
-        let mut info = self.state.info_service.write();
         let exports_before = info.export_fingerprint(uri);
+        let names_before = parsed_version.map(|_| export_name_tokens(&info, uri));
         info.begin_file_replacement(uri);
         info.clear_file(uri);
         index(&mut info);
         info.finish_file_replacement(uri);
         let exports_changed = info.export_fingerprint(uri) != exports_before;
+        if exports_changed && let Some(mut names) = names_before {
+            names.extend(export_name_tokens(&info, uri));
+            let mut pending = self.state.pending_export_sweep.lock();
+            pending.revision = pending.revision.wrapping_add(1);
+            pending.pending = true;
+            pending.full |= names.is_empty();
+            pending.names.extend(names);
+        }
         drop(info);
+        drop(documents);
         if exports_changed {
             self.bump_info_revision();
         }
@@ -929,6 +994,15 @@ impl Backend {
     /// `common/inline_scripts` body, so callers see the edit without a workspace scan (#259).
     /// Returns the script's call name when the registry changed, for the dependent sweep.
     pub(crate) fn refresh_inline_script(&self, uri: &str, text: &str) -> Option<String> {
+        self.refresh_inline_script_checked(uri, text, None)
+    }
+
+    fn refresh_inline_script_checked(
+        &self,
+        uri: &str,
+        text: &str,
+        parsed_version: Option<i32>,
+    ) -> Option<String> {
         if self.is_ignored_uri(uri) {
             return None;
         }
@@ -938,10 +1012,24 @@ impl Backend {
             return None;
         }
         let parsed = parse_string_without_comments(text, &self.state.string_table);
-        self.state
-            .inline_scripts
-            .write()
-            .insert(&logical_path, parsed)
+        let (mut registry, documents) = loop {
+            let registry = self.state.inline_scripts.write();
+            if parsed_version.is_none() {
+                break (registry, None);
+            }
+            if let Some(docs) = self.state.documents.try_lock() {
+                break (registry, Some(docs));
+            }
+            drop(registry);
+            std::thread::yield_now();
+        };
+        if let (Some(version), Some(docs)) = (parsed_version, documents.as_ref())
+            && (!docs.get(uri).is_some_and(|doc| doc.version == version)
+                || docs.content_hash(uri) != Some(cwtools_cache::workspace::content_hash(text)))
+        {
+            return None;
+        }
+        registry.insert(&logical_path, parsed)
     }
 
     pub(crate) fn remove_inline_script(&self, uri: &str) -> Option<String> {
@@ -960,9 +1048,10 @@ impl Backend {
         game: Option<cwtools_game::constants::Game>,
         registry: Option<&std::sync::Arc<cwtools_game::scope_registry::ScopeRegistry>>,
         lines: &DocLines,
-    ) -> Vec<Diagnostic> {
+        install_uses: bool,
+    ) -> (Vec<Diagnostic>, Option<UsedInstances>) {
         if self.is_ignored_uri(uri) {
-            return Vec::new();
+            return (Vec::new(), None);
         }
         let overlay = self.loc_overlay_keys();
         let table = self.table_for(parsed);
@@ -989,14 +1078,59 @@ impl Backend {
         let track = needs_use_tracking(ruleset, game);
         let (mut diagnostics, used) =
             validate_parsed_with_indexes(uri, parsed, &prepared, lines, track);
+        let mut candidate = None;
         if let Some(used) = used {
-            for err in
-                &self.unused_instance_errors(uri, used, ruleset, game, &info_guard.type_index)
-            {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::DependentUsesPrepared);
+            let errors = if install_uses {
+                self.unused_instance_errors(uri, used, ruleset, game, &info_guard.type_index)
+            } else {
+                let errors = self.preview_unused_instance_errors(
+                    uri,
+                    &used,
+                    ruleset,
+                    game,
+                    &info_guard.type_index,
+                );
+                candidate = Some(used);
+                errors
+            };
+            for err in &errors {
                 diagnostics.push(validation_error_to_diagnostic(err, lines));
             }
         }
-        diagnostics
+        (diagnostics, candidate)
+    }
+
+    fn preview_unused_instance_errors(
+        &self,
+        uri: &str,
+        used: &UsedInstances,
+        ruleset: &RuleSet,
+        game: Option<cwtools_game::constants::Game>,
+        type_index: &cwtools_info::TypeIndex,
+    ) -> Vec<ValidationError> {
+        if !self
+            .state
+            .index_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Vec::new();
+        }
+        let mut merged = UsedInstances::default();
+        for (other_uri, other) in self.state.type_uses.read().iter() {
+            if other_uri != uri {
+                merged.merge_from(other);
+            }
+        }
+        merged.merge_from(used);
+        check_unused_instances(
+            ruleset,
+            game,
+            &type_index.instances_in_file(uri),
+            &merged,
+            &uri.into(),
+        )
     }
 
     fn refresh_type_uses(&self, uri: &str, uses: UsedInstances) -> HashSet<String> {
@@ -1266,11 +1400,10 @@ impl Backend {
             }
         };
 
-        let (exports_before, names_before, references_before) = {
+        let (exports_before, references_before) = {
             let info = self.state.info_service.read();
             (
                 info.export_fingerprint(&uri),
-                export_name_tokens(&info, &uri),
                 info.reference_fingerprint(&uri),
             )
         };
@@ -1290,13 +1423,14 @@ impl Backend {
         tokio::task::block_in_place(|| {
             self.hold(crate::state::HoldPoint::ValidateBeforeAcceptance)
         });
-        let (parsed, open_use_sites, tracked_uses) = match parsed {
+        let (parsed, open_use_sites, tracked_uses, covered_export_revision) = match parsed {
             Some(script) => (
                 Some(Arc::new(script.ast)),
                 script.use_sites,
                 script.tracked_uses,
+                script.covered_export_revision,
             ),
-            None => (None, Vec::new(), None),
+            None => (None, Vec::new(), None, None),
         };
         let mut first_accepted_ast = false;
         {
@@ -1335,11 +1469,10 @@ impl Backend {
             .await;
         }
 
-        let (exports_after, names_after, references_after) = {
+        let (exports_after, references_after) = {
             let info = self.state.info_service.read();
             (
                 info.export_fingerprint(&uri),
-                export_name_tokens(&info, &uri),
                 info.reference_fingerprint(&uri),
             )
         };
@@ -1350,29 +1483,64 @@ impl Backend {
             references_before,
             references_after,
         );
-        let mut changed_names: NameTokens = names_before
-            .symmetric_difference(&names_after)
-            .copied()
-            .collect();
-        {
-            let mut pending = self.state.pending_changed_names.lock();
-            changed_names.extend(pending.drain());
-        }
-        if exports_changed || !changed_names.is_empty() {
-            let scope = if changed_names.is_empty() {
-                None
-            } else {
-                Some(&changed_names)
-            };
-            self.revalidate_open_dependents(&uri, generation, scope)
+        let changed_names: NameTokens = self.state.pending_changed_names.lock().drain().collect();
+        if !changed_names.is_empty() {
+            self.revalidate_open_dependents(&uri, generation, Some(&changed_names))
                 .await;
         } else {
             tracing::debug!(uri = %uri, "exports unchanged; skipping dependent sweep");
         }
+        self.sweep_pending_exports_for(
+            generation,
+            covered_export_revision.map(|revision| (uri.as_str(), revision)),
+        )
+        .await;
         if code_lenses_changed {
             self.request_code_lens_refresh().await;
         } else {
             tracing::debug!(uri = %uri, "CodeLens exports and references unchanged; skipping refresh");
+        }
+    }
+
+    /// Keep pending export changes durable across cancellation and concurrent sweeps.
+    pub(crate) async fn sweep_pending_exports(&self, generation: u64) {
+        self.sweep_pending_exports_for(generation, None).await;
+    }
+
+    async fn sweep_pending_exports_for(&self, generation: u64, covered: Option<(&str, u64)>) {
+        use std::sync::atomic::Ordering;
+        loop {
+            let (revision, full, names) = {
+                let pending = self.state.pending_export_sweep.lock();
+                if !pending.pending {
+                    return;
+                }
+                (pending.revision, pending.full, pending.names.clone())
+            };
+            #[cfg(test)]
+            tokio::task::block_in_place(|| self.hold(crate::state::HoldPoint::ExportSweepSnapshot));
+            // Exclude only a document validated against this exact index revision.
+            let exclude = covered
+                .filter(|(_, covered_revision)| *covered_revision == revision)
+                .map_or("", |(uri, _)| uri);
+            let complete = self
+                .revalidate_open_dependents(exclude, generation, (!full).then_some(&names))
+                .await;
+            if complete && self.state.edit_generation.load(Ordering::Acquire) == generation {
+                // A cancelled indexing pass may have changed exported CodeLens data too.
+                self.request_code_lens_refresh().await;
+                let mut pending = self.state.pending_export_sweep.lock();
+                if pending.revision == revision
+                    && self.state.edit_generation.load(Ordering::Acquire) == generation
+                {
+                    pending.pending = false;
+                    pending.full = false;
+                    pending.names.clear();
+                    return;
+                }
+            } else {
+                return;
+            }
         }
     }
 
@@ -1381,14 +1549,23 @@ impl Backend {
         changed_uri: &str,
         generation: u64,
         changed_names: Option<&NameTokens>,
-    ) {
+    ) -> bool {
         use std::sync::atomic::Ordering;
 
+        let mut stale_uris = Vec::new();
         let mut others: Vec<(String, i32, Arc<ParsedFile>, Arc<str>)> = {
             let tokens = self.state.doc_tokens.read();
             let docs = self.state.documents.lock();
             docs.iter()
                 .filter(|(u, _)| u.as_str() != changed_uri)
+                .filter(|(u, d)| {
+                    if d.ast_version != Some(d.version) {
+                        stale_uris.push(u.to_string());
+                        false
+                    } else {
+                        true
+                    }
+                })
                 .filter(|(u, _)| match changed_names {
                     None => true,
                     Some(ids) => match tokens.get(u.as_str()) {
@@ -1403,9 +1580,14 @@ impl Backend {
                 })
                 .collect()
         };
+        let stale_ast = stale_uris.iter().any(|uri| {
+            !crate::paths::has_loc_ext(uri)
+                && !crate::paths::is_cwt_file(uri)
+                && !self.is_ignored_uri(uri)
+        });
         others.retain(|(uri, _, _, _)| !self.is_ignored_uri(uri));
         if others.is_empty() {
-            return;
+            return !stale_ast && self.state.edit_generation.load(Ordering::Acquire) == generation;
         }
         tracing::debug!(
             count = others.len(),
@@ -1418,7 +1600,14 @@ impl Backend {
         };
         let validated: Vec<(String, i32, Vec<Diagnostic>, u64)> =
             tokio::task::block_in_place(|| {
-                let rules_guard = self.state.rules.read();
+                let (ruleset, modifier_keys, registry) = {
+                    let rules = self.state.rules.read();
+                    (
+                        rules.ruleset.clone(),
+                        rules.modifier_keys.clone(),
+                        rules.scope_registry.clone(),
+                    )
+                };
                 let mut out = Vec::with_capacity(others.len());
                 for (uri, snapshot_version, ast, text) in others {
                     if self.state.edit_generation.load(Ordering::Relaxed) != generation {
@@ -1430,18 +1619,39 @@ impl Backend {
                         break;
                     }
                     let lines = DocLines::new(&text, encoding.clone());
-                    let diagnostics = match rules_guard.ruleset.as_ref() {
+                    let (mut diagnostics, used) = match ruleset.as_ref() {
                         Some(ruleset) => self.validate_parsed_prebuilt(
                             &uri,
                             &ast,
-                            &rules_guard.modifier_keys,
+                            &modifier_keys,
                             ruleset,
                             game,
-                            rules_guard.scope_registry.as_ref(),
+                            registry.as_ref(),
                             &lines,
+                            false,
                         ),
-                        None => parse_errors_to_diagnostics(&ast.errors, &lines),
+                        None => (parse_errors_to_diagnostics(&ast.errors, &lines), None),
                     };
+                    if let Some(used) = used {
+                        let docs = self.state.documents.lock();
+                        if self.state.edit_generation.load(Ordering::Acquire) == generation
+                            && docs.get(&uri).is_some_and(|doc| {
+                                doc.version == snapshot_version && Arc::ptr_eq(&doc.text, &text)
+                            })
+                        {
+                            let changed = self.refresh_type_uses(&uri, used);
+                            if !changed.is_empty() {
+                                let mut pending = self.state.pending_export_sweep.lock();
+                                pending.revision = pending.revision.wrapping_add(1);
+                                pending.pending = true;
+                                pending.names.extend(name_tokens(&changed));
+                            }
+                        }
+                    }
+                    let inline_ignored =
+                        cwtools_validation::inline_ignore::extract_inline_ignored_codes(&text);
+                    drop_inline_suppressed(&mut diagnostics, &inline_ignored);
+                    truncate_diagnostics(&mut diagnostics, &lines);
                     out.push((
                         uri,
                         snapshot_version,
@@ -1471,6 +1681,7 @@ impl Backend {
                 .await;
             }
         }
+        !stale_ast && self.state.edit_generation.load(Ordering::Acquire) == generation
     }
 
     /// Flatten both loc overlays into one set of lowercased keys for the CW100/CW122 checks, so
@@ -1791,6 +2002,7 @@ impl Backend {
         };
         self.revalidate_open_dependents("", generation, Some(&scope))
             .await;
+        self.sweep_pending_exports(generation).await;
     }
 
     #[tracing::instrument(skip_all, fields(uri = %uri, bytes = text.len(), trigger = trigger.as_str()))]
@@ -1934,6 +2146,7 @@ impl Backend {
                 };
                 self.revalidate_open_dependents(uri, generation, Some(&scope))
                     .await;
+                self.sweep_pending_exports(generation).await;
             }
             let mut diagnostics = diagnostics;
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
@@ -1982,20 +2195,34 @@ impl Backend {
             let parsed = parse_string(text, &table);
             diagnostics.extend(parse_errors_to_diagnostics(&parsed.errors, &lines));
 
-            let use_sites = self.index_parsed_file(uri, &parsed, parsed_version);
+            let use_sites = self.index_parsed_file_checked(
+                uri,
+                &parsed,
+                parsed_version,
+                parsed_version.map(|_| cwtools_cache::workspace::content_hash(text)),
+            );
 
             // Keep the inline-script registry current: re-register a `common/inline_scripts`
             // body under its call name so the NEXT validate of any caller sees the new
             // content. Queued for the dependent sweep so open callers see it on THIS pass (#259).
-            if let Some(name) = self.refresh_inline_script(uri, text) {
-                self.state
-                    .pending_changed_names
-                    .lock()
-                    .insert(name_token_hash(&name));
+            let inline_change = self.refresh_inline_script_checked(uri, text, parsed_version);
+            if let Some(name) = inline_change {
+                if cancel.is_some() {
+                    let mut pending = self.state.pending_export_sweep.lock();
+                    pending.revision = pending.revision.wrapping_add(1);
+                    pending.pending = true;
+                    pending.full = true;
+                } else {
+                    self.state
+                        .pending_changed_names
+                        .lock()
+                        .insert(name_token_hash(&name));
+                }
             }
 
             // Validation. Lock order: rules -> info_service -> loc_index -> inline_scripts.
             let mut tracked_uses = None;
+            let mut covered_export_revision = None;
             let (errors, log_msg) = {
                 let game = self.state.config.read().game();
                 // Live overlay of unsaved loc keys in open `.yml` files, so a key just added
@@ -2056,26 +2283,9 @@ impl Backend {
                     };
                     if let Some(used) = used {
                         if cancel.is_some() {
-                            let mut merged = UsedInstances::default();
-                            for (other_uri, other) in self.state.type_uses.read().iter() {
-                                if other_uri != uri {
-                                    merged.merge_from(other);
-                                }
-                            }
-                            merged.merge_from(&used);
-                            if self
-                                .state
-                                .index_ready
-                                .load(std::sync::atomic::Ordering::Relaxed)
-                            {
-                                errs.extend(check_unused_instances(
-                                    ruleset,
-                                    game,
-                                    &type_index.instances_in_file(uri),
-                                    &merged,
-                                    &uri.into(),
-                                ));
-                            }
+                            errs.extend(self.preview_unused_instance_errors(
+                                uri, &used, ruleset, game, type_index,
+                            ));
                             tracked_uses = Some(used);
                         } else {
                             errs.extend(
@@ -2084,6 +2294,12 @@ impl Backend {
                         }
                     }
                     append_missing_loc_errors(uri, &prepared, &mut errs);
+                    // Use tracking can change independently of the export revision.
+                    // Revisit tracked documents rather than excluding a stale CW239 result.
+                    if !track {
+                        covered_export_revision =
+                            Some(self.state.pending_export_sweep.lock().revision);
+                    }
                     drop(loc_guard);
                     drop(info_guard);
                     let elapsed = start.elapsed();
@@ -2117,6 +2333,7 @@ impl Backend {
                     ast: parsed,
                     use_sites,
                     tracked_uses,
+                    covered_export_revision,
                 }),
             ))
         })
@@ -2721,6 +2938,160 @@ mod info_revision_tests {
             .copied()
             .collect();
         (changed, exports_before != exports_after)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pending_export_sweep_survives_supersession_and_stale_ast() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        let old = "old = {}";
+        index(&backend, &uri, old);
+        let ast = Arc::new(parse_string(old, &backend.state.string_table));
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(old),
+                    ast: Some(ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: old.len(),
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let changed = "new = {}";
+        let changed_ast = parse_string(changed, &backend.state.string_table);
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from(changed))
+            .unwrap();
+        backend.index_parsed_file(&uri, &changed_ast, Some(2));
+        assert!(backend.state.pending_export_sweep.lock().pending);
+        // A successor with identical exports must not erase the earlier dirty change.
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 3, Arc::from(changed))
+            .unwrap();
+        backend.index_parsed_file(&uri, &changed_ast, Some(3));
+        backend.sweep_pending_exports(0).await;
+        assert!(
+            backend.state.pending_export_sweep.lock().pending,
+            "a stale AST cannot complete the sweep"
+        );
+        backend
+            .state
+            .documents
+            .lock()
+            .set_ast(&uri, 3, Arc::new(changed_ast));
+        backend.sweep_pending_exports(0).await;
+        assert!(!backend.state.pending_export_sweep.lock().pending);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn same_name_export_change_queues_its_name() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        let text = "x = {}";
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        backend.replace_indexed_file(&uri, None, |info| {
+            info.files
+                .insert(uri.clone(), exports(&[], &[("variable", "shared")], &[]));
+        });
+        backend.replace_indexed_file(&uri, Some(1), |info| {
+            info.files
+                .insert(uri.clone(), exports(&[], &[("global", "shared")], &[]));
+        });
+        let pending = backend.state.pending_export_sweep.lock();
+        assert!(pending.pending);
+        assert!(pending.full || pending.names.contains(&name_token_hash("shared")));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn newer_export_change_survives_an_older_in_flight_sweep() {
+        use crate::state::{HoldGate, HoldPoint};
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        let text = "one = {}";
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: Some(Arc::new(parse_string(text, &backend.state.string_table))),
+                    ast_version: Some(1),
+                    ast_source_bytes: text.len(),
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        backend.index_parsed_file(
+            &uri,
+            &parse_string(text, &backend.state.string_table),
+            Some(1),
+        );
+        let gate = HoldGate::new(HoldPoint::ExportSweepSnapshot);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let task = tokio::spawn(async move {
+            worker.sweep_pending_exports(0).await;
+        });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("sweep did not reach its snapshot gate");
+        }
+        let newer = "two = {}";
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from(newer))
+            .unwrap();
+        let ast = parse_string(newer, &backend.state.string_table);
+        backend.index_parsed_file(&uri, &ast, Some(2));
+        backend
+            .state
+            .documents
+            .lock()
+            .set_ast(&uri, 2, Arc::new(ast));
+        gate.release();
+        task.await.unwrap();
+        assert!(
+            !backend.state.pending_export_sweep.lock().pending,
+            "the newer revision must be swept before pending work clears"
+        );
     }
 
     #[test]
@@ -4507,15 +4878,18 @@ mod ignored_tests {
         let uri = "file:///ws/ignored.txt";
         let parsed = parse_string("x = 1", &StringTable::new());
         let lines = DocLines::new("x = 1", tower_lsp::lsp_types::PositionEncodingKind::UTF16);
-        let diags = backend.validate_parsed_prebuilt(
-            uri,
-            &parsed,
-            &std::collections::HashSet::new(),
-            &cwtools_rules::rules_types::RuleSet::default(),
-            None,
-            None,
-            &lines,
-        );
+        let diags = backend
+            .validate_parsed_prebuilt(
+                uri,
+                &parsed,
+                &std::collections::HashSet::new(),
+                &cwtools_rules::rules_types::RuleSet::default(),
+                None,
+                None,
+                &lines,
+                true,
+            )
+            .0;
         assert!(
             diags.is_empty(),
             "prebuilt validation of ignored file must be empty"
@@ -4933,7 +5307,7 @@ mod ignored_tests {
                     version: 1,
                     text: Arc::from(doc_text),
                     ast: Some(Arc::new(doc_ast)),
-                    ast_version: None,
+                    ast_version: Some(1),
                     ast_source_bytes: 0,
                     loc_cache: None,
                 },
@@ -5828,7 +6202,7 @@ user = { uses = <thing> }
             .write()
             .insert(uri.clone(), previous);
         let cancel = CancelFlag::default();
-        let (diagnostics, _) = backend
+        let (diagnostics, script) = backend
             .parse_and_validate_cancellable(
                 &uri,
                 "t1 = { uses = t1 }\nt2 = {}",
@@ -5838,6 +6212,10 @@ user = { uses = <thing> }
             )
             .await
             .unwrap();
+        assert!(
+            script.unwrap().covered_export_revision.is_none(),
+            "tracked validation must revisit the source if uses can change concurrently"
+        );
         let unused: Vec<_> = diagnostics
             .iter()
             .filter(|d| {
@@ -5849,6 +6227,508 @@ user = { uses = <thing> }
         assert_eq!(unused.len(), 1, "{diagnostics:?}");
         assert!(unused[0].message.contains("t2"), "{unused:?}");
         assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn pending_export_sweep_publishes_dependent_diagnostics() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let source = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let dependent = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let old = parse_string("t1 = {}", &backend.state.string_table);
+        backend.index_parsed_file(&source, &old, None);
+        let changed = "t2 = {}";
+        let changed_ast = Arc::new(parse_string(changed, &backend.state.string_table));
+        let dependent_text = "u = { uses = t1 }";
+        let dependent_ast = Arc::new(parse_string(dependent_text, &backend.state.string_table));
+        {
+            let mut docs = backend.state.documents.lock();
+            for (uri, text, ast) in [
+                (&source, changed, changed_ast.clone()),
+                (&dependent, dependent_text, dependent_ast),
+            ] {
+                docs.open(
+                    uri.clone(),
+                    crate::state::ParsedDoc {
+                        version: 1,
+                        text: Arc::from(text),
+                        ast: Some(ast),
+                        ast_version: Some(1),
+                        ast_source_bytes: text.len(),
+                        loc_cache: None,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        backend.index_parsed_file(&source, &changed_ast, Some(1));
+        Arc::make_mut(&mut backend.state.info_service.write().type_index).complete = true;
+        let mut publications = Vec::new();
+        let sweep = backend.sweep_pending_exports(0);
+        tokio::pin!(sweep);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    _ = &mut sweep => break,
+                    message = socket.next() => {
+                        let message = message.unwrap();
+                        if message.method() == "textDocument/publishDiagnostics" {
+                            publications.push(serde_json::from_value::<PublishDiagnosticsParams>(message.params().cloned().unwrap()).unwrap());
+                        }
+                    }
+                }
+            }
+        }).await.expect("the sweep must finish");
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                publications.push(
+                    serde_json::from_value::<PublishDiagnosticsParams>(
+                        message.params().cloned().unwrap(),
+                    )
+                    .unwrap(),
+                );
+            }
+        }
+        let dependent_result = publications
+            .iter()
+            .find(|p| p.uri.as_str() == dependent)
+            .unwrap();
+        assert!(
+            !dependent_result.diagnostics.is_empty(),
+            "removed t1 must be diagnosed"
+        );
+        assert!(!backend.state.pending_export_sweep.lock().pending);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn pending_export_sweep_preserves_inline_suppression() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let source = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let dependent = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let old = parse_string("t1 = {}", &backend.state.string_table);
+        backend.index_parsed_file(&source, &old, None);
+        let changed = "t2 = {}";
+        let changed_ast = Arc::new(parse_string(changed, &backend.state.string_table));
+        let dependent_text = "u = { uses = t1 } # cwtools-ignore CW500";
+        let dependent_ast = Arc::new(parse_string(dependent_text, &backend.state.string_table));
+        {
+            let mut docs = backend.state.documents.lock();
+            for (uri, text, ast) in [
+                (&source, changed, changed_ast.clone()),
+                (&dependent, dependent_text, dependent_ast),
+            ] {
+                docs.open(
+                    uri.clone(),
+                    crate::state::ParsedDoc {
+                        version: 1,
+                        text: Arc::from(text),
+                        ast: Some(ast),
+                        ast_version: Some(1),
+                        ast_source_bytes: text.len(),
+                        loc_cache: None,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        backend.index_parsed_file(&source, &changed_ast, Some(1));
+        Arc::make_mut(&mut backend.state.info_service.write().type_index).complete = true;
+        let mut publications = Vec::new();
+        let sweep = backend.sweep_pending_exports(0);
+        tokio::pin!(sweep);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    _ = &mut sweep => break,
+                    message = socket.next() => {
+                        let message = message.unwrap();
+                        if message.method() == "textDocument/publishDiagnostics" {
+                            publications.push(serde_json::from_value::<PublishDiagnosticsParams>(message.params().cloned().unwrap()).unwrap());
+                        }
+                    }
+                }
+            }
+        }).await.expect("the sweep must finish");
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                publications.push(
+                    serde_json::from_value::<PublishDiagnosticsParams>(
+                        message.params().cloned().unwrap(),
+                    )
+                    .unwrap(),
+                );
+            }
+        }
+        let dependent_result = publications
+            .iter()
+            .find(|p| p.uri.as_str() == dependent)
+            .unwrap();
+        assert!(
+            dependent_result
+                .diagnostics
+                .iter()
+                .all(|d| !matches!(&d.code, Some(NumberOrString::String(code)) if code == "CW500")),
+            "inline suppression must survive the dependent sweep"
+        );
+        assert!(!backend.state.pending_export_sweep.lock().pending);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn superseded_index_change_revalidates_open_dependent() {
+        use crate::state::{HoldGate, HoldPoint};
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let source = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let dependent = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let old = "t1 = {}";
+        let old_ast = Arc::new(parse_string(old, &backend.state.string_table));
+        backend.index_parsed_file(&source, &old_ast, None);
+        Arc::make_mut(&mut backend.state.info_service.write().type_index).complete = true;
+        let dep_text = "u = { uses = t1 }";
+        let dep_ast = Arc::new(parse_string(dep_text, &backend.state.string_table));
+        {
+            let mut docs = backend.state.documents.lock();
+            for (uri, text, ast) in [(&source, old, old_ast), (&dependent, dep_text, dep_ast)] {
+                docs.open(
+                    uri.clone(),
+                    crate::state::ParsedDoc {
+                        version: 1,
+                        text: Arc::from(text),
+                        ast: Some(ast),
+                        ast_version: Some(1),
+                        ast_source_bytes: text.len(),
+                        loc_cache: None,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let publications = Arc::new(Mutex::new(Vec::new()));
+        let results = publications.clone();
+        let drain = tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    results.lock().push(
+                        serde_json::from_value::<PublishDiagnosticsParams>(
+                            message.params().cloned().unwrap(),
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+        });
+        let gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let change = |version| DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: Url::parse(&source).unwrap(),
+                version,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "t2 = {}".into(),
+            }],
+        };
+        backend.did_change_impl(change(2)).await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("first edit did not reach validation");
+        }
+        backend.did_change_impl(change(3)).await;
+        gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if backend.state.debounce_handles.lock().is_empty() && publications.lock().iter().any(|p| p.uri.as_str() == dependent && p.diagnostics.iter().any(|d| matches!(&d.code, Some(NumberOrString::String(code)) if code == "CW500"))) { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("dependent must receive the missing-type diagnostic after supersession");
+        drain.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn closing_after_cancelled_index_change_revalidates_open_dependent() {
+        use crate::state::{HoldGate, HoldPoint};
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let source = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let dependent = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let old = "t1 = {}";
+        let old_ast = Arc::new(parse_string(old, &backend.state.string_table));
+        backend.index_parsed_file(&source, &old_ast, None);
+        Arc::make_mut(&mut backend.state.info_service.write().type_index).complete = true;
+        let dep_text = "u = { uses = t1 }";
+        let dep_ast = Arc::new(parse_string(dep_text, &backend.state.string_table));
+        {
+            let mut docs = backend.state.documents.lock();
+            for (uri, text, ast) in [(&source, old, old_ast), (&dependent, dep_text, dep_ast)] {
+                docs.open(
+                    uri.clone(),
+                    crate::state::ParsedDoc {
+                        version: 1,
+                        text: Arc::from(text),
+                        ast: Some(ast),
+                        ast_version: Some(1),
+                        ast_source_bytes: text.len(),
+                        loc_cache: None,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let publications = Arc::new(Mutex::new(Vec::new()));
+        let results = publications.clone();
+        let drain = tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    results.lock().push(
+                        serde_json::from_value::<PublishDiagnosticsParams>(
+                            message.params().cloned().unwrap(),
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+        });
+        let gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let change = |version| DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: Url::parse(&source).unwrap(),
+                version,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "t2 = {}".into(),
+            }],
+        };
+        backend.did_change_impl(change(2)).await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("first edit did not reach validation");
+        }
+        std::fs::create_dir_all(workspace.path().join("common/things")).unwrap();
+        std::fs::write(workspace.path().join("common/things/t.txt"), "t2 = {}").unwrap();
+        let close_backend = backend.clone();
+        let close_uri = Url::parse(&source).unwrap();
+        let closing = tokio::spawn(async move {
+            close_backend
+                .did_close_impl(DidCloseTextDocumentParams {
+                    text_document: TextDocumentIdentifier { uri: close_uri },
+                })
+                .await;
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let cancelled = backend
+                    .state
+                    .debounce_handles
+                    .lock()
+                    .get(&source)
+                    .is_none_or(|task| task.cancel_flag.is_cancelled());
+                if cancelled {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("close must cancel the held validation");
+        gate.release();
+        closing.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if backend.state.debounce_handles.lock().is_empty() && publications.lock().iter().any(|p| p.uri.as_str() == dependent && p.diagnostics.iter().any(|d| matches!(&d.code, Some(NumberOrString::String(code)) if code == "CW500"))) { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("dependent must receive the missing-type diagnostic after close");
+        drain.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dependent_sweep_does_not_overwrite_newer_accepted_uses() {
+        use crate::state::{HoldGate, HoldPoint};
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, _) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let old_text = "u = { uses = t1 }";
+        let old = Arc::new(parse_string(old_text, &backend.state.string_table));
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(old_text),
+                    ast: Some(old),
+                    ast_version: Some(1),
+                    ast_source_bytes: old_text.len(),
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let gate = HoldGate::new(HoldPoint::DependentUsesPrepared);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let task =
+            tokio::spawn(async move { worker.revalidate_open_dependents("", 0, None).await });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("dependent traversal did not reach the use gate");
+        }
+        let latest_text = "u = { uses = t2 }";
+        {
+            let mut docs = backend.state.documents.lock();
+            docs.change(&uri, 2, Arc::from(latest_text)).unwrap();
+            docs.set_ast(
+                &uri,
+                2,
+                Arc::new(parse_string(latest_text, &backend.state.string_table)),
+            );
+        }
+        let mut latest = UsedInstances::default();
+        latest.mark("thing", "t2");
+        backend.refresh_type_uses(&uri, latest);
+        gate.release();
+        task.await.unwrap();
+        assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dependent_sweep_records_uses_from_changed_inline_script() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let definitions = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let script =
+            crate::paths::path_to_uri(&workspace.path().join("common/inline_scripts/bonus.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let text = "u = { inline_script = { script = bonus } }";
+        let ast = Arc::new(parse_string(text, &backend.state.string_table));
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: Some(ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: text.len(),
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let definitions_text = "t1 = {}\nt2 = {}";
+        let definitions_ast = Arc::new(parse_string(definitions_text, &backend.state.string_table));
+        backend.index_parsed_file(&definitions, &definitions_ast, None);
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                definitions.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(definitions_text),
+                    ast: Some(definitions_ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: definitions_text.len(),
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let mut previous = UsedInstances::default();
+        previous.mark("thing", "t1");
+        backend.refresh_type_uses(&uri, previous);
+        assert!(
+            backend
+                .refresh_inline_script(&script, "uses = t2")
+                .is_some()
+        );
+        let publications = Arc::new(Mutex::new(Vec::new()));
+        let results = publications.clone();
+        let drain = tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    results.lock().push(
+                        serde_json::from_value::<PublishDiagnosticsParams>(
+                            message.params().cloned().unwrap(),
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+        });
+        backend.revalidate_open_dependents("", 0, None).await;
+        backend.sweep_pending_exports(0).await;
+        assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+        assert!(!backend.state.pending_export_sweep.lock().pending);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if publications
+                    .lock()
+                    .iter()
+                    .rev()
+                    .find(|p| p.uri.as_str() == definitions)
+                    .is_some_and(|p| {
+                        p.diagnostics.iter().any(|d| {
+                            matches!(&d.code, Some(NumberOrString::String(code)) if code == "CW239")
+                                && d.message.contains("t1")
+                        }) && !p.diagnostics.iter().any(|d| {
+                            matches!(&d.code, Some(NumberOrString::String(code)) if code == "CW239")
+                                && d.message.contains("t2")
+                        })
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the definition must report t1 unused and t2 used");
+        drain.abort();
     }
 
     /// A newer edit of the same document cancels the in-flight rule traversal
@@ -5940,8 +6820,19 @@ user = { uses = <thing> }
         }
 
         second_gate.release();
+        let mut publications = Vec::new();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while !backend.state.debounce_handles.lock().is_empty() {
+                while let Some(Some(message)) = socket.next().now_or_never() {
+                    if message.method() == "textDocument/publishDiagnostics" {
+                        publications.push(
+                            serde_json::from_value::<PublishDiagnosticsParams>(
+                                message.params().cloned().unwrap(),
+                            )
+                            .unwrap(),
+                        );
+                    }
+                }
                 tokio::task::yield_now().await;
             }
         })
@@ -5950,7 +6841,6 @@ user = { uses = <thing> }
 
         // The latest buffer completes normally.
         assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
-        let mut publications = Vec::new();
         while let Some(Some(message)) = socket.next().now_or_never() {
             if message.method() == "textDocument/publishDiagnostics" {
                 let params: PublishDiagnosticsParams =
@@ -5958,8 +6848,8 @@ user = { uses = <thing> }
                 publications.push(params);
             }
         }
-        assert_eq!(publications.len(), 1);
-        assert_eq!(publications[0].version, Some(2));
+        assert!(!publications.is_empty());
+        assert!(publications.iter().all(|p| p.version == Some(2)));
         assert_eq!(
             backend
                 .state
@@ -6060,8 +6950,19 @@ user = { uses = <thing> }
         }
 
         second_gate.release();
+        let mut publications = Vec::new();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while !backend.state.debounce_handles.lock().is_empty() {
+                while let Some(Some(message)) = socket.next().now_or_never() {
+                    if message.method() == "textDocument/publishDiagnostics" {
+                        publications.push(
+                            serde_json::from_value::<PublishDiagnosticsParams>(
+                                message.params().cloned().unwrap(),
+                            )
+                            .unwrap(),
+                        );
+                    }
+                }
                 tokio::task::yield_now().await;
             }
         })
@@ -6070,7 +6971,6 @@ user = { uses = <thing> }
 
         // The latest buffer completes normally.
         assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
-        let mut publications = Vec::new();
         while let Some(Some(message)) = socket.next().now_or_never() {
             if message.method() == "textDocument/publishDiagnostics" {
                 let params: PublishDiagnosticsParams =
@@ -6078,8 +6978,8 @@ user = { uses = <thing> }
                 publications.push(params);
             }
         }
-        assert_eq!(publications.len(), 1);
-        assert_eq!(publications[0].version, Some(2));
+        assert!(!publications.is_empty());
+        assert!(publications.iter().all(|p| p.version == Some(2)));
         assert_eq!(
             backend
                 .state
