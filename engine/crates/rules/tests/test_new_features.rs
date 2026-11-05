@@ -149,6 +149,35 @@ fn scope_field_is_a_scope_field() {
     ));
 }
 
+const SCRIPTED_EFFECT_CALL: &str = r#"
+alias[effect:<scripted_effect>] = {
+    enum[scripted_effect_params] = scalar
+}
+"#;
+
+#[test]
+fn engine_supplies_scripted_effect_params_a_rule_uses_but_the_config_leaves_undefined() {
+    assert!(parse_ruleset(SCRIPTED_EFFECT_CALL).supplies_scripted_effect_params());
+}
+
+#[test]
+fn engine_does_not_supply_scripted_effect_params_unless_a_rule_uses_them() {
+    let ruleset = parse_ruleset("alias[effect:<scripted_effect>] = { amount = int }");
+    assert!(!ruleset.supplies_scripted_effect_params());
+}
+
+#[test]
+fn config_enum_wins_over_the_supplied_scripted_effect_params() {
+    let enum_def = format!(
+        "{SCRIPTED_EFFECT_CALL}\nenums = {{ enum[scripted_effect_params] = {{ alpha beta }} }}"
+    );
+    assert!(!parse_ruleset(&enum_def).supplies_scripted_effect_params());
+    let complex_def = format!(
+        "{SCRIPTED_EFFECT_CALL}\nenums = {{ complex_enum[scripted_effect_params] = {{ path = game/common/x name = {{ enum_name = scalar }} }} }}"
+    );
+    assert!(!parse_ruleset(&complex_def).supplies_scripted_effect_params());
+}
+
 fn parse_ruleset(input: &str) -> RuleSet {
     let table = StringTable::new();
     let parsed = parse_string(input, &table);

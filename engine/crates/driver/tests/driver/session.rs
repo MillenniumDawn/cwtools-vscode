@@ -404,6 +404,79 @@ fn session_load_collects_mod_defined_complex_enum_members() {
     );
 }
 
+const SCRIPTED_TRIGGER_RULES: &str = r#"
+types = {
+    type[scripted_trigger] = {
+        path = "game/common/scripted_triggers"
+    }
+    type[thing] = {
+        path = "game/common/things"
+    }
+}
+
+thing = {
+    trigger = {
+        alias_name[trigger] = alias_match_left[trigger]
+    }
+}
+
+alias[trigger:<scripted_trigger>] = bool
+
+alias[trigger:<scripted_trigger>] = {
+    ## cardinality = 1..inf
+    enum[scripted_effect_params] = scalar
+}
+"#;
+
+/// The base game's scripted trigger parameters must reach the index on a live
+/// `--vanilla` load, not only when the base-game cache is read. A call may pass
+/// a declared base-game or mod parameter, and only those.
+#[test]
+fn session_load_checks_calls_against_base_game_scripted_parameters() {
+    let tmp = write_tree(&[
+        ("rules/triggers.cwt", SCRIPTED_TRIGGER_RULES),
+        (
+            "vanilla/common/scripted_triggers/v.txt",
+            "vanilla_trigger = { has_flag = $VANILLA_PARAM$ }\n",
+        ),
+        (
+            "mod/common/scripted_triggers/m.txt",
+            "mod_trigger = { has_flag = $MOD_PARAM$ }\n",
+        ),
+        (
+            "mod/common/things/ok.txt",
+            "ok_thing = { trigger = { vanilla_trigger = { VANILLA_PARAM = 1 } } }\n\
+             mod_thing = { trigger = { mod_trigger = { MOD_PARAM = 1 } } }\n",
+        ),
+        (
+            "mod/common/things/bad.txt",
+            "bad_thing = { trigger = { vanilla_trigger = { VANILLA_PARAM = 1 BOGUS = 2 } } }\n",
+        ),
+    ]);
+    let mut config = workspace_config(tmp.path());
+    config.vanilla = Some(tmp.path().join("vanilla"));
+
+    let session = Session::load(config);
+
+    assert!(
+        session
+            .type_index()
+            .complex_enum_values
+            .contains("scripted_effect_params", "VANILLA_PARAM"),
+        "the base game's parameters should reach the index"
+    );
+    let errors_in = |file: &str| {
+        session
+            .validate_all()
+            .iter()
+            .filter(|(path, _)| path.ends_with(file))
+            .map(|(_, errors)| errors.len())
+            .sum::<usize>()
+    };
+    assert_eq!(errors_in("ok.txt"), 0);
+    assert_eq!(errors_in("bad.txt"), 1);
+}
+
 // ── CW113 case-sensitive filepath check ─────────────────────────────────────
 
 /// A mod whose `ref.gfx` references `gfx/test/button.dds` while the on-disk file
