@@ -30,7 +30,7 @@ use cwtools_parser::ast::{ParseError, ParsedFile};
 use cwtools_parser::parser::parse_string_without_comments;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_rules::ruleset_loader::{
-    RuleParseError, load_ruleset_from_dir, load_ruleset_from_file,
+    RuleParseError, load_ruleset_from_dir, load_ruleset_from_file, load_ruleset_from_file_typed,
 };
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::inline_ignore::extract_inline_ignored_codes;
@@ -380,10 +380,18 @@ impl Session {
         let vanilla_shadow = vanilla_replacement_shadow(&directory, &parent_roots);
 
         let rules_table = StringTable::new();
-        let (ruleset, rule_errors) = load_rules(&rules, &rules_table).unwrap_or_else(|e| {
-            eprintln!("error: {}", e);
-            (RuleSet::new(), Vec::new())
-        });
+        let mut rules_acquisition_failed = false;
+        let (ruleset, rule_errors) = match &rules {
+            RulesInput::Dir(dir) => load_ruleset_from_dir(dir, &rules_table, ScanBudget::default()),
+            RulesInput::File(file) => {
+                load_ruleset_from_file_typed(file, &rules_table, ScanBudget::default())
+                    .unwrap_or_else(|e| {
+                        rules_acquisition_failed = e.retryable_io;
+                        eprintln!("error: {}", e);
+                        (RuleSet::new(), Vec::new())
+                    })
+            }
+        };
         if let Some(sink) = on_rules_diagnostic {
             for error in rule_errors {
                 sink(error);
@@ -415,9 +423,11 @@ impl Session {
             config: fm_config,
             policy: DiscoveryPolicy::Workspace,
         });
+        let mut discovery_incomplete = false;
         let (files, loc_paths, primary_scripts, primary_loc_paths, discovery_failed) =
             match discovery {
                 Ok(discovery) => {
+                    discovery_incomplete = !discovery.failures.is_empty();
                     for failure in discovery.failures {
                         eprintln!(
                             "warn: discovery skipped {}: {}",
@@ -456,22 +466,24 @@ impl Session {
                     (Vec::new(), Vec::new(), Vec::new(), Vec::new(), true)
                 }
             };
-        let parent_scripts = discover_parent_script_files(
+        let parent_scripts = discover_parent_script_files_inner(
             &parent_roots,
             &directory,
             &primary_scripts,
             Some(&ruleset),
             ignore_files,
             ignore_dirs,
+            &mut discovery_incomplete,
         );
         let parsed_parents =
             parse_discovered_files(parent_scripts, &rules_table, parse_cache.as_ref());
-        let parent_loc_paths = discover_parent_localisation_files(
+        let parent_loc_paths = discover_parent_localisation_files_inner(
             &parent_roots,
             &directory,
             &primary_loc_paths,
             ignore_files,
             ignore_dirs,
+            &mut discovery_incomplete,
         );
         if let Some(cache) = &parse_cache
             && cache.wrote.swap(false, Ordering::Relaxed)
@@ -826,14 +838,24 @@ impl Session {
             directory,
             parse_cache,
         }
-        .with_source_files(source_files, discovery_failed || vanilla_discovery_failed)
+        .with_source_files(
+            source_files,
+            discovery_failed || vanilla_discovery_failed,
+            discovery_incomplete || rules_acquisition_failed,
+        )
     }
 
-    fn with_source_files(self, files: Vec<SourceFile>, discovery_failed: bool) -> SessionWithFiles {
+    fn with_source_files(
+        self,
+        files: Vec<SourceFile>,
+        discovery_failed: bool,
+        discovery_incomplete: bool,
+    ) -> SessionWithFiles {
         SessionWithFiles {
             session: self,
             files,
             discovery_failed,
+            discovery_incomplete,
         }
     }
 
@@ -907,6 +929,8 @@ pub struct SessionWithFiles {
     session: Session,
     files: Vec<SourceFile>,
     pub discovery_failed: bool,
+    /// A partial discovery walk failed; used by watch reloads.
+    pub discovery_incomplete: bool,
 }
 
 impl std::ops::Deref for SessionWithFiles {
@@ -1537,13 +1561,28 @@ pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> Fil
 pub fn discover_workspace_files(
     config: FileManagerConfig,
 ) -> Result<Vec<DiscoveredFile>, FileError> {
-    let is_multi_mod = classify_directory(&config.root) == DirectoryType::MultipleMod;
+    discover_workspace_files_with_failures(config).map(|(files, _)| files)
+}
+
+fn discover_workspace_files_with_failures(
+    config: FileManagerConfig,
+) -> Result<
+    (
+        Vec<DiscoveredFile>,
+        Vec<cwtools_file_manager::file_manager::DiscoveryFailure>,
+    ),
+    FileError,
+> {
+    let (kind, mut failures) =
+        cwtools_file_manager::file_manager::classify_directory_with_failures(&config.root);
     let manager = FileManager::new(config);
-    if is_multi_mod {
-        Ok(manager.discover_files_multi_mod())
+    let (files, walk_failures) = if kind == DirectoryType::MultipleMod {
+        manager.discover_files_multi_mod_with_failures()
     } else {
-        manager.discover_files()
-    }
+        manager.discover_files_with_failures()?
+    };
+    failures.extend(walk_failures);
+    Ok((files, failures))
 }
 
 /// The parent-mod files a primary mod still sees (#786), in load order. Each
@@ -1590,6 +1629,26 @@ pub fn discover_parent_script_files(
     ignore_files: &[String],
     ignore_dirs: &[String],
 ) -> Vec<DiscoveredFile> {
+    discover_parent_script_files_inner(
+        parent_roots,
+        primary_root,
+        primary_files,
+        ruleset,
+        ignore_files,
+        ignore_dirs,
+        &mut false,
+    )
+}
+
+fn discover_parent_script_files_inner(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_files: &[DiscoveredFile],
+    ruleset: Option<&RuleSet>,
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    incomplete: &mut bool,
+) -> Vec<DiscoveredFile> {
     let primary: Vec<&str> = primary_files
         .iter()
         .map(|file| file.logical_path.as_str())
@@ -1604,13 +1663,19 @@ pub fn discover_parent_script_files(
             config
                 .exclude_dir_patterns
                 .extend(ignore_dirs.iter().cloned());
-            discover_workspace_files(config).unwrap_or_else(|error| {
-                eprintln!(
-                    "warn: parent mod discovery failed for {}: {error}",
-                    root.display()
-                );
-                Vec::new()
-            })
+            discover_workspace_files_with_failures(config)
+                .map(|(files, failures)| {
+                    *incomplete |= !failures.is_empty();
+                    files
+                })
+                .unwrap_or_else(|error| {
+                    *incomplete = true;
+                    eprintln!(
+                        "warn: parent mod discovery failed for {}: {error}",
+                        root.display()
+                    );
+                    Vec::new()
+                })
         },
         |file| file.logical_path.as_str(),
     )
@@ -1623,6 +1688,24 @@ pub fn discover_parent_localisation_files(
     primary_files: &[DiscoveredPath],
     ignore_files: &[String],
     ignore_dirs: &[String],
+) -> Vec<DiscoveredPath> {
+    discover_parent_localisation_files_inner(
+        parent_roots,
+        primary_root,
+        primary_files,
+        ignore_files,
+        ignore_dirs,
+        &mut false,
+    )
+}
+
+fn discover_parent_localisation_files_inner(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_files: &[DiscoveredPath],
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    incomplete: &mut bool,
 ) -> Vec<DiscoveredPath> {
     let primary: Vec<&str> = primary_files
         .iter()
@@ -1638,12 +1721,16 @@ pub fn discover_parent_localisation_files(
             ignore_dirs,
             DiscoveryPolicy::Workspace,
         ) {
-            Ok(report) => report
-                .files
-                .into_iter()
-                .filter(|file| file.kind == FileKind::Localisation)
-                .collect(),
+            Ok(report) => {
+                *incomplete |= !report.failures.is_empty();
+                report
+                    .files
+                    .into_iter()
+                    .filter(|file| file.kind == FileKind::Localisation)
+                    .collect()
+            }
             Err(error) => {
+                *incomplete = true;
                 eprintln!(
                     "warn: parent mod localisation discovery failed for {}: {error}",
                     root.display()
@@ -1745,7 +1832,8 @@ pub fn discover_workspace(
         for root in &roots {
             let mut script_config = config.clone();
             script_config.root = root.clone();
-            let files = discover_workspace_files(script_config)?;
+            let (files, failures) = discover_workspace_files_with_failures(script_config)?;
+            report.failures.extend(failures);
             report
                 .files
                 .extend(files.into_iter().map(|file| DiscoveredPath {

@@ -432,6 +432,13 @@ impl FileManager {
     }
 
     pub fn discover_files(&self) -> Result<Vec<DiscoveredFile>, FileError> {
+        self.discover_files_with_failures().map(|(files, _)| files)
+    }
+
+    pub fn discover_files_with_failures(
+        &self,
+    ) -> Result<(Vec<DiscoveredFile>, Vec<DiscoveryFailure>), FileError> {
+        let mut failures = Vec::new();
         let mut paths: Vec<(PathBuf, String)> = Vec::new();
         let root = &self.config.root;
         if !root.is_dir() {
@@ -447,13 +454,16 @@ impl FileManager {
             if !dir.exists() {
                 continue;
             }
-            self.collect_paths(&dir, &mut paths)?;
+            self.collect_paths(&dir, &mut paths, &mut failures)?;
         }
 
-        Ok(paths
-            .into_iter()
-            .map(|(path, logical_path)| DiscoveredFile { path, logical_path })
-            .collect())
+        Ok((
+            paths
+                .into_iter()
+                .map(|(path, logical_path)| DiscoveredFile { path, logical_path })
+                .collect(),
+            failures,
+        ))
     }
 
     pub fn discover_and_parse(&mut self) -> Result<Vec<ParsedFile>, FileError> {
@@ -502,7 +512,12 @@ impl FileManager {
             .collect()
     }
 
-    fn collect_paths(&self, dir: &Path, out: &mut Vec<(PathBuf, String)>) -> Result<(), FileError> {
+    fn collect_paths(
+        &self,
+        dir: &Path,
+        out: &mut Vec<(PathBuf, String)>,
+        failures: &mut Vec<DiscoveryFailure>,
+    ) -> Result<(), FileError> {
         let root_prefix = normalize_root_prefix(&self.config.root);
         let is_root_level = dir == self.config.root.as_path();
         let cfg = &self.config;
@@ -517,7 +532,11 @@ impl FileManager {
             Some((path.to_path_buf(), logical_path))
         };
         let mut on_err = |path: &Path, e: std::io::Error| {
-            eprintln!("warn: skipping {}: {}", path.display(), FileError::from(e));
+            eprintln!("warn: skipping {}: {}", path.display(), e);
+            failures.push(DiscoveryFailure {
+                path: path.to_path_buf(),
+                error: e.to_string(),
+            });
         };
         let mut state = WalkState {
             out: Vec::new(),
@@ -541,18 +560,29 @@ impl FileManager {
     }
 
     pub fn discover_files_multi_mod(&self) -> Vec<DiscoveredFile> {
-        let mods = expand_multiple_mods(&self.config.root);
-        discover_files_multi_mod(
+        self.discover_files_multi_mod_with_failures().0
+    }
+
+    pub fn discover_files_multi_mod_with_failures(
+        &self,
+    ) -> (Vec<DiscoveredFile>, Vec<DiscoveryFailure>) {
+        let (mods, mut failures) = expand_multiple_mods_with_failures(&self.config.root);
+        let (files, walk_failures) = discover_files_multi_mod_with_failures(
             None,
             &mods,
             &self.config.include_dirs,
             &self.config.exclude_dir_patterns,
             self.config.scan_budget,
+        );
+        failures.extend(walk_failures);
+        (
+            files
+                .into_iter()
+                .filter(|(path, logical_path)| accept_script_file(&self.config, path, logical_path))
+                .map(|(path, logical_path)| DiscoveredFile { path, logical_path })
+                .collect(),
+            failures,
         )
-        .into_iter()
-        .filter(|(path, logical_path)| accept_script_file(&self.config, path, logical_path))
-        .map(|(path, logical_path)| DiscoveredFile { path, logical_path })
-        .collect()
     }
 
     pub fn discover_and_parse_multi_mod(&mut self) -> Result<Vec<ParsedFile>, FileError> {
@@ -619,14 +649,15 @@ pub fn discover_paths(
 
 pub fn discover_paths_multi_mod(config: &FileManagerConfig, kinds: &[FileKind]) -> DiscoveryReport {
     let include_dirs = [".".to_string()];
-    let mods = expand_multiple_mods(&config.root);
-    let files = discover_files_multi_mod(
+    let (mods, mut failures) = expand_multiple_mods_with_failures(&config.root);
+    let (files, walk_failures) = discover_files_multi_mod_with_failures(
         None,
         &mods,
         &include_dirs,
         &config.exclude_dir_patterns,
         config.scan_budget,
     );
+    failures.extend(walk_failures);
     DiscoveryReport {
         files: files
             .into_iter()
@@ -634,7 +665,7 @@ pub fn discover_paths_multi_mod(config: &FileManagerConfig, kinds: &[FileKind]) 
                 accept_discovered_path(config, kinds, &path, root_relative_path)
             })
             .collect(),
-        failures: Vec::new(),
+        failures,
     }
 }
 
@@ -795,45 +826,86 @@ pub struct ResolvedMod {
 
 /// Read each `*.mod` descriptor in the workspace's `mod` and `mods` folders.
 pub fn expand_multiple_mods(workspace: &Path) -> Vec<ResolvedMod> {
+    expand_multiple_mods_with_failures(workspace).0
+}
+
+fn expand_multiple_mods_with_failures(
+    workspace: &Path,
+) -> (Vec<ResolvedMod>, Vec<DiscoveryFailure>) {
     let mut out = Vec::new();
-
-    for mod_folder_name in &["mod", "mods"] {
-        let mod_folder = workspace.join(mod_folder_name);
-        if !mod_folder.is_dir() {
-            continue;
-        }
-
-        let entries = match std::fs::read_dir(&mod_folder) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .map(|e| e.eq_ignore_ascii_case("mod"))
-                .unwrap_or(false)
-                && let Ok(desc) = parse_mod_descriptor(&path)
-                && let Some(mod_path) = &desc.path
+    let mut failures = Vec::new();
+    for name in ["mod", "mods"] {
+        let folder = workspace.join(name);
+        let entries = match std::fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
             {
-                let root = if std::path::Path::new(mod_path).is_absolute() {
+                continue;
+            }
+            Err(e) => {
+                failures.push(DiscoveryFailure {
+                    path: folder,
+                    error: e.to_string(),
+                });
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    failures.push(DiscoveryFailure {
+                        path: folder.clone(),
+                        error: e.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mod"))
+            {
+                continue;
+            }
+            let desc = match parse_mod_descriptor(&path) {
+                Ok(desc) => desc,
+                Err(FileError::Io(e)) => {
+                    failures.push(DiscoveryFailure {
+                        path,
+                        error: e.to_string(),
+                    });
+                    continue;
+                }
+                Err(_) => continue,
+            };
+            if let Some(mod_path) = &desc.path {
+                let root = if Path::new(mod_path).is_absolute() {
                     PathBuf::from(mod_path)
                 } else {
                     workspace.join(mod_path)
                 };
-                if root.is_dir() {
-                    out.push(ResolvedMod {
+                match std::fs::metadata(&root) {
+                    Ok(metadata) if metadata.is_dir() => out.push(ResolvedMod {
                         descriptor: desc,
                         root,
-                    });
+                    }),
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => failures.push(DiscoveryFailure {
+                        path: root,
+                        error: e.to_string(),
+                    }),
                 }
             }
         }
     }
-
     out.sort_by(|a, b| a.descriptor.name.cmp(&b.descriptor.name));
-    out
+    (out, failures)
 }
 
 /// Mirrors F# FileManager.fs:91-147:
@@ -844,10 +916,28 @@ pub fn discover_files_multi_mod(
     exclude_dir_patterns: &[String],
     budget: ScanBudget,
 ) -> Vec<(PathBuf, String)> {
+    discover_files_multi_mod_with_failures(
+        vanilla_root,
+        mods,
+        include_dirs,
+        exclude_dir_patterns,
+        budget,
+    )
+    .0
+}
+
+fn discover_files_multi_mod_with_failures(
+    vanilla_root: Option<&Path>,
+    mods: &[ResolvedMod],
+    include_dirs: &[String],
+    exclude_dir_patterns: &[String],
+    budget: ScanBudget,
+) -> (Vec<(PathBuf, String)>, Vec<DiscoveryFailure>) {
     use std::collections::HashMap;
 
     let mut best: HashMap<String, (PathBuf, usize)> = HashMap::new();
     let mut remaining = budget.max_files;
+    let mut failures = Vec::new();
 
     let mut sources: Vec<(usize, &Path, &[String])> = Vec::new();
 
@@ -866,8 +956,17 @@ pub fn discover_files_multi_mod(
             } else {
                 root.join(include_dir)
             };
-            if !dir.is_dir() {
-                continue;
+            match std::fs::metadata(&dir) {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    failures.push(DiscoveryFailure {
+                        path: dir,
+                        error: e.to_string(),
+                    });
+                    continue;
+                }
             }
             collect_files_recursive(
                 &dir,
@@ -876,6 +975,7 @@ pub fn discover_files_multi_mod(
                 exclude_dir_patterns,
                 &mut best,
                 &mut remaining,
+                &mut failures,
             );
         }
     }
@@ -900,7 +1000,7 @@ pub fn discover_files_multi_mod(
         .map(|(logical, (abs_path, _prio))| (abs_path, logical))
         .collect();
     result.sort_by(|a, b| a.1.cmp(&b.1));
-    result
+    (result, failures)
 }
 
 /// Normalize a descriptor `replace_path` for matching: backslash → slash
@@ -1026,17 +1126,43 @@ fn collect_files_recursive(
     exclude_dir_patterns: &[String],
     out: &mut std::collections::HashMap<String, (PathBuf, usize)>,
     remaining_files: &mut usize,
+    failures: &mut Vec<DiscoveryFailure>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(e) => {
+            failures.push(DiscoveryFailure {
+                path: dir.to_path_buf(),
+                error: e.to_string(),
+            });
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                failures.push(DiscoveryFailure {
+                    path: dir.to_path_buf(),
+                    error: e.to_string(),
+                });
+                continue;
+            }
+        };
         if *remaining_files == 0 {
             break;
         }
-        let Ok(ft) = entry.file_type() else { continue };
         let path = entry.path();
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(e) => {
+                failures.push(DiscoveryFailure {
+                    path,
+                    error: e.to_string(),
+                });
+                continue;
+            }
+        };
         // Reject symlinks and non-regular files outright (see `walk_dir_generic`).
         if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
             continue;
@@ -1062,6 +1188,7 @@ fn collect_files_recursive(
                 exclude_dir_patterns,
                 out,
                 remaining_files,
+                failures,
             );
         } else {
             *remaining_files -= 1;
@@ -1102,7 +1229,13 @@ fn walk_dir_generic<T>(
     let mut entries: Vec<(std::ffi::OsString, PathBuf, std::fs::FileType)> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let Ok(ft) = entry.file_type() else { continue };
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(error) => {
+                on_dir_err(&entry.path(), error);
+                continue;
+            }
+        };
         entries.push((entry.file_name(), entry.path(), ft));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1168,6 +1301,11 @@ fn walk_dir_generic<T>(
 
 /// Classify a directory following F# FileManager.fs:80-147.
 pub fn classify_directory(dir: &Path) -> DirectoryType {
+    classify_directory_with_failures(dir).0
+}
+
+pub fn classify_directory_with_failures(dir: &Path) -> (DirectoryType, Vec<DiscoveryFailure>) {
+    let mut failures = Vec::new();
     let looks_like_game_folder = |d: &Path| -> bool {
         for sub in &["common", "events", "interface", "gfx", "localisation"] {
             if d.join(sub).is_dir() {
@@ -1179,43 +1317,52 @@ pub fn classify_directory(dir: &Path) -> DirectoryType {
 
     let game_sub = dir.join("game");
     if game_sub.is_dir() && looks_like_game_folder(&game_sub) {
-        return DirectoryType::Vanilla;
+        return (DirectoryType::Vanilla, failures);
     }
 
     if looks_like_game_folder(dir) {
-        return DirectoryType::Mod;
+        return (DirectoryType::Mod, failures);
     }
 
-    for mod_folder_name in &["mod", "mods"] {
-        let mod_folder = dir.join(mod_folder_name);
-        if mod_folder.is_dir() {
-            let has_mod_files = std::fs::read_dir(&mod_folder)
-                .ok()
-                .map(|mut entries| {
-                    entries.any(|e| {
-                        e.ok()
-                            .and_then(|e| {
-                                let p = e.path();
-                                if p.extension()
-                                    .map(|ex| ex.eq_ignore_ascii_case("mod"))
-                                    .unwrap_or(false)
-                                {
-                                    Some(())
-                                } else {
-                                    None
-                                }
-                            })
-                            .is_some()
-                    })
-                })
-                .unwrap_or(false);
-            if has_mod_files {
-                return DirectoryType::MultipleMod;
+    let mut multi = false;
+    for name in ["mod", "mods"] {
+        let folder = dir.join(name);
+        match std::fs::read_dir(&folder) {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => {
+                            multi |= entry
+                                .path()
+                                .extension()
+                                .is_some_and(|e| e.eq_ignore_ascii_case("mod"))
+                        }
+                        Err(e) => failures.push(DiscoveryFailure {
+                            path: folder.clone(),
+                            error: e.to_string(),
+                        }),
+                    }
+                }
             }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(e) => failures.push(DiscoveryFailure {
+                path: folder,
+                error: e.to_string(),
+            }),
         }
     }
-
-    DirectoryType::Unknown
+    (
+        if multi {
+            DirectoryType::MultipleMod
+        } else {
+            DirectoryType::Unknown
+        },
+        failures,
+    )
 }
 
 pub fn glob_match(pattern: &str, text: &str) -> bool {
@@ -1666,7 +1813,7 @@ mod tests {
 
         let fm = FileManager::new(cfg);
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         let names: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
 
         assert!(names.iter().any(|n| n.ends_with("common/foo.txt")));
@@ -1749,7 +1896,7 @@ mod tests {
             ..Default::default()
         });
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         let files: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
         assert!(
             files
@@ -1761,6 +1908,16 @@ mod tests {
             !files.iter().any(|n| n.ends_with("resources/scratch.txt")),
             "root resources/ must be skipped: {files:?}"
         );
+    }
+
+    #[test]
+    fn classification_ignores_files_named_mod_or_mods() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mod"), "ordinary file").unwrap();
+        std::fs::write(tmp.path().join("mods"), "ordinary file").unwrap();
+        let (kind, failures) = classify_directory_with_failures(tmp.path());
+        assert_eq!(kind, DirectoryType::Unknown);
+        assert!(failures.is_empty());
     }
 
     #[test]
@@ -2211,7 +2368,7 @@ replace_path = "COMMON/ideas"
             ..Default::default()
         });
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         assert!(paths.iter().any(|(_, lp)| lp.ends_with("common/foo.txt")));
     }
 
@@ -2231,7 +2388,7 @@ replace_path = "COMMON/ideas"
             ..Default::default()
         });
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         let names: Vec<String> = paths
             .iter()
             .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
@@ -2261,7 +2418,7 @@ replace_path = "COMMON/ideas"
             config.exclude_dir_patterns.extend(dirs.iter().cloned());
             let fm = FileManager::new(config);
             let mut paths = Vec::new();
-            fm.collect_paths(root, &mut paths).unwrap();
+            fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
             paths.into_iter().map(|(_, logical)| logical).collect()
         };
 
@@ -2337,7 +2494,7 @@ replace_path = "COMMON/ideas"
             ..Default::default()
         });
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         let names: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
         assert!(names.iter().any(|n| n.ends_with("real.txt")));
         assert!(names.iter().any(|n| n.ends_with("inside.txt")));
@@ -2374,7 +2531,7 @@ replace_path = "COMMON/ideas"
         };
         let fm = FileManager::new(config);
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         assert_eq!(paths.len(), 3, "discovery must stop at the file budget");
     }
 
@@ -2548,7 +2705,7 @@ replace_path = "COMMON/ideas"
         config.exclude_patterns.extend(extra.iter().cloned());
         let fm = FileManager::new(config);
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         let discovered: std::collections::HashSet<String> = paths
             .into_iter()
             .map(|(_, logical_path)| logical_path)
@@ -2671,7 +2828,7 @@ replace_path = "COMMON/ideas"
         };
         let fm = FileManager::new(config);
         let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
         let discovered: std::collections::HashSet<String> = paths
             .into_iter()
             .map(|(_, logical_path)| logical_path)

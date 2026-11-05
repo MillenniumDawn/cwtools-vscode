@@ -555,6 +555,96 @@ fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_inte
     assert_eq!(status.code(), Some(0), "unexpected exit status: {status:?}");
 }
 
+/// Permission recovery does not change the fingerprint; retry must run without an edit.
+#[cfg(unix)]
+#[test]
+fn test_watch_retries_unreadable_rules_until_permissions_recover() {
+    run_watch_rules_recovery(false);
+    run_watch_rules_recovery(true);
+}
+
+#[cfg(unix)]
+fn run_watch_rules_recovery(single_file: bool) {
+    use crate::common::{fixture_text, write_tree};
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let event = fixture_text("discover/mod_a/events/test.txt");
+    let mod_dir = write_tree(&[("events/test.txt", &event)]);
+    let rules = tempfile::tempdir().unwrap();
+    let rule = rules.path().join("test.cwt");
+    std::fs::copy(fixtures_dir().join("rules/test.cwt"), &rule).unwrap();
+    let permissions = std::fs::metadata(&rule).unwrap().permissions();
+    std::fs::set_permissions(&rule, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&rule).is_ok() {
+        std::fs::set_permissions(&rule, permissions).unwrap();
+        return; // Elevated users can read mode-000 files.
+    }
+    std::fs::set_permissions(&rule, permissions.clone()).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cwtools"))
+        .envs(cwtools_test_support::scratch_home_env())
+        .args(["validate", "--game", "stellaris", "--watch", "--directory"])
+        .arg(mod_dir.path())
+        .arg("--rules")
+        .arg(if single_file {
+            rule.as_path()
+        } else {
+            rules.path()
+        })
+        .args(["--ignore-code", "CW600"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (tx, lines) = mpsc::channel();
+    let streams: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().unwrap()),
+        Box::new(child.stderr.take().unwrap()),
+    ];
+    for stream in streams {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+    }
+    drop(tx);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let wait = |needle: &str| {
+        while let Ok(line) = lines.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            if line.contains(needle) {
+                return true;
+            }
+        }
+        false
+    };
+    let watching = wait("Watching for changes");
+    std::fs::set_permissions(&rule, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::write(
+        mod_dir.path().join("events/second.txt"),
+        event.replace("test.1", "test.2"),
+    )
+    .unwrap();
+    let failed = watching && wait("keeping the previous results");
+    std::fs::set_permissions(&rule, permissions).unwrap();
+    let recovered = failed && wait("CW107      -0 +1");
+    // SAFETY: sends SIGINT to the child this test spawned.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    let status = child.wait().unwrap();
+    assert!(
+        watching && failed && recovered,
+        "watch did not retry and recover"
+    );
+    assert_eq!(status.code(), Some(0));
+}
+
 /// `--watch` prints text deltas for the whole mod, so the flags that fix the
 /// report's format, destination or scope are refused before anything loads.
 /// These runs end at argument parsing; a real watch never returns on its own.
