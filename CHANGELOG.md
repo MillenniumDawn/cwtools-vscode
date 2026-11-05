@@ -6,6 +6,7 @@
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
+* Apply variable-field precision checks consistently to exponent notation. (#1265)
 * Read the watched-file debounce from `CWTOOLS_WATCHED_DEBOUNCE_MS`, in milliseconds. The default stays 500 ms when the variable is unset or not a number. The `lsp` test harness sets 50 ms and its watched-file drains wait 500 ms instead of 900 ms. (#1199)
 * Fence semantic-token hashing, cache copies, delta diffing and encoding without changing token results or cache behavior. (#1181)
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
