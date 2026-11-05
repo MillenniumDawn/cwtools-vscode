@@ -666,6 +666,11 @@ mod tests {
     }
 
     #[test]
+    fn watched_debounce_default_is_500_ms() {
+        assert_eq!(WATCHED_DEBOUNCE, std::time::Duration::from_millis(500));
+    }
+
+    #[test]
     fn test_discover_vanilla_dir_unknown_game_is_none() {
         assert!(discover_vanilla_dir("not_a_real_game").is_none());
         assert!(discover_vanilla_dir("").is_none());

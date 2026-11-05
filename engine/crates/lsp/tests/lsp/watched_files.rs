@@ -14,11 +14,15 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
     // Ten CHANGED events for the same non-open file, each in its own
     // notification, must collapse into exactly one `(watched)` validation and
     // one publish — the 1:1 amplification that drove the #90 storm is gone.
-    let mut server = storm_server();
-    let uri = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
+    // Each write changes the size, so only the window can merge them, not the stat skip.
+    let mut server = storm_start(storm_builder().env("CWTOOLS_WATCHED_DEBOUNCE_MS", "1000"));
+    let rel = "common/decisions/a.txt";
+    let uri = server.write_file_uri(rel, STORM_FILE);
 
-    for _ in 0..10 {
+    for edit in 1..=10 {
+        server.write_file(rel, format!("{STORM_FILE}{}", "\n".repeat(edit)));
         server.send(&watched_changes(std::slice::from_ref(&uri)));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(8));
@@ -34,6 +38,23 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
         count_publishes(&frames, "a.txt"),
         1,
         "should publish diagnostics for a.txt exactly once"
+    );
+}
+
+#[test]
+fn test_watched_debounce_window_comes_from_the_environment() {
+    // A server that ignored the variable would publish within its 500 ms default.
+    let mut server = storm_start(storm_builder().env("CWTOOLS_WATCHED_DEBOUNCE_MS", "60000"));
+    let uri = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
+    server.send(&watched_changes(std::slice::from_ref(&uri)));
+
+    let frames = server.drain_until_quiet(Duration::from_millis(1500), Duration::from_millis(1500));
+    server.stop();
+
+    assert_eq!(
+        count_publishes(&frames, "a.txt"),
+        0,
+        "a 60 s window should hold the batch back, got: {frames:?}"
     );
 }
 
