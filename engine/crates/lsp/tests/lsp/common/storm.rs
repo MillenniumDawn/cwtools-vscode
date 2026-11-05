@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde_json::{Value, json};
 
 use super::fixtures::GOTO_RULES;
@@ -79,6 +81,10 @@ pub fn count_publishes(frames: &[Value], suffix: &str) -> usize {
         })
         .count()
 }
+
+/// The quiet gap for a drain that follows a watched-file batch. It has to outlast
+/// the gaps between one batch's frames and a re-armed 50 ms window.
+pub const WATCHED_QUIET: Duration = Duration::from_millis(500);
 
 pub fn watched_changes(uris: &[String]) -> String {
     let changes: Vec<Value> = uris

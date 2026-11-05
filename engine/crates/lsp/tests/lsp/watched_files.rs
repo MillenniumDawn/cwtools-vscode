@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::common::{
-    STORM_FILE, ServerBuilder, TestServer, count_publishes, count_validate_log, is_scan_started,
-    path_uri, poll_until, publish_has_code, storm_base, storm_builder, storm_server, storm_start,
-    wait_for_scan_release, watched_changes, watched_created, watched_deleted,
+    STORM_FILE, ServerBuilder, TestServer, WATCHED_QUIET, count_publishes, count_validate_log,
+    is_scan_started, path_uri, poll_until, publish_has_code, storm_base, storm_builder,
+    storm_server, storm_start, wait_for_scan_release, watched_changes, watched_created,
+    watched_deleted,
 };
 
 #[test]
@@ -13,14 +14,18 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
     // Ten CHANGED events for the same non-open file, each in its own
     // notification, must collapse into exactly one `(watched)` validation and
     // one publish — the 1:1 amplification that drove the #90 storm is gone.
-    let mut server = storm_server();
-    let uri = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
+    // Each write changes the size, so only the window can merge them, not the stat skip.
+    let mut server = storm_start(storm_builder().env("CWTOOLS_WATCHED_DEBOUNCE_MS", "1000"));
+    let rel = "common/decisions/a.txt";
+    let uri = server.write_file_uri(rel, STORM_FILE);
 
-    for _ in 0..10 {
+    for edit in 1..=10 {
+        server.write_file(rel, format!("{STORM_FILE}{}", "\n".repeat(edit)));
         server.send(&watched_changes(std::slice::from_ref(&uri)));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(8));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(8));
     let log = server.profiling_log();
     server.stop();
 
@@ -33,6 +38,23 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
         count_publishes(&frames, "a.txt"),
         1,
         "should publish diagnostics for a.txt exactly once"
+    );
+}
+
+#[test]
+fn test_watched_debounce_window_comes_from_the_environment() {
+    // A server that ignored the variable would publish within its 500 ms default.
+    let mut server = storm_start(storm_builder().env("CWTOOLS_WATCHED_DEBOUNCE_MS", "60000"));
+    let uri = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
+    server.send(&watched_changes(std::slice::from_ref(&uri)));
+
+    let frames = server.drain_until_quiet(Duration::from_millis(1500), Duration::from_millis(1500));
+    server.stop();
+
+    assert_eq!(
+        count_publishes(&frames, "a.txt"),
+        0,
+        "a 60 s window should hold the batch back, got: {frames:?}"
     );
 }
 
@@ -78,7 +100,7 @@ fn test_watched_batch_panic_is_recovered_and_retried() {
 
     server.send(&watched_changes(std::slice::from_ref(&uri)));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(8));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(8));
     let log = server.profiling_log();
     server.stop();
 
@@ -168,7 +190,7 @@ fn test_watched_distinct_files_each_validate_once() {
 
     server.send(&watched_changes(&uris));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -204,7 +226,7 @@ fn test_watched_change_on_a_symlink_neither_validates_nor_publishes() {
 
     server.send(&watched_changes(&[real_uri, link_uri]));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -316,7 +338,7 @@ fn created_textures_clear_cw113(filler: usize) {
 
     server.send(&watched_created(&uris));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -373,7 +395,7 @@ fn test_watched_created_folder_indexes_texture_and_script_without_a_reindex() {
 
     server.send(&watched_created(&folders));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -431,7 +453,7 @@ fn test_watched_created_folder_does_not_index_symlinked_resources() {
 
     server.send(&watched_created(std::slice::from_ref(&folder)));
 
-    let mut frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let mut frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     assert_eq!(
         count_publishes(&frames, "defs.gfx"),
         1,
@@ -470,7 +492,7 @@ fn test_watched_created_folder_publishes_descendants_under_the_clients_spelling(
 
     server.send(&watched_created(&[folder]));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     server.stop();
 
     let published: Vec<&str> = frames
@@ -494,7 +516,7 @@ fn test_watched_changed_folder_is_not_expanded() {
 
     server.send(&watched_changes(&[folder, control]));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -521,7 +543,7 @@ fn test_watched_created_script_clears_cw113_without_a_reindex() {
     let target = server.write_file_uri("gfx/new_pic.gfx", "# no exported names\n");
     server.send(&watched_created(std::slice::from_ref(&target)));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -570,7 +592,7 @@ fn pack_delete_reports_cw113(events: impl FnOnce(&TestServer) -> Vec<String>) {
 
     server.send(&watched_deleted(&uris));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -624,7 +646,7 @@ fn test_watched_localisation_extension_outside_a_loc_folder_is_ignored() {
 
     server.send(&watched_changes(&[script, csv, yml]));
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(10));
     let log = server.profiling_log();
     server.stop();
 
@@ -768,7 +790,7 @@ fn test_watched_overcap_batch_does_not_spin_against_running_scan() {
         "the losing watched drain never reported its over-cap batch"
     );
     let retried_while_held = poll_until(
-        Instant::now() + Duration::from_millis(900),
+        Instant::now() + WATCHED_QUIET,
         Duration::from_millis(100),
         || (over_cap_batches(&mut server) > 1).then_some(()),
     );
@@ -792,7 +814,7 @@ fn test_watched_overcap_batch_does_not_spin_against_running_scan() {
         "the winner-armed watched drain never reported its over-cap batch"
     );
     let retried_after_winner = poll_until(
-        Instant::now() + Duration::from_millis(900),
+        Instant::now() + WATCHED_QUIET,
         Duration::from_millis(100),
         || (over_cap_batches(&mut server) > 2).then_some(()),
     );
