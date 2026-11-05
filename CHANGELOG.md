@@ -3,6 +3,7 @@
 #### Engine
 
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
+* Retry `validate --watch` reloads after a workspace root discovery failure, with a capped backoff, instead of waiting for another edit.
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
