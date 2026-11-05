@@ -11,7 +11,7 @@
 * Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
 * Add `cwtools validate --watch`. After the first report it re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, with guard-style per-code counts, or `no change`. Ctrl-C exits 0. (#612)
 * Stop copying every exported name into two owned sets on each edit. The before and after snapshots now hold the token hashes the open-document sweep already matches on. (#1182)
-* Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. (#1198)
+* Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
 
 ### 4.0.6
 
