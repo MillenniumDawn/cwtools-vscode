@@ -716,6 +716,14 @@ impl Session {
                         }
                     }
                     type_index.var_index.merge(&vanilla_index.var_index);
+                    type_index.complex_enum_values.merge_file(
+                        "<vanilla-dynamic>",
+                        vanilla_index
+                            .complex_enum_values
+                            .export()
+                            .into_iter()
+                            .collect(),
+                    );
                     let scripted_loc_names: Vec<String> = vanilla_index
                         .scripted_loc_index
                         .names()

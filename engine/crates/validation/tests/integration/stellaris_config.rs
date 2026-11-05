@@ -53,6 +53,13 @@ fn config_files_exist() {
     );
 }
 
+/// The config calls `enum[scripted_effect_params]` without defining it, so the
+/// engine has to fill it from the scripted effect files (#1008).
+#[test]
+fn config_scripted_effect_params_are_supplied_by_the_engine() {
+    assert!(load_stellaris_ruleset().supplies_scripted_effect_params());
+}
+
 /// All scopes the cwtools-stellaris-config declares must resolve through the
 /// registry. Pins that `from_config` is wired up for Stellaris.
 #[test]

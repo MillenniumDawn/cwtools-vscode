@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use cwtools_parser::ast::{Child, Leaf, ParsedFile, Value};
 use cwtools_parser::unquote;
-use cwtools_rules::rules_types::{ComplexEnumNameTree, ComplexEnumNameTreeEntry, RuleSet};
+use cwtools_rules::rules_types::{
+    ComplexEnumNameTree, ComplexEnumNameTreeEntry, RuleSet, SCRIPTED_EFFECT_PARAMS,
+};
 use cwtools_string_table::string_table::{StringId, StringTable};
 
-use crate::check_path_dir;
+use crate::{check_path_dir, path_contains_segment};
 
 type NameValuePair = (Arc<str>, Arc<str>);
 
@@ -120,7 +122,79 @@ pub fn collect_complex_enum_values(
             out.entry(def.name.clone()).or_default().extend(values);
         }
     }
+    if ruleset.supplies_scripted_effect_params() && is_scripted_effect_file(logical_path) {
+        let mut params = Vec::new();
+        collect_scripted_effect_params(&parsed.root_children, parsed, table, &mut params);
+        params.sort_unstable();
+        params.dedup();
+        if !params.is_empty() {
+            out.insert(SCRIPTED_EFFECT_PARAMS.to_string(), params);
+        }
+    }
     out
+}
+
+fn is_scripted_effect_file(logical_path: &str) -> bool {
+    let path = logical_path.replace('\\', "/").to_ascii_lowercase();
+    ["common/scripted_effects", "common/scripted_triggers"]
+        .iter()
+        .any(|dir| path_contains_segment(&path, dir))
+}
+
+/// Names between each `$` pair, and the name in each `[[NAME]` or `[[!NAME]`
+/// conditional block, in every key and scalar below `children`: the parameters a
+/// call to the effect or trigger can pass. `$NAME|default$` names `NAME`.
+fn collect_scripted_effect_params(
+    children: &[Child],
+    ast: &ParsedFile,
+    table: &StringTable,
+    out: &mut Vec<String>,
+) {
+    for child in children {
+        let (key, value) = match child {
+            Child::Leaf(idx) => {
+                let leaf = &ast.arena.leaves[*idx as usize];
+                (Some(leaf.key.normal), &leaf.value)
+            }
+            Child::LeafValue(idx) => (None, &ast.arena.leaf_values[*idx as usize].value),
+            Child::Comment(_) => continue,
+        };
+        if let Some(key) = key {
+            table.with_string(key, |text| push_param_names(text, out));
+        }
+        match value {
+            Value::Clause(inner) => collect_scripted_effect_params(inner, ast, table, out),
+            Value::String(t) | Value::QString(t) => {
+                table.with_string(t.normal, |text| push_param_names(text, out));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_param_names(text: &str, out: &mut Vec<String>) {
+    let mut rest = text;
+    while let Some((_, after_open)) = rest.split_once('$') {
+        let Some((name, after_close)) = after_open.split_once('$') else {
+            break;
+        };
+        let name = name.split('|').next().unwrap_or(name);
+        if !name.is_empty() {
+            out.push(name.to_string());
+        }
+        rest = after_close;
+    }
+    let mut rest = text;
+    while let Some((_, after_open)) = rest.split_once("[[") {
+        let Some((name, after_close)) = after_open.split_once(']') else {
+            break;
+        };
+        let name = name.strip_prefix('!').unwrap_or(name);
+        if !name.is_empty() {
+            out.push(name.to_string());
+        }
+        rest = after_close;
+    }
 }
 
 fn push_member(out: &mut HashMap<String, Vec<String>>, ns: String, raw: &str) {
@@ -406,6 +480,66 @@ enums = {
         let vals = got.get("idea_name").expect("collected");
         assert!(vals.contains(&"my_idea".to_string()), "got {:?}", vals);
         assert!(!vals.contains(&"designer".to_string()), "got {:?}", vals);
+    }
+
+    const PARAMS_CALL_RULE: &str =
+        "alias[effect:<scripted_effect>] = { enum[scripted_effect_params] = scalar }\n";
+
+    fn scripted_effect_params(rule: &str, source: &str, logical_path: &str) -> Vec<String> {
+        let table = StringTable::new();
+        let rs = ruleset_from(rule, &table);
+        let file = parse_string(source, &table);
+        let mut got = collect_complex_enum_values(&rs, &file, logical_path, &table);
+        let mut params = got.remove("scripted_effect_params").unwrap_or_default();
+        params.sort();
+        params
+    }
+
+    #[test]
+    fn scripted_effect_params_are_the_dollar_names_in_scripted_files() {
+        let source = "my_effect = {\n\tset_country_flag = $FLAG$\n\tif = {\n\t\tlimit = { $LIMIT_KEY$ = yes }\n\t\tcustom_tooltip = \"$TOOLTIP|none$ and $FLAG$\"\n\t}\n\t$NODE$ = { add_x = $AMOUNT$ }\n\tdangling = \"cost $5\"\n}\n";
+        let expected = ["AMOUNT", "FLAG", "LIMIT_KEY", "NODE", "TOOLTIP"];
+        for path in [
+            "common/scripted_effects/a.txt",
+            "common/scripted_triggers/b.txt",
+            "Common\\Scripted_Effects\\c.txt",
+            "dlc/dlc001/common/scripted_effects/d.txt",
+            "/other/mod/common/scripted_triggers/e.txt",
+        ] {
+            assert_eq!(
+                scripted_effect_params(PARAMS_CALL_RULE, source, path),
+                expected,
+                "{path}"
+            );
+        }
+        for path in ["common/ideas/a.txt", "common/scripted_effects_old/a.txt"] {
+            assert!(
+                scripted_effect_params(PARAMS_CALL_RULE, source, path).is_empty(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn scripted_effect_params_include_conditional_blocks() {
+        // The parser reads `[[NAME]` as a bare value ahead of the block's leaves.
+        let source = "my_effect = {\n\t[[ONLY_COND] set_country_flag = yes ]\n\t[[!NEGATED]\n\t\tadd_x = 1\n\t]\n\tnested = { [[DEEP] add_y = 1 ] }\n\t[[BOTH] set_country_flag = $BOTH$ ]\n}\n";
+        assert_eq!(
+            scripted_effect_params(PARAMS_CALL_RULE, source, "common/scripted_triggers/a.txt"),
+            ["BOTH", "DEEP", "NEGATED", "ONLY_COND"]
+        );
+    }
+
+    #[test]
+    fn scripted_effect_params_are_left_to_a_config_that_defines_them() {
+        let source = "my_effect = { set_country_flag = $FLAG$ }\n";
+        let path = "common/scripted_effects/a.txt";
+        let defined = format!(
+            "{PARAMS_CALL_RULE}enums = {{ enum[scripted_effect_params] = {{ alpha beta }} }}\n"
+        );
+        assert!(scripted_effect_params(&defined, source, path).is_empty());
+        let unused = "alias[effect:<scripted_effect>] = { amount = int }\n";
+        assert!(scripted_effect_params(unused, source, path).is_empty());
     }
 
     #[test]
