@@ -9,7 +9,7 @@ use cwtools_rules::rules_types::{
 };
 use cwtools_string_table::string_table::{StringId, StringTable};
 
-use crate::check_path_dir;
+use crate::{check_path_dir, path_contains_segment};
 
 type NameValuePair = (Arc<str>, Arc<str>);
 
@@ -138,7 +138,7 @@ fn is_scripted_effect_file(logical_path: &str) -> bool {
     let path = logical_path.replace('\\', "/").to_ascii_lowercase();
     ["common/scripted_effects", "common/scripted_triggers"]
         .iter()
-        .any(|dir| path.starts_with(dir))
+        .any(|dir| path_contains_segment(&path, dir))
 }
 
 /// Names between each `$` pair, and the name in each `[[NAME]` or `[[!NAME]`
@@ -503,6 +503,8 @@ enums = {
             "common/scripted_effects/a.txt",
             "common/scripted_triggers/b.txt",
             "Common\\Scripted_Effects\\c.txt",
+            "dlc/dlc001/common/scripted_effects/d.txt",
+            "/other/mod/common/scripted_triggers/e.txt",
         ] {
             assert_eq!(
                 scripted_effect_params(PARAMS_CALL_RULE, source, path),
@@ -510,7 +512,12 @@ enums = {
                 "{path}"
             );
         }
-        assert!(scripted_effect_params(PARAMS_CALL_RULE, source, "common/ideas/a.txt").is_empty());
+        for path in ["common/ideas/a.txt", "common/scripted_effects_old/a.txt"] {
+            assert!(
+                scripted_effect_params(PARAMS_CALL_RULE, source, path).is_empty(),
+                "{path}"
+            );
+        }
     }
 
     #[test]

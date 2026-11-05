@@ -38,9 +38,10 @@ fn line_codes(diags: &[Value]) -> Vec<(u64, &str)> {
 }
 
 #[test]
-fn test_scan_checks_scripted_trigger_calls_against_base_game_parameters() {
+fn test_scan_checks_scripted_trigger_calls_against_base_game_and_mod_parameters() {
     let cache = tempfile::tempdir().unwrap();
     let calls = "ok_thing = { trigger = { vanilla_trigger = { VANILLA_PARAM = 1 } } }\n\
+                 mod_thing = { trigger = { mod_trigger = { MOD_PARAM = 1 } } }\n\
                  bad_thing = { trigger = { mod_trigger = { BOGUS = 1 } } }\n";
     let mut server = TestServer::builder()
         .rules(RULES)
@@ -58,7 +59,7 @@ fn test_scan_checks_scripted_trigger_calls_against_base_game_parameters() {
 
     assert_eq!(
         line_codes(&diags),
-        [(1, "CW240")],
+        [(2, "CW240")],
         "only the call passing the undeclared BOGUS should be reported, got: {diags:?}"
     );
 }

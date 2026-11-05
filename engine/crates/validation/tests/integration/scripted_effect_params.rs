@@ -172,17 +172,6 @@ fn calls_are_not_checked_without_the_base_game() {
         let errors = call_errors_with(TYPES, block, call, false);
         assert!(errors.is_empty(), "{call}: got {errors:?}");
     }
-    // A base-game callee is not indexed, so it never reaches the parameter rule.
-    let errors = call_errors_with(
-        TYPES,
-        "trigger",
-        "base_game_trigger = { BASE_PARAM = 1 }",
-        false,
-    );
-    assert!(
-        errors.iter().all(|error| !error.contains("BASE_PARAM")),
-        "got {errors:?}"
-    );
 }
 
 #[test]

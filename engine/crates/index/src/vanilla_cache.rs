@@ -160,6 +160,9 @@ pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
         folders.sort();
         parts.push(format!("folders={}", folders.join(",")));
     }
+    if ruleset.supplies_scripted_effect_params() {
+        parts.push("supplies=scripted_effect_params".to_string());
+    }
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for p in &parts {
         h = fnv1a(p.as_bytes(), h);
@@ -1235,5 +1238,19 @@ mod tests {
         let mut c = RuleSet::new();
         c.types = vec![mk("event", Some("id")), mk("tech", Some("id"))];
         assert_ne!(ruleset_shape_hash(&a), ruleset_shape_hash(&c));
+    }
+
+    #[test]
+    fn ruleset_shape_hash_changes_when_scripted_effect_params_are_supplied() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let ruleset = |cwt: &str| {
+            let parsed = cwtools_parser::parser::parse_string(cwt, &table);
+            cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table)
+        };
+        let plain = ruleset("alias[effect:<scripted_effect>] = { amount = int }");
+        let supplied =
+            ruleset("alias[effect:<scripted_effect>] = { enum[scripted_effect_params] = scalar }");
+        assert!(supplied.supplies_scripted_effect_params());
+        assert_ne!(ruleset_shape_hash(&plain), ruleset_shape_hash(&supplied));
     }
 }

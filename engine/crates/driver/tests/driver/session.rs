@@ -430,7 +430,7 @@ alias[trigger:<scripted_trigger>] = {
 
 /// The base game's scripted trigger parameters must reach the index on a live
 /// `--vanilla` load, not only when the base-game cache is read. A call may pass
-/// a base-game trigger's parameter, and only that.
+/// a declared base-game or mod parameter, and only those.
 #[test]
 fn session_load_checks_calls_against_base_game_scripted_parameters() {
     let tmp = write_tree(&[
@@ -445,7 +445,8 @@ fn session_load_checks_calls_against_base_game_scripted_parameters() {
         ),
         (
             "mod/common/things/ok.txt",
-            "ok_thing = { trigger = { vanilla_trigger = { VANILLA_PARAM = 1 } } }\n",
+            "ok_thing = { trigger = { vanilla_trigger = { VANILLA_PARAM = 1 } } }\n\
+             mod_thing = { trigger = { mod_trigger = { MOD_PARAM = 1 } } }\n",
         ),
         (
             "mod/common/things/bad.txt",
