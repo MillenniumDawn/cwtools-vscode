@@ -153,10 +153,7 @@ fn test_inline_ignore_directive_suppresses_a_scan_diagnostic() {
 }
 
 #[test]
-fn test_ignore_code_action_edits_the_workspace_settings() {
-    // Round-trip: a CW281 diagnostic's codeAction response carries an
-    // "Ignore CW281 in this workspace" action whose edit adds the code to
-    // `cwtools.errors.ignore` in the workspace's .vscode/settings.json.
+fn test_ignore_code_action_delegates_to_the_client_configuration_editor() {
     let rel_path = "common/decisions/test.txt";
     let text = "x = { limit = { } }\n";
     let mut server = decision_server(&[(rel_path, text)]);
@@ -176,18 +173,19 @@ fn test_ignore_code_action_edits_the_workspace_settings() {
     assert_eq!(action["kind"], "quickfix");
     assert_eq!(action["diagnostics"].as_array().unwrap().len(), 1);
 
-    let changes = action["edit"]["changes"]
-        .as_object()
-        .expect("edit carries a changes map");
-    assert_eq!(changes.len(), 1, "only the settings file is edited");
-    let (uri, edits) = changes.iter().next().expect("one file edited");
     assert!(
-        uri.ends_with(".vscode/settings.json"),
-        "the edit must target the workspace settings file: {uri}"
+        action.get("edit").is_none(),
+        "settings belong to the client: {action}"
     );
-    let new_text = edits[0]["newText"].as_str().expect("whole-file replace");
-    let parsed: Value = serde_json::from_str(new_text).expect("settings stay valid json");
-    assert_eq!(parsed["cwtools"]["errors"]["ignore"][0], "CW281");
+    assert_eq!(action["command"]["command"], "cwtools.ignoreDiagnosticCode");
+    assert_eq!(
+        action["command"]["arguments"][0]
+            .as_str()
+            .unwrap()
+            .trim_end_matches('/'),
+        server.uri("").trim_end_matches('/')
+    );
+    assert_eq!(action["command"]["arguments"][1], "CW281");
 }
 
 #[test]

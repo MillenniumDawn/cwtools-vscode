@@ -66,6 +66,26 @@ suite("LSP Diagnostics Tests", function () {
 		);
 	});
 
+	test("ignores a diagnostic through the server's client command", async function () {
+		const cfg = vscode.workspace.getConfiguration("cwtools", diagnosticsDocument.uri);
+		const previous = cfg.inspect<string[]>("errors.ignore")?.workspaceValue;
+		try {
+			const diagnostic = vscode.languages.getDiagnostics(diagnosticsDocument.uri).find(isCW263)!;
+			const actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+				"vscode.executeCodeActionProvider", diagnosticsDocument.uri, diagnostic.range, vscode.CodeActionKind.QuickFix.value,
+			);
+			const action = actions?.find((candidate) => candidate.command?.command === "cwtools.ignoreDiagnosticCode");
+			assert.ok(action?.command, "server should offer the client-owned ignore action");
+			assert.strictEqual(action.edit, undefined, "the server must not supply a settings replacement");
+			const args = action.command.arguments as unknown[] | undefined;
+			assert.strictEqual(await vscode.commands.executeCommand(action.command.command, ...args ?? []), true);
+			assert.ok(await waitUntil(() => !vscode.languages.getDiagnostics(diagnosticsDocument.uri).some(isCW263), 30_000));
+		} finally {
+			await cfg.update("errors.ignore", previous, vscode.ConfigurationTarget.WorkspaceFolder);
+		}
+		assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(diagnosticsDocument.uri).some(isCW263), 30_000));
+	});
+
 	test("writes a baseline, suppresses old errors, and restores them when cleared", async function () {
 		const cfg = vscode.workspace.getConfiguration("cwtools", diagnosticsDocument.uri);
 		const baselineSetting = "diagnostics.baselineFile";

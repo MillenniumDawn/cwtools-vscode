@@ -1,7 +1,12 @@
 ### Unreleased
 
+#### Extension
+
+* Apply ignore-code quick fixes to the current settings buffer without discarding unsaved changes. Preserve JSONC comments and unrelated settings, create missing settings files, and merge legacy nested ignore lists into the flat setting. Refuse symlinked, unreadable, malformed, or nonregular settings targets. Ignore lists now follow the diagnostic's workspace folder. (#1234, #1235, #1252, #1253, #1254)
+
 #### Engine
 
+* Reject stale localisation create-key quick fixes in VS Code, keep target versions in individual and batched edits, and resolve sibling insertion positions from the current target text. (#1251)
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.

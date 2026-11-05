@@ -105,6 +105,7 @@ const abortDiagnostics =
 const multiRootFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/multiroot.test.js",
+	"./dist/extension/bin/client/test/host/ignoreDiagnostic.test.js",
 ];
 // Stops the language client to prove deactivate() completes the LSP shutdown
 // handshake (#502), so it goes last in every label that lists it.

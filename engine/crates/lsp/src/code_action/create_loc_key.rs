@@ -12,7 +12,7 @@ use super::payload::fix_from_data;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum LocInsertTarget {
-    ExistingFileAfterLine { uri: Url, after_line0: u32 },
+    ExistingFileAfterKey { uri: Url, key: String },
     ExistingFileAppend { uri: Url },
     NewFile { uri: Url },
 }
@@ -34,16 +34,16 @@ fn resolve_sibling_site(
     loc_locations: &crate::LocLocations,
     edit_roots: &[PathBuf],
     lang: Lang,
-) -> Option<(std::sync::Arc<str>, u32)> {
+) -> Option<(std::sync::Arc<str>, String)> {
     let marker = format!("l_{lang}").to_ascii_lowercase();
     siblings.iter().find_map(|sib| {
-        let (uri, line0) = loc_locations.get(sib.to_ascii_lowercase().as_str())?;
+        let (uri, _) = loc_locations.get(sib.to_ascii_lowercase().as_str())?;
         let fname = uri.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
         if !fname.contains(&marker) {
             return None;
         }
         crate::access::editable_path(uri, edit_roots).ok()?;
-        Some((std::sync::Arc::clone(uri), line0))
+        Some((std::sync::Arc::clone(uri), sib.clone()))
     })
 }
 
@@ -79,12 +79,10 @@ fn resolve_loc_insert_target(
     discovered_loc_files: &[PathBuf],
     workspace_root: &Path,
 ) -> Option<LocInsertTarget> {
-    if let Some((uri, after_line0)) =
-        resolve_sibling_site(siblings, loc_locations, edit_roots, lang)
-    {
-        return Some(LocInsertTarget::ExistingFileAfterLine {
+    if let Some((uri, key)) = resolve_sibling_site(siblings, loc_locations, edit_roots, lang) {
+        return Some(LocInsertTarget::ExistingFileAfterKey {
             uri: Url::parse(&uri).ok()?,
-            after_line0,
+            key,
         });
     }
     if let Some(path) = pick_lang_file(discovered_loc_files, lang, edit_roots) {
@@ -133,9 +131,14 @@ fn insert_stub_after_line(
     }
 }
 
-fn insert_edit_op(uri: Url, pos: Position, new_text: String) -> DocumentChangeOperation {
+fn insert_edit_op(
+    uri: Url,
+    version: Option<i32>,
+    pos: Position,
+    new_text: String,
+) -> DocumentChangeOperation {
     DocumentChangeOperation::Edit(TextDocumentEdit {
-        text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
+        text_document: OptionalVersionedTextDocumentIdentifier { uri, version },
         edits: vec![OneOf::Left(TextEdit {
             range: Range::new(pos, pos),
             new_text,
@@ -188,12 +191,14 @@ fn candidate_operations(
                 })),
                 insert_edit_op(
                     uri.clone(),
+                    None,
                     Position::new(0, 0),
                     format!("\u{FEFF}l_{lang}:\n{stub}\n"),
                 ),
             ]),
             LocInsertTarget::NewFile { uri } => Some(vec![insert_edit_op(
                 uri.clone(),
+                None,
                 Position::new(0, 0),
                 format!("{stub}\n"),
             )]),
@@ -297,6 +302,22 @@ fn build_create_loc_key_batch<'d>(
         }
     }
 
+    for action in &mut actions {
+        if let Some(DocumentChanges::Operations(ops)) = action
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.document_changes.as_ref())
+        {
+            let versions: Vec<_> = ops
+                .iter()
+                .filter_map(|op| match op {
+                    DocumentChangeOperation::Edit(edit) => Some(&edit.text_document),
+                    DocumentChangeOperation::Op(_) => None,
+                })
+                .collect();
+            action.data = Some(serde_json::json!({ "cwtoolsDocumentVersions": versions }));
+        }
+    }
     actions
 }
 
@@ -428,7 +449,7 @@ impl Backend {
             .iter()
             .flat_map(|candidate| candidate.targets.iter())
             .map(|(_, target)| match target {
-                LocInsertTarget::ExistingFileAfterLine { uri, .. }
+                LocInsertTarget::ExistingFileAfterKey { uri, .. }
                 | LocInsertTarget::ExistingFileAppend { uri }
                 | LocInsertTarget::NewFile { uri } => uri.to_string(),
             })
@@ -482,16 +503,38 @@ impl Backend {
         texts: &HashMap<String, crate::FileTextSnapshot>,
     ) -> Option<Vec<DocumentChangeOperation>> {
         match target {
-            LocInsertTarget::ExistingFileAfterLine { uri, after_line0 } => {
-                let text = &*texts.get(uri.as_str())?.text;
-                let (pos, insert_text) = insert_stub_after_line(text, *after_line0, stub, encoding);
-                Some(vec![insert_edit_op(uri.clone(), pos, insert_text)])
+            LocInsertTarget::ExistingFileAfterKey { uri, key } => {
+                let snapshot = texts.get(uri.as_str())?;
+                let parsed =
+                    cwtools_localization::parse_loc_text(&snapshot.text, uri.as_str()).ok()?;
+                let anchor = parsed
+                    .entries
+                    .iter()
+                    .find(|entry| entry.key.eq_ignore_ascii_case(key))?;
+                let (pos, insert_text) = insert_stub_after_line(
+                    &snapshot.text,
+                    anchor.position.line.saturating_sub(1) as u32,
+                    stub,
+                    encoding,
+                );
+                Some(vec![insert_edit_op(
+                    uri.clone(),
+                    snapshot.version,
+                    pos,
+                    insert_text,
+                )])
             }
             LocInsertTarget::ExistingFileAppend { uri } => {
-                let text = &*texts.get(uri.as_str())?.text;
-                let last_line0 = text.lines().count().saturating_sub(1) as u32;
-                let (pos, insert_text) = insert_stub_after_line(text, last_line0, stub, encoding);
-                Some(vec![insert_edit_op(uri.clone(), pos, insert_text)])
+                let snapshot = texts.get(uri.as_str())?;
+                let last_line0 = snapshot.text.lines().count().saturating_sub(1) as u32;
+                let (pos, insert_text) =
+                    insert_stub_after_line(&snapshot.text, last_line0, stub, encoding);
+                Some(vec![insert_edit_op(
+                    uri.clone(),
+                    snapshot.version,
+                    pos,
+                    insert_text,
+                )])
             }
             LocInsertTarget::NewFile { .. } => None,
         }
@@ -571,7 +614,7 @@ mod tests {
         let hit = resolve_sibling_site(&siblings, &locs, &edit_roots([ws.path()]), Lang::English)
             .expect("a hit");
         assert_eq!(hit.0.as_ref(), uri);
-        assert_eq!(hit.1, 4);
+        assert_eq!(hit.1, "my_thing");
     }
 
     #[test]
@@ -623,7 +666,7 @@ mod tests {
         let hit = resolve_sibling_site(&siblings, &locs, &edit_roots([ws.path()]), Lang::English)
             .expect("falls through to the real site");
         assert_eq!(hit.0.as_ref(), real_uri);
-        assert_eq!(hit.1, 9);
+        assert_eq!(hit.1, "my_thing_title");
     }
 
     #[test]
@@ -646,7 +689,7 @@ mod tests {
         let siblings = vec!["my_thing".to_string(), "my_thing_title".to_string()];
         let hit = resolve_sibling_site(&siblings, &locs, &edit_roots([ws.path()]), Lang::English)
             .expect("a hit");
-        assert_eq!(hit.1, 9);
+        assert_eq!(hit.1, "my_thing_title");
     }
 
     #[test]
@@ -792,9 +835,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             en,
-            LocInsertTarget::ExistingFileAfterLine {
+            LocInsertTarget::ExistingFileAfterKey {
                 uri: uri.parse().unwrap(),
-                after_line0: 4,
+                key: "my_thing".into(),
             }
         );
 
@@ -821,9 +864,9 @@ mod tests {
                 .unwrap();
         assert_eq!(
             target,
-            LocInsertTarget::ExistingFileAfterLine {
+            LocInsertTarget::ExistingFileAfterKey {
                 uri: uri.parse().unwrap(),
-                after_line0: 4,
+                key: "my_thing".into(),
             }
         );
 
@@ -1063,6 +1106,7 @@ mod tests {
             };
             Some(vec![insert_edit_op(
                 uri.clone(),
+                Some(7),
                 Position::new(3, 0),
                 format!("{stub}\n"),
             )])
