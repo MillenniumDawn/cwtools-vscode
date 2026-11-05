@@ -300,6 +300,31 @@ fn type_instance_known_or_lenient(
     idx.contains(type_name, lookup)
 }
 
+/// Keys of an enum the engine supplies from the workspace. Every other enum
+/// the config leaves undefined accepts any key.
+fn supplied_enum_has_key(
+    enum_name: &str,
+    key: &str,
+    ruleset: &RuleSet,
+    type_index: Option<&cwtools_index::TypeIndex>,
+) -> bool {
+    if enum_name != SCRIPTED_EFFECT_PARAMS
+        || !ruleset.supplies_scripted_effect_params()
+        || key.contains('$')
+    {
+        return true;
+    }
+    // Same gate as CW500: without the base game, its parameters are unknown.
+    let Some(idx) = type_index.filter(|idx| idx.complete) else {
+        return true;
+    };
+    let params = &idx.complex_enum_values;
+    let mut values = params.values(enum_name).peekable();
+    values.peek().is_none()
+        || params.contains(enum_name, key)
+        || values.any(|param| param.eq_ignore_ascii_case(key))
+}
+
 fn type_field_matches_key(
     type_type: &TypeType,
     key: &str,
@@ -379,7 +404,7 @@ pub(crate) fn field_matches_key(
                     }
                     enum_is_authoritative(def)
                 }
-                None => true,
+                None => supplied_enum_has_key(enum_name, key, ruleset, type_index),
             }
         }
         NewField::ValueField(ValueType::Int { .. }) => key.parse::<i64>().is_ok(),
@@ -678,5 +703,88 @@ mod tests {
             &ruleset,
             Some(&idx)
         ));
+    }
+
+    fn params_ruleset(extra: &str) -> RuleSet {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let cwt = format!(
+            "alias[effect:<scripted_effect>] = {{ enum[scripted_effect_params] = scalar }}\n{extra}"
+        );
+        let parsed = cwtools_parser::parser::parse_string(&cwt, &table);
+        cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table)
+    }
+
+    fn params_index(params: &[&str]) -> TypeIndex {
+        let mut idx = TypeIndex::new();
+        let values = HashMap::from([(
+            SCRIPTED_EFFECT_PARAMS.to_string(),
+            params.iter().map(|p| p.to_string()).collect(),
+        )]);
+        idx.complex_enum_values
+            .merge_file("file://effects.txt", values);
+        idx.complete = true;
+        idx
+    }
+
+    fn params_field() -> NewField {
+        NewField::ValueField(ValueType::Enum(SCRIPTED_EFFECT_PARAMS.to_string()))
+    }
+
+    #[test]
+    fn supplied_scripted_effect_params_match_declared_keys_only() {
+        let ruleset = params_ruleset("");
+        let idx = params_index(&["ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON", "ZETA"]);
+        let field = params_field();
+        for key in ["ALPHA", "alpha", "$PASSED$"] {
+            assert!(
+                field_matches_key(&field, key, &ruleset, Some(&idx)),
+                "{key}"
+            );
+        }
+        assert!(!field_matches_key(&field, "BOGUS", &ruleset, Some(&idx)));
+    }
+
+    #[test]
+    fn supplied_scripted_effect_params_are_lenient_without_the_base_game() {
+        let ruleset = params_ruleset("");
+        let mut idx = params_index(&["ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON", "ZETA"]);
+        idx.complete = false;
+        assert!(field_matches_key(
+            &params_field(),
+            "BOGUS",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
+    fn supplied_scripted_effect_params_are_lenient_without_declared_params() {
+        let ruleset = params_ruleset("");
+        let field = params_field();
+        assert!(field_matches_key(&field, "BOGUS", &ruleset, None));
+        let idx = params_index(&[]);
+        assert!(field_matches_key(&field, "BOGUS", &ruleset, Some(&idx)));
+    }
+
+    #[test]
+    fn scripted_effect_params_the_config_defines_keep_their_own_matching() {
+        let ruleset = params_ruleset(
+            "enums = { complex_enum[scripted_effect_params] = { path = game/common/x name = { enum_name = scalar } } }",
+        );
+        let idx = params_index(&["ALPHA"]);
+        assert!(field_matches_key(
+            &params_field(),
+            "BOGUS",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
+    fn undefined_enums_other_than_the_supplied_one_accept_any_key() {
+        let ruleset = params_ruleset("");
+        let idx = params_index(&["ALPHA"]);
+        let field = NewField::ValueField(ValueType::Enum("undefined".to_string()));
+        assert!(field_matches_key(&field, "BOGUS", &ruleset, Some(&idx)));
     }
 }

@@ -13,6 +13,10 @@ pub struct SubtypeRuleKeyGroup {
     pub node_rule_groups: Vec<Vec<SubtypeRuleKeyGroup>>,
 }
 
+/// The enum of `$PARAM$` names that the engine fills from scripted effect and
+/// trigger files when a config uses it without defining it.
+pub const SCRIPTED_EFFECT_PARAMS: &str = "scripted_effect_params";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuleSet {
     pub types: Vec<TypeDefinition>,
@@ -45,6 +49,7 @@ pub struct RuleSet {
     builtin_variable_bases: rustc_hash::FxHashSet<String>,
     pretriggers: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<String>>,
     subtype_rule_key_groups: Vec<Vec<Vec<SubtypeRuleKeyGroup>>>,
+    supplies_scripted_effect_params: bool,
     pub def_positions: Vec<CwtDefPosition>,
 }
 
@@ -388,6 +393,7 @@ impl RuleSet {
             builtin_variable_bases: rustc_hash::FxHashSet::default(),
             pretriggers: rustc_hash::FxHashMap::default(),
             subtype_rule_key_groups: Vec::new(),
+            supplies_scripted_effect_params: false,
             def_positions: Vec::new(),
         }
     }
@@ -631,6 +637,30 @@ impl RuleSet {
             })
             .collect();
         self.rule_body_candidate_indexes = build_rule_body_candidate_indexes(self);
+        self.supplies_scripted_effect_params = self.uses_undefined_enum(SCRIPTED_EFFECT_PARAMS);
+    }
+
+    /// Whether the engine fills `scripted_effect_params` from the workspace:
+    /// some rule uses the enum and the config defines no enum of that name.
+    pub fn supplies_scripted_effect_params(&self) -> bool {
+        self.supplies_scripted_effect_params
+    }
+
+    fn uses_undefined_enum(&self, name: &str) -> bool {
+        let root_rules = self.root_rules.iter().map(|root| match root {
+            RootRule::AliasRule(_, rule)
+            | RootRule::SingleAliasRule(_, rule)
+            | RootRule::TypeRule(_, rule) => rule,
+        });
+        !self.enum_by_name.contains_key(name)
+            && !self.complex_enums.iter().any(|def| def.name == name)
+            && self
+                .aliases
+                .iter()
+                .chain(&self.single_aliases)
+                .map(|(_, rule)| rule)
+                .chain(root_rules)
+                .any(|(rule_type, _)| rule_uses_enum(rule_type, name))
     }
 
     #[doc(hidden)]
@@ -1337,6 +1367,20 @@ fn build_rule_body_candidate_indexes(ruleset: &RuleSet) -> RuleBodyCandidateInde
         }
     }
     RuleBodyCandidateIndexCache(indexes)
+}
+
+fn rule_uses_enum(rule_type: &RuleType, name: &str) -> bool {
+    let is_enum = |field: &NewField| matches!(field, NewField::ValueField(ValueType::Enum(used)) if used == name);
+    let body_uses_enum =
+        |rules: &RuleBody| rules.iter().any(|(inner, _)| rule_uses_enum(inner, name));
+    match rule_type {
+        RuleType::LeafRule { left, right } => is_enum(left) || is_enum(right),
+        RuleType::LeafValueRule { right } => is_enum(right),
+        RuleType::NodeRule { left, rules } => is_enum(left) || body_uses_enum(rules),
+        RuleType::ValueClauseRule { rules } | RuleType::SubtypeRule { rules, .. } => {
+            body_uses_enum(rules)
+        }
+    }
 }
 
 #[allow(clippy::enum_variant_names)]

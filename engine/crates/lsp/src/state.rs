@@ -232,6 +232,9 @@ pub(crate) struct VanillaState {
     pub(crate) var_names: Option<Arc<Vec<String>>>,
     pub(crate) scripted_loc_names: Option<Arc<Vec<String>>>,
     pub(crate) scripted_gui_names: Option<Arc<Vec<String>>>,
+    /// Shape hash of the ruleset this payload was built under. `None` for a payload of unknown
+    /// origin (a client-supplied cache), which a rules reload keeps.
+    pub(crate) rules_shape: Option<String>,
 }
 
 /// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,

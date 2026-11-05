@@ -19,6 +19,8 @@ mod navigation;
 mod parent_mods;
 mod progress_and_cancel;
 mod reindex_and_caches;
+mod rules_reload;
+mod scripted_effect_params;
 mod semantic_color_format;
 mod unused_instances;
 mod watched_files;

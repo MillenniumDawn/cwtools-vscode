@@ -18,6 +18,7 @@ path = "src/main.rs"
 [lib]
 name = "cwtools_lsp"
 path = "src/lib.rs"
+doctest = false
 
 [[bench]]
 name = "document_symbol"

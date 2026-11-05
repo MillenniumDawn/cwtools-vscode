@@ -47,13 +47,20 @@ VALID_METADATA = {
 
 
 def _write_workspace(
-    tmp_path: Path, *, root_text: str = VALID_ROOT, crate_text: str = VALID_CRATE
+    tmp_path: Path,
+    *,
+    root_text: str = VALID_ROOT,
+    crate_text: str = VALID_CRATE,
+    lib_text: str | None = None,
 ) -> Path:
     workspace = tmp_path / "engine"
     crate = workspace / "crates" / "sample"
     crate.mkdir(parents=True)
     (workspace / "Cargo.toml").write_text(root_text, encoding="utf-8")
     (crate / "Cargo.toml").write_text(crate_text, encoding="utf-8")
+    if lib_text is not None:
+        (crate / "src").mkdir()
+        (crate / "src" / "lib.rs").write_text(lib_text, encoding="utf-8")
     return workspace
 
 
@@ -147,6 +154,69 @@ def test_rejects_a_direct_shared_dev_dependency(
         "sample: tempfile/assert_cmd/predicates must use { workspace = true }"
         in capsys.readouterr().err
     )
+
+
+NO_DOCTESTS = VALID_CRATE + "\n[lib]\ndoctest = false\n"
+
+
+def _doc_block(info: str) -> str:
+    return f"//! Sample.\n//!\n//! ```{info}\n//! let x = 1;\n//! ```\npub fn f() {{}}"
+
+
+@pytest.mark.parametrize("info", ["text", "cwt", "rust,ignore"])
+def test_accepts_doctest_false_beside_blocks_rustdoc_does_not_run(
+    workspace_manifest: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    info: str,
+) -> None:
+    workspace = _write_workspace(
+        tmp_path, crate_text=NO_DOCTESTS, lib_text=_doc_block(info)
+    )
+    monkeypatch.setenv("CWTOOLS_RS", str(workspace))
+    _mock_cargo(monkeypatch, workspace_manifest)
+
+    assert workspace_manifest.main() == 0
+    assert capsys.readouterr().out == "workspace-manifest-check: ok\n"
+
+
+@pytest.mark.parametrize("info", ["", "rust", "no_run", "should_panic,edition2024"])
+def test_rejects_doctest_false_beside_a_rust_doc_example(
+    workspace_manifest: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    info: str,
+) -> None:
+    workspace = _write_workspace(
+        tmp_path, crate_text=NO_DOCTESTS, lib_text=_doc_block(info)
+    )
+    monkeypatch.setenv("CWTOOLS_RS", str(workspace))
+    _mock_cargo(monkeypatch, workspace_manifest)
+
+    with pytest.raises(SystemExit) as caught:
+        workspace_manifest.main()
+
+    assert caught.value.code == 1
+    assert (
+        "sample: doctest = false skips the doc example at src/lib.rs:3"
+        in capsys.readouterr().err
+    )
+
+
+def test_accepts_a_rust_doc_example_while_doctests_run(
+    workspace_manifest: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = _write_workspace(tmp_path, lib_text=_doc_block("rust"))
+    monkeypatch.setenv("CWTOOLS_RS", str(workspace))
+    _mock_cargo(monkeypatch, workspace_manifest)
+
+    assert workspace_manifest.main() == 0
+    assert capsys.readouterr().out == "workspace-manifest-check: ok\n"
 
 
 def test_rejects_metadata_package_without_a_repository(
