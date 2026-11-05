@@ -60,6 +60,59 @@ fn config_scripted_effect_params_are_supplied_by_the_engine() {
     assert!(load_stellaris_ruleset().supplies_scripted_effect_params());
 }
 
+/// The config has no `modifiers` section; its core modifiers are only in
+/// `logs/modifiers.log`, and a modifier block must accept them (#1203).
+#[test]
+fn config_core_modifiers_come_from_the_log_and_validate() {
+    use cwtools_index::TypeIndex;
+    use cwtools_validation::build_modifier_keys;
+
+    use super::common::{Opts, validate_with};
+
+    let ruleset = load_stellaris_ruleset();
+    assert!(
+        ruleset
+            .modifiers
+            .iter()
+            .any(|(name, category)| name == "pop_government_ethic_attraction" && category == "Pops"),
+        "the log's core modifiers should be loaded, got {} modifiers",
+        ruleset.modifiers.len()
+    );
+
+    let script = "country_edict = { modifier = { pop_government_ethic_attraction = 0.2 \
+                  not_a_core_modifier = 0.2 } }";
+    let table = StringTable::new();
+    let unexpected = |ruleset: &RuleSet| {
+        let keys = build_modifier_keys(ruleset, &TypeIndex::new());
+        let opts = Opts {
+            path: "common/edicts/00_edicts.txt",
+            game: Some(Game::Stellaris),
+            modifier_keys: Some(&keys),
+            var_checks: false,
+            ..Opts::DEFAULT
+        };
+        validate_with(&table, ruleset, script, &opts)
+            .into_iter()
+            .filter(|e| matches!(e.code, Some("CW262" | "CW263")))
+            .map(|e| e.message)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        unexpected(ruleset),
+        ["Unexpected field 'not_a_core_modifier'"]
+    );
+    let mut without_log = ruleset.clone();
+    without_log.modifiers.clear();
+    assert_eq!(
+        unexpected(&without_log),
+        [
+            "Unexpected field 'pop_government_ethic_attraction'",
+            "Unexpected field 'not_a_core_modifier'"
+        ]
+    );
+}
+
 /// All scopes the cwtools-stellaris-config declares must resolve through the
 /// registry. Pins that `from_config` is wired up for Stellaris.
 #[test]

@@ -21,6 +21,7 @@ mod gui_music_enum_false_positives;
 mod inline_script_expansion;
 mod leafvalue_cardinality;
 mod localisation_field;
+mod log_modifiers;
 mod mathexpr_codes;
 mod objecttypes_disambiguation;
 mod position_resolver;
