@@ -796,6 +796,7 @@ common/national_focus/05_georgia.txt,3904,Information,CW272,This is a deprecated
 common/national_focus/05_georgia.txt,4006,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 common/national_focus/05_georgia.txt,435,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 common/national_focus/05_georgia.txt,473,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
+common/national_focus/05_georgia.txt,4749,Error,CW240,"Field 'set_war_support' has value '-1', expected a number between 0 and 1"
 common/national_focus/05_georgia.txt,5312,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 common/national_focus/05_georgia.txt,6391,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 common/national_focus/05_georgia.txt,6825,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
@@ -5242,6 +5243,7 @@ events/05_australia_events.txt,6548,Warning,CW242,"Field 'name' appears 0 time(s
 events/05_australia_events.txt,7574,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 events/05_australia_events.txt,7825,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 events/05_australia_events.txt,7889,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
+events/05_australia_events.txt,7952,Error,CW240,"Field 'add_war_support' has value '-2', expected a number between -1 and 1"
 events/05_australia_events.txt,8927,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 events/05_bulgaria.txt,520,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 events/05_china.txt,7603,Information,CW272,'is_puppet' is often mixed up with is_subject. Verify that 'is_puppet' is the intended trigger
@@ -5258,6 +5260,7 @@ events/05_netherlands.txt,1141,Information,CW272,'is_puppet' is often mixed up w
 events/05_netherlands.txt,11983,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 events/05_netherlands.txt,12045,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 events/05_netherlands.txt,1211,Information,CW272,'is_puppet' is often mixed up with is_subject. Verify that 'is_puppet' is the intended trigger
+events/05_netherlands.txt,12191,Error,CW240,"Field 'add_war_support' has value '15', expected a number between -1 and 1"
 events/05_netherlands.txt,1244,Information,CW272,'is_puppet' is often mixed up with is_subject. Verify that 'is_puppet' is the intended trigger
 events/05_netherlands.txt,1350,Information,CW272,'is_puppet' is often mixed up with is_subject. Verify that 'is_puppet' is the intended trigger
 events/05_netherlands.txt,1383,Information,CW272,'is_puppet' is often mixed up with is_subject. Verify that 'is_puppet' is the intended trigger

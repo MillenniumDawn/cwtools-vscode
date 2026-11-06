@@ -243,76 +243,85 @@ pub(super) fn validate_leaf(
             is_int, is_32bit, ..
         } = right
         {
-            if matches!(leaf.value, Value::Int(_)) {
-                return;
-            }
-            with_leaf_value_str(&leaf.value, table, |raw| {
-                let v = raw.trim_matches('"').trim();
-                let is_bool = matches!(leaf.value, Value::Bool(_))
-                    || v.eq_ignore_ascii_case("yes")
-                    || v.eq_ignore_ascii_case("no");
-                let bypass = v.is_empty()
-                    || v.starts_with('@')
-                    || v.starts_with('[')
-                    || v.contains('$')
-                    || is_bool;
-                if !bypass {
-                    let core = v.split(['?', '^']).next().unwrap_or(v).trim();
-                    if let Ok(f) = core.parse::<f64>() {
-                        if *is_int && f.fract() != 0.0 {
-                            let code = &error_codes::CW271_VARIABLE_INT_ONLY;
-                            errors.push(
-                                ValidationError::from_code(
-                                    code,
-                                    file_path,
-                                    leaf.pos.start.line,
-                                    leaf.pos.start.col,
-                                    &[],
-                                )
-                                .with_end(leaf.pos.end),
-                            );
-                        } else if *is_32bit && decimal_places(core) > 3 {
-                            let code = &error_codes::CW270_VARIABLE_TOO_SMALL;
-                            errors.push(
-                                ValidationError::from_code(
-                                    code,
-                                    file_path,
-                                    leaf.pos.start.line,
-                                    leaf.pos.start.col,
-                                    &[],
-                                )
-                                .with_end(leaf.pos.end),
-                            );
-                        }
-                    } else if ctx.var_checks {
-                        let single_token = !core.contains('.') && !core.contains(':');
-                        let is_scopeish = scope_context
-                            .as_ref()
-                            .map(|sc| resolves_as_scope_key(sc, core))
-                            .unwrap_or(false);
-                        if single_token
-                            && !is_scopeish
-                            && !is_builtin_variable(ctx.ruleset, core)
-                            && !ctx.is_loop_var(core)
-                            && let Some(idx) = type_index
-                            && !idx.var_index.is_empty()
-                            && !idx.var_index.contains(core)
-                        {
-                            let code = &error_codes::CW246_UNSET_VARIABLE;
-                            errors.push(
-                                ValidationError::from_code(
-                                    code,
-                                    file_path,
-                                    leaf.pos.start.line,
-                                    leaf.pos.start.col,
-                                    &[core],
-                                )
-                                .with_end(leaf.pos.end),
-                            );
+            // Integer AST values can be neither a variable name nor
+            // over-precise; only the bounds check below applies to them.
+            if !matches!(leaf.value, Value::Int(_)) {
+                with_leaf_value_str(&leaf.value, table, |raw| {
+                    let v = raw.trim_matches('"').trim();
+                    let is_bool = matches!(leaf.value, Value::Bool(_))
+                        || v.eq_ignore_ascii_case("yes")
+                        || v.eq_ignore_ascii_case("no");
+                    let bypass = v.is_empty()
+                        || v.starts_with('@')
+                        || v.starts_with('[')
+                        || v.contains('$')
+                        || is_bool;
+                    if !bypass {
+                        let core = v.split(['?', '^']).next().unwrap_or(v).trim();
+                        if let Ok(f) = core.parse::<f64>() {
+                            if *is_int && f.fract() != 0.0 {
+                                let code = &error_codes::CW271_VARIABLE_INT_ONLY;
+                                errors.push(
+                                    ValidationError::from_code(
+                                        code,
+                                        file_path,
+                                        leaf.pos.start.line,
+                                        leaf.pos.start.col,
+                                        &[],
+                                    )
+                                    .with_end(leaf.pos.end),
+                                );
+                            } else if *is_32bit && decimal_places(core) > 3 {
+                                let code = &error_codes::CW270_VARIABLE_TOO_SMALL;
+                                errors.push(
+                                    ValidationError::from_code(
+                                        code,
+                                        file_path,
+                                        leaf.pos.start.line,
+                                        leaf.pos.start.col,
+                                        &[],
+                                    )
+                                    .with_end(leaf.pos.end),
+                                );
+                            }
+                        } else if ctx.var_checks {
+                            let single_token = !core.contains('.') && !core.contains(':');
+                            let is_scopeish = scope_context
+                                .as_ref()
+                                .map(|sc| resolves_as_scope_key(sc, core))
+                                .unwrap_or(false);
+                            if single_token
+                                && !is_scopeish
+                                && !is_builtin_variable(ctx.ruleset, core)
+                                && !ctx.is_loop_var(core)
+                                && let Some(idx) = type_index
+                                && !idx.var_index.is_empty()
+                                && !idx.var_index.contains(core)
+                            {
+                                let code = &error_codes::CW246_UNSET_VARIABLE;
+                                errors.push(
+                                    ValidationError::from_code(
+                                        code,
+                                        file_path,
+                                        leaf.pos.start.line,
+                                        leaf.pos.start.col,
+                                        &[core],
+                                    )
+                                    .with_end(leaf.pos.end),
+                                );
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
+            // Bounds live in field_matches_value, the same comparison bare
+            // values match against, so keyed leaves cannot drift from it. A
+            // `{...}` value is structure, not a number, and stays out of it.
+            if !matches!(leaf.value, Value::Clause(_))
+                && !field_matches_value(right, &leaf.value, table, ctx.ruleset)
+            {
+                report_unexpected_value(ctx, leaf, right, errors);
+            }
             return;
         }
 
@@ -341,43 +350,54 @@ pub(super) fn validate_leaf(
         }
 
         if !field_matches_value(right, &leaf.value, table, ctx.ruleset) {
-            let expected = field_to_description(right);
-            let actual = leaf_value_to_string(&leaf.value, table);
-            let key = table
-                .with_string(leaf.key.normal, |s| s.to_string())
-                .unwrap_or_default();
-            let mut err = ValidationError::from_code(
-                &error_codes::CW240_UNEXPECTED_VALUE,
-                file_path,
-                leaf.pos.start.line,
-                leaf.pos.start.col,
-                &[&format!(
-                    "Field '{}' has value '{}', expected {}",
-                    key, actual, expected
-                )],
-            )
-            .with_end(leaf.pos.end);
-            if let NewField::ValueField(ValueType::Enum(enum_name)) = right
-                && let Some(&idx) = ctx.ruleset.enum_by_name().get(enum_name)
-                && let Some(cand) = best_suggestion(
-                    actual
-                        .strip_prefix('"')
-                        .and_then(|value| value.strip_suffix('"'))
-                        .unwrap_or(&actual),
-                    ctx.ruleset.enums[idx].values.iter().map(String::as_str),
-                )
-            {
-                let replacement =
-                    format!("\"{}\"", cand.replace('\\', "\\\\").replace('"', "\\\""));
-                err = err.with_fix(cwtools_parser::fix::SuggestedFix::replace(
-                    cwtools_i18n::format(cwtools_i18n::Key::ActionDidYouMean, &[cand]),
-                    leaf.value_pos,
-                    replacement,
-                ));
-            }
-            errors.push(err);
+            report_unexpected_value(ctx, leaf, right, errors);
         }
     }
+}
+
+/// The single CW240 unexpected-value emitter, shared by every keyed rule arm
+/// so the message and enum did-you-mean fix cannot drift between them.
+fn report_unexpected_value(
+    ctx: &ValidationCtx,
+    leaf: &cwtools_parser::ast::Leaf,
+    right: &NewField,
+    errors: &mut Vec<ValidationError>,
+) {
+    let table = ctx.table;
+    let expected = field_to_description(right);
+    let actual = leaf_value_to_string(&leaf.value, table);
+    let key = table
+        .with_string(leaf.key.normal, |s| s.to_string())
+        .unwrap_or_default();
+    let mut err = ValidationError::from_code(
+        &error_codes::CW240_UNEXPECTED_VALUE,
+        ctx.file_path,
+        leaf.pos.start.line,
+        leaf.pos.start.col,
+        &[&format!(
+            "Field '{}' has value '{}', expected {}",
+            key, actual, expected
+        )],
+    )
+    .with_end(leaf.pos.end);
+    if let NewField::ValueField(ValueType::Enum(enum_name)) = right
+        && let Some(&idx) = ctx.ruleset.enum_by_name().get(enum_name)
+        && let Some(cand) = best_suggestion(
+            actual
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or(&actual),
+            ctx.ruleset.enums[idx].values.iter().map(String::as_str),
+        )
+    {
+        let replacement = format!("\"{}\"", cand.replace('\\', "\\\\").replace('"', "\\\""));
+        err = err.with_fix(cwtools_parser::fix::SuggestedFix::replace(
+            cwtools_i18n::format(cwtools_i18n::Key::ActionDidYouMean, &[cand]),
+            leaf.value_pos,
+            replacement,
+        ));
+    }
+    errors.push(err);
 }
 
 pub(crate) fn field_matches_value(
@@ -604,6 +624,9 @@ fn field_to_description(field: &NewField) -> String {
         NewField::ScalarField => "any value".to_string(),
         NewField::SpecificField(s) => format!("'{}'", s),
         NewField::TypeField(tt) => format!("{:?}", tt),
+        NewField::VariableField { min, max, .. } => {
+            format!("a number between {} and {}", min, max)
+        }
         NewField::ScopeField(scopes) => format!("scope {:?}", scopes),
         NewField::LocalisationField { synced, .. } => format!("localisation (synced={})", synced),
         _ => "unknown field type".to_string(),
@@ -749,6 +772,42 @@ mod tests {
             assert!(
                 field_matches_value(field, value, &table, &ruleset),
                 "{field:?} must accept {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn variable_field_bounds_match_numeric_values() {
+        // The keyed variable-field path defers its min/max bounds to this
+        // comparison, the same one bare values match against: numbers are
+        // bounded, variable references and other dynamic shapes are not.
+        let table = StringTable::new();
+        let ruleset = RuleSet::default();
+        let field = NewField::VariableField {
+            is_int: false,
+            is_32bit: false,
+            min: 0.0,
+            max: 10.0,
+        };
+        let cases = [
+            (Value::Int(0), true),
+            (Value::Int(10), true),
+            (Value::Int(-5), false),
+            (Value::Int(100), false),
+            (Value::Float(0.0), true),
+            (Value::Float(10.0), true),
+            (Value::Float(-0.5), false),
+            (Value::Float(10.5), false),
+            (Value::String(table.intern("5")), true),
+            (Value::String(table.intern("100")), false),
+            (Value::String(table.intern("my_var")), true),
+            (Value::String(table.intern("@my_const")), true),
+        ];
+        for (value, expected) in &cases {
+            assert_eq!(
+                field_matches_value(&field, value, &table, &ruleset),
+                *expected,
+                "{value:?}"
             );
         }
     }
