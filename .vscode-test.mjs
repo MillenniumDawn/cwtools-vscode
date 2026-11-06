@@ -55,7 +55,7 @@
 // differ. CI runs it as its own step after the server has been staged.
 //
 // Coverage applies globally when `--coverage` is passed. test:coverage runs
-// the `host`, `live`, and isolated `restart` labels together, preserving their
+// the `host`, `live`, `restart`, and `multi-root` labels together, preserving their
 // separate workspaces while collecting them in one session; host also exercises
 // graphPanel.ts.
 
@@ -105,6 +105,7 @@ const abortDiagnostics =
 const multiRootFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/multiroot.test.js",
+	"./dist/extension/bin/client/test/host/ignoreDiagnostic.test.js",
 ];
 // Stops the language client to prove deactivate() completes the LSP shutdown
 // handshake (#502), so it goes last in every label that lists it.
@@ -302,7 +303,14 @@ export default defineConfig({
 				...headless,
 			],
 		},
-	],
+	].map((test) => ({
+		...test,
+		launchArgs: [
+			...test.launchArgs,
+			"--new-window",
+			`--user-data-dir=${path.resolve(import.meta.dirname, ".vscode-test/profiles", test.label)}`,
+		],
+	})),
 	coverage: {
 		reporter: ["text-summary", "html", "lcov", "json-summary"],
 		// c8 filters emitted JavaScript paths before it remaps source maps, so
