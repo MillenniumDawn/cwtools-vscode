@@ -55,7 +55,7 @@
 // differ. CI runs it as its own step after the server has been staged.
 //
 // Coverage applies globally when `--coverage` is passed. test:coverage runs
-// the `host`, `live`, and isolated `restart` labels together, preserving their
+// the `host`, `live`, `restart`, and `multi-root` labels together, preserving their
 // separate workspaces while collecting them in one session; host also exercises
 // graphPanel.ts.
 
@@ -303,7 +303,14 @@ export default defineConfig({
 				...headless,
 			],
 		},
-	],
+	].map((test) => ({
+		...test,
+		launchArgs: [
+			...test.launchArgs,
+			"--new-window",
+			`--user-data-dir=${path.resolve(import.meta.dirname, ".vscode-test/profiles", test.label)}`,
+		],
+	})),
 	coverage: {
 		reporter: ["text-summary", "html", "lcov", "json-summary"],
 		// c8 filters emitted JavaScript paths before it remaps source maps, so

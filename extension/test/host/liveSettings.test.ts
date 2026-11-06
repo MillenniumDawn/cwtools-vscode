@@ -300,7 +300,7 @@ suite("Live settings", function () {
 		}
 	}
 
-	test("rejects a stale localisation quick fix and applies a freshly requested one", async function () {
+	async function checkStaleLocalisation(initiallyOpen: boolean): Promise<void> {
 		await withExternalRules(async ({ file, loads }) => {
 			const count = loads().length;
 			await fs.writeFile(file, `types = { type[safety_thing] = {
@@ -314,8 +314,10 @@ suite("Live settings", function () {
 } }
 safety_thing = { x = scalar }\n`);
 			assert.ok(await waitUntil(() => loads().length > count));
-			const loc = await vscode.workspace.openTextDocument(path.join(SAMPLE_ROOT, "localisation/cwtools_live_settings_l_english.yml"));
-			const originalLoc = loc.getText();
+			const locUri = vscode.Uri.file(path.join(SAMPLE_ROOT, "localisation/cwtools_live_settings_l_english.yml"));
+			if (!initiallyOpen) assert.ok(!vscode.workspace.textDocuments.some((doc) => doc.uri.toString() === locUri.toString()));
+			let loc = initiallyOpen ? await vscode.workspace.openTextDocument(locUri) : undefined;
+			const originalLoc = await fs.readFile(locUri.fsPath, "utf8");
 			const originalScript = document.getText();
 			try {
 				const setup = new vscode.WorkspaceEdit();
@@ -341,11 +343,13 @@ safety_thing = { x = scalar }\n`);
 					return action.command;
 				};
 				const stale = await requestAction();
+				const staleArgs = stale.arguments as [vscode.WorkspaceEdit, { uri: string; version: number | null }[]];
+				assert.strictEqual(staleArgs[1].find((target) => target.uri === locUri.toString())?.version, loc?.version ?? null);
+				loc ??= await vscode.workspace.openTextDocument(locUri);
 				const userEdit = new vscode.WorkspaceEdit();
 				userEdit.insert(loc.uri, new vscode.Position(1, 0), "# User edit\n");
 				assert.ok(await vscode.workspace.applyEdit(userEdit));
 				const changedText = loc.getText();
-				const staleArgs = stale.arguments as unknown[];
 				assert.strictEqual(await vscode.commands.executeCommand(stale.command, ...staleArgs), false);
 				assert.strictEqual(loc.getText(), changedText, "a stale action must not modify the target");
 				const fresh = await requestAction();
@@ -355,13 +359,21 @@ safety_thing = { x = scalar }\n`);
 			} finally {
 				const restore = new vscode.WorkspaceEdit();
 				restore.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), originalScript);
-				restore.replace(loc.uri, new vscode.Range(0, 0, loc.lineCount, 0), originalLoc);
+				if (loc) restore.replace(loc.uri, new vscode.Range(0, 0, loc.lineCount, 0), originalLoc);
 				await vscode.workspace.applyEdit(restore);
-				await vscode.window.showTextDocument(loc);
-				await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+				if (loc) {
+					await vscode.window.showTextDocument(loc);
+					await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+				}
 			}
 		});
-	});
+	}
+
+	for (const initiallyOpen of [false, true]) {
+		test(`rejects a stale localisation quick fix for an initially ${initiallyOpen ? "open" : "closed"} target and applies a fresh one`, async () => {
+			await checkStaleLocalisation(initiallyOpen);
+		});
+	}
 
 	test("switches rules folders and watches external rules files live", async function () {
 		this.timeout(70_000);

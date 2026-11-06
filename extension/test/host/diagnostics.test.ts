@@ -1,6 +1,7 @@
 import * as assert from "assert";
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as sinon from "sinon";
 import * as vscode from "vscode";
 import {
 	activate,
@@ -84,6 +85,50 @@ suite("LSP Diagnostics Tests", function () {
 			await cfg.update("errors.ignore", previous, vscode.ConfigurationTarget.WorkspaceFolder);
 		}
 		assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(diagnosticsDocument.uri).some(isCW263), 30_000));
+	});
+
+	test("rejects invalid code-action arguments without changing the target", async function () {
+		const original = diagnosticsDocument.getText();
+		const edit = new vscode.WorkspaceEdit();
+		edit.insert(diagnosticsDocument.uri, new vscode.Position(0, 0), "# Must not apply\n");
+		const uri = diagnosticsDocument.uri.toString();
+		const cases: [unknown, unknown, string][] = [
+			[{}, [], "The code action edit is invalid."],
+			[edit, undefined, "The code action edit is invalid."],
+			...[null, {}, { uri: 42, version: null }, { uri }, { uri, version: "1" }, { uri, version: 1.5 }]
+				.map((target): [unknown, unknown, string] => [edit, [target], "The code action target version is invalid."]),
+		];
+		const errors = sinon.stub(vscode.window, "showErrorMessage").resolves(undefined);
+		try {
+			for (const [candidate, versions, message] of cases) {
+				errors.resetHistory();
+				assert.strictEqual(await vscode.commands.executeCommand("cwtools.applyCodeAction", candidate, versions), false);
+				assert.strictEqual(diagnosticsDocument.getText(), original);
+				assert.strictEqual(errors.callCount, 1);
+				assert.strictEqual(errors.firstCall.args[0], `CWTools: could not apply quick fix: ${message}`);
+			}
+		} finally {
+			errors.restore();
+		}
+	});
+
+	test("reports a refused workspace edit without changing an existing file", async function () {
+		const original = diagnosticsDocument.getText();
+		const disk = await fs.readFile(diagnosticsDocument.uri.fsPath, "utf8");
+		const edit = new vscode.WorkspaceEdit();
+		edit.createFile(diagnosticsDocument.uri, { overwrite: false, ignoreIfExists: false });
+		const errors = sinon.stub(vscode.window, "showErrorMessage").resolves(undefined);
+		try {
+			assert.strictEqual(await vscode.commands.executeCommand("cwtools.applyCodeAction", edit, [
+				{ uri: diagnosticsDocument.uri.toString(), version: diagnosticsDocument.version },
+			]), false);
+			assert.strictEqual(diagnosticsDocument.getText(), original);
+			assert.strictEqual(await fs.readFile(diagnosticsDocument.uri.fsPath, "utf8"), disk);
+			assert.strictEqual(errors.callCount, 1);
+			assert.strictEqual(errors.firstCall.args[0], "CWTools: could not apply quick fix: The code action edit could not be applied.");
+		} finally {
+			errors.restore();
+		}
 	});
 
 	test("writes a baseline, suppresses old errors, and restores them when cleared", async function () {

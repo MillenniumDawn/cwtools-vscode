@@ -23,7 +23,8 @@ export async function applyCodeAction(edit: unknown, versions: unknown): Promise
 				|| (item.version !== null && (typeof item.version !== "number" || !Number.isInteger(item.version)))) {
 				throw new Error(vscode.l10n.t("The code action target version is invalid."));
 			}
-			if (item.version !== null && vscode.workspace.textDocuments.find((doc) => doc.uri.toString() === item.uri)?.version !== item.version) {
+			const version = vscode.workspace.textDocuments.find((doc) => doc.uri.toString() === item.uri)?.version ?? null;
+			if (version !== item.version) {
 				throw new Error(vscode.l10n.t("A target document changed. Request the quick fix again."));
 			}
 		}
