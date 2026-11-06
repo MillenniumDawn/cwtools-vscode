@@ -10,6 +10,22 @@ import { checkHostTestDiscovery } from "../../../scripts/build/host-test-discove
 
 const execFileAsync = promisify(execFile);
 
+test("isolates every host label in its own profile without restoring other windows", async () => {
+	const { stdout } = await execFileAsync(process.execPath, [
+		"--input-type=module", "--eval",
+		'import config from "./.vscode-test.mjs"; console.log(JSON.stringify(config.tests));',
+	], { env: { ...process.env, CWTOOLS_TEST_CONFIG_DISCOVERY: "1" } });
+	const suites = JSON.parse(stdout) as { label: string; launchArgs: string[] }[];
+	const profiles: string[] = [];
+	for (const suite of suites) {
+		expect(suite.launchArgs).toContain("--new-window");
+		const profileArgs = suite.launchArgs.filter((arg) => arg.startsWith("--user-data-dir="));
+		expect(profileArgs).toEqual([`--user-data-dir=${path.resolve(".vscode-test/profiles", suite.label)}`]);
+		profiles.push(...profileArgs);
+	}
+	expect(new Set(profiles).size).toBe(suites.length);
+});
+
 test("rejects a host test missing from the label file lists", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cwtools-host-discovery-"));
 	const hostDirectory = path.join(root, "extension/test/host");

@@ -176,6 +176,7 @@ pub(crate) struct ValidationCtx<'a> {
     pub(crate) alias_memo: RefCell<AliasMemo>,
     pub(crate) subtype_merge_memo: RefCell<SubtypeMergeMemo>,
     pub(crate) type_uses: Option<&'a RefCell<crate::references::UsedInstances>>,
+    pub(crate) cancel: Option<&'a crate::CancelFlag>,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -203,6 +204,7 @@ impl<'a> ValidationCtx<'a> {
             alias_memo: RefCell::new(AliasMemo::default()),
             subtype_merge_memo: RefCell::new(SubtypeMergeMemo::default()),
             type_uses: self.type_uses,
+            cancel: self.cancel,
         }
     }
 
@@ -363,6 +365,16 @@ impl<'a> ValidationCtx<'a> {
 
     pub(crate) fn alias_branch_budget_exhausted(&self) -> bool {
         self.alias_branch_budget_exhaustion().is_some()
+    }
+
+    /// The caller's cancellation signal, if this run has one (#1196).
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel.is_some_and(|flag| flag.is_cancelled())
+    }
+
+    /// True when the traversal must stop: budget exhausted or cancelled (#1196).
+    pub(crate) fn stop_traversal(&self) -> bool {
+        self.alias_branch_budget_exhausted() || self.cancelled()
     }
 
     pub(crate) fn alias_branch_budget_inline_script_source(

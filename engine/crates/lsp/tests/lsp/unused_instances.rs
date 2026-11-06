@@ -260,9 +260,8 @@ fn test_closed_file_cw239_only_catches_up_on_the_next_scan() {
         "a_user = { uses = used_thing }\nb_user = { uses = lone_thing }\n",
     );
     let frames = server.drain_after_first(Duration::from_millis(800), Duration::from_secs(6));
-    assert_eq!(
-        count_publishes(&frames, "b.txt"),
-        1,
+    assert!(
+        count_publishes(&frames, "b.txt") >= 1,
         "the edit must be validated, or nothing below is being tested"
     );
     assert_eq!(

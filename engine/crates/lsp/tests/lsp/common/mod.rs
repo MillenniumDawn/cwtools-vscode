@@ -20,7 +20,7 @@ pub use queries::{definition_locations, locations};
 pub use scan::{clear_scan_release, is_scan_started, wait_for_scan_release};
 pub use server::{ServerBuilder, TestServer};
 pub use storm::{
-    count_publishes, count_validate_log, storm_base, storm_builder, storm_server, storm_start,
-    watched_changes, watched_created, watched_deleted,
+    WATCHED_QUIET, count_publishes, count_validate_log, storm_base, storm_builder, storm_server,
+    storm_start, watched_changes, watched_created, watched_deleted,
 };
 pub use wire::{client_spelling, path_uri, shutdown_request};

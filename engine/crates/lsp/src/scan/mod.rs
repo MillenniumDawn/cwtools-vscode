@@ -48,7 +48,7 @@ impl ScanSummary {
     }
 }
 
-const WATCHED_DEBOUNCE_MS: u64 = 500;
+const WATCHED_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
 const WATCHED_BULK_CAP: usize = 200;
 const SCAN_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -63,6 +63,13 @@ pub(crate) fn retry_deadline(default: std::time::Duration) -> std::time::Instant
             std::env::var("CWTOOLS_RETRY_DEADLINE_MS").ok().as_deref(),
             default,
         )
+}
+
+pub(crate) fn watched_debounce() -> std::time::Duration {
+    retry_duration(
+        std::env::var("CWTOOLS_WATCHED_DEBOUNCE_MS").ok().as_deref(),
+        WATCHED_DEBOUNCE,
+    )
 }
 
 /// Test-only one-shot panic switch for `CWTOOLS_WATCHED_BATCH_PANIC_ONCE` (#155): fires at
@@ -262,6 +269,7 @@ impl Backend {
         value: &str,
         percentage: Option<u32>,
     ) {
+        let _publication = self.state.loading_bar_publication_lock.lock().await;
         let was_active = self.state.loading_bar_active.swap(enable, Ordering::SeqCst);
         if !enable && !was_active {
             return;
@@ -282,9 +290,12 @@ impl Backend {
         value: &str,
         percentage: u32,
     ) {
+        let _publication = self.state.loading_bar_publication_lock.lock().await;
         if !self.state.loading_bar_active.load(Ordering::SeqCst) {
             return;
         }
+        #[cfg(test)]
+        self.hold_from_async(crate::state::HoldPoint::LoadingBarActiveChecked);
         self.emit_loading_bar(token.cloned(), true, value, Some(percentage), false)
             .await;
     }
@@ -638,9 +649,92 @@ mod tests {
     use super::vanilla::index_vanilla_dir;
     use super::*;
     use crate::paths::discover_vanilla_dir;
+    use crate::state::{HoldGate, HoldPoint};
     use crate::testing::test_backend;
     use cwtools_rules::rules_types::{PathOptions, RuleSet, TypeDefinition};
     use cwtools_string_table::string_table::StringTable;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loading_bar_tick_cannot_publish_after_close() {
+        use futures_util::StreamExt;
+        use tower::Service;
+        use tower_lsp::jsonrpc;
+
+        let (mut service, mut socket) = tower_lsp::LspService::new(|client| Backend {
+            client,
+            state: Arc::new(DocumentState::new()),
+        });
+        let backend = service.inner().clone();
+        let (messages, mut notifications) = tokio::sync::mpsc::unbounded_channel();
+        let mut drains = tokio::task::JoinSet::new();
+        drains.spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "loadingBar" {
+                    messages.send(message.params().unwrap().clone()).unwrap();
+                }
+            }
+        });
+        std::future::poll_fn(|cx| service.poll_ready(cx))
+            .await
+            .unwrap();
+        let handshake = service
+            .call(
+                jsonrpc::Request::build("initialize")
+                    .params(serde_json::json!({ "capabilities": {} }))
+                    .id(1_i64)
+                    .finish(),
+            )
+            .await
+            .unwrap();
+        assert!(handshake.is_some_and(|response| response.is_ok()));
+        backend
+            .state
+            .loading_bar_active
+            .store(true, Ordering::SeqCst);
+        let deadline = std::time::Duration::from_secs(5);
+
+        let gate = HoldGate::new(HoldPoint::LoadingBarActiveChecked);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let reporter = backend.clone();
+        let report = tokio::spawn(async move {
+            reporter
+                .report_loading_bar_pct(None, "Indexing workspace", 3)
+                .await;
+        });
+        let arrived = tokio::time::timeout(deadline, async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("progress report did not reach the publication gate");
+        }
+
+        let close = backend.send_loading_bar(false, "Indexing workspace");
+        tokio::pin!(close);
+        let pending = futures_util::poll!(&mut close).is_pending();
+        gate.release();
+        if pending {
+            tokio::time::timeout(deadline, close).await.unwrap();
+        }
+        tokio::time::timeout(deadline, report)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let first = tokio::time::timeout(deadline, notifications.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let last = tokio::time::timeout(deadline, notifications.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first["enable"], true);
+        assert_eq!(last["enable"], false);
+    }
 
     #[test]
     fn retry_duration_preserves_deadline_parse_behavior() {
@@ -656,6 +750,11 @@ mod tests {
         for raw in [None, Some(""), Some("-1"), Some("not-a-duration")] {
             assert_eq!(retry_duration(raw, default), default);
         }
+    }
+
+    #[test]
+    fn watched_debounce_default_is_500_ms() {
+        assert_eq!(WATCHED_DEBOUNCE, std::time::Duration::from_millis(500));
     }
 
     #[test]

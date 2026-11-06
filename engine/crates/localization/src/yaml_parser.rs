@@ -251,7 +251,7 @@ fn parse_entry(
             "localisation value past the length cap; its refs and commands are not read"
         );
     } else {
-        for e in &parse_loc_elements(desc) {
+        for e in &parse_loc_elements(value_without_trailing_comment(desc)) {
             match e {
                 crate::loc_string::LocElement::Ref(s) => refs.push(s.to_string()),
                 crate::loc_string::LocElement::Command(s) => commands.push(s.to_string()),
@@ -274,6 +274,32 @@ fn parse_entry(
         commands,
         jomini_commands,
     }))
+}
+
+/// Match the existing last-quote convention for embedded quotes. An unclosed
+/// quoted value is left intact so a hash inside it is not mistaken for a comment.
+fn value_without_trailing_comment(desc: &str) -> &str {
+    let search = if desc.trim_start().starts_with('"') {
+        let mut escaped = false;
+        let mut quotes = 0;
+        let mut last_quote = 0;
+        for (pos, ch) in desc.char_indices() {
+            if ch == '"' && !escaped {
+                quotes += 1;
+                last_quote = pos;
+            }
+            escaped = ch == '\\' && !escaped;
+        }
+        if quotes < 2 {
+            return desc;
+        }
+        last_quote + 1
+    } else {
+        0
+    };
+    desc[search..]
+        .find('#')
+        .map_or(desc, |offset| &desc[..search + offset])
 }
 
 pub fn is_loc_value_char(c: char) -> bool {
@@ -463,6 +489,29 @@ mod tests {
         let text = "l_english:\n key: \"a\"#comment\n";
         let file = parse_loc_text(text, "test.yml").unwrap();
         assert_eq!(file.entries[0].desc, "\"a\"#comment");
+    }
+
+    #[test]
+    fn trailing_comments_do_not_produce_value_elements() {
+        let text = "l_english:\n outside:0 \"Okay\" # $missing$ [GetName]\n inside:0 \"# $inside$ [GetName]\" # $ignored$\n escaped:0 \"say \\\"hello\\\" # $kept$\" # $ignored$\n malformed line\n after:0 \"$after$\"\n";
+        let file = parse_loc_text(text, "test.yml").unwrap();
+        assert!(file.entries[0].refs.is_empty());
+        assert!(file.entries[0].commands.is_empty());
+        assert_eq!(file.entries[1].refs, ["inside"]);
+        assert_eq!(file.entries[1].commands, ["GetName"]);
+        assert_eq!(file.entries[2].refs, ["kept"]);
+        assert_eq!(file.entries[3].refs, ["after"]);
+        assert_eq!(file.parse_errors.len(), 1);
+    }
+
+    #[test]
+    fn comments_keep_existing_last_quote_and_unclosed_value_rules() {
+        let file = parse_loc_text("l_english:\n embedded:0 \"a\" # $still_value$ \"b\"\n unclosed:0 \"a # $still_value$\n", "test.yml").unwrap();
+        assert_eq!(file.entries[0].refs, ["still_value"]);
+        assert_eq!(file.entries[1].refs, ["still_value"]);
+        let file = parse_loc_text("l_english:\n escaped_comment:0 \"ok\" # \\\" $ignored$\n unquoted:0 value # \"$ignored$\"\n", "test.yml").unwrap();
+        assert!(file.entries[0].refs.is_empty());
+        assert!(file.entries[1].refs.is_empty());
     }
 
     #[test]

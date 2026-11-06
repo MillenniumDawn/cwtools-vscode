@@ -347,7 +347,7 @@
         "order": 3,
         "properties": {
           "cwtools.errors.ignore": {
-            "scope": "window",
+            "scope": "resource",
             "type": "array",
             "items": {
               "type": "string"

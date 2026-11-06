@@ -26,6 +26,10 @@ const READ_DEADLINE: Duration = Duration::from_secs(60);
 /// How long a graceful stop waits for the server to exit before killing it.
 const STOP_BOUND: Duration = Duration::from_secs(10);
 
+/// The watched-file debounce every test server runs with, in place of the 500 ms
+/// default. A test that needs another window sets its own `.env`, which wins.
+const WATCHED_DEBOUNCE_MS: &str = "50";
+
 const SHUTDOWN_ID: i64 = 2_147_483_647;
 const SEEN_FRAMES: usize = 12;
 const STDERR_TAIL_BYTES: usize = 16 * 1024;
@@ -851,6 +855,7 @@ impl ServerBuilder {
 fn server_command() -> Command {
     let mut command = Command::new(assert_cmd::cargo::cargo_bin("cwtools-server"));
     command.env("RUST_LOG", "");
+    command.env("CWTOOLS_WATCHED_DEBOUNCE_MS", WATCHED_DEBOUNCE_MS);
     command.envs(scratch_home_env());
     command
 }

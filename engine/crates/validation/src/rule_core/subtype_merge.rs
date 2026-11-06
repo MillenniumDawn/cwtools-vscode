@@ -22,7 +22,7 @@ pub(crate) fn validate_with_type(
     node_pos: (u32, u16),
     errors: &mut Vec<ValidationError>,
 ) {
-    if ctx.alias_branch_budget_exhausted() {
+    if ctx.stop_traversal() {
         return;
     }
     let game = ctx.game;
@@ -415,6 +415,7 @@ mod tests {
             alias_memo: RefCell::new(crate::ctx::AliasMemo::default()),
             subtype_merge_memo: RefCell::new(crate::ctx::SubtypeMergeMemo::default()),
             type_uses: None,
+            cancel: None,
         };
         let foo = ruleset.types.iter().find(|td| td.name == "foo").unwrap();
         let bar = ruleset.types.iter().find(|td| td.name == "bar").unwrap();

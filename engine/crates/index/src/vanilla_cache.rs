@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use cwtools_rules::rules_types::{RuleSet, SkipRootKey};
+use cwtools_rules::rules_types::{ComplexEnumDef, RuleSet, SkipRootKey};
 
 use crate::{SourceLocation, TypeIndex, TypeInstance};
 
@@ -109,10 +109,11 @@ fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     hash
 }
 
-/// A stable hash of the ruleset parts that decide which vanilla type instances get
-/// extracted and under what name. A cache built from changed rules is stale even for
-/// the same game version, so this is folded into the fingerprint.
-pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
+/// A stable hash of the ruleset parts that decide which vanilla type instances and
+/// complex enum members get extracted, and under what name. Base-game data built from
+/// changed rules is stale even for the same game version, so this is folded into the
+/// fingerprint, and a running server compares it to tell when a reload needs a rebuild.
+pub fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
     let skip_str = |s: &SkipRootKey| match s {
         SkipRootKey::SpecificKey(k) => format!("s:{k}"),
         SkipRootKey::AnyKey => "any".to_string(),
@@ -154,6 +155,7 @@ pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
             )
         })
         .collect();
+    parts.extend(ruleset.complex_enums.iter().map(complex_enum_shape));
     parts.sort();
     if !ruleset.folders.is_empty() {
         let mut folders = ruleset.folders.clone();
@@ -169,6 +171,25 @@ pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
         h = fnv1a(b"\x1e", h); // record separator so concatenation is unambiguous
     }
     format!("{h:016x}")
+}
+
+fn complex_enum_shape(def: &ComplexEnumDef) -> String {
+    let ComplexEnumDef {
+        name,
+        description: _,
+        path_options,
+        name_tree,
+        start_from_root,
+    } = def;
+    let mut paths = path_options.paths.clone();
+    paths.sort();
+    format!(
+        "complex_enum:{name}|paths={}|strict={}|file={}|ext={}|root={start_from_root}|tree={name_tree:?}",
+        paths.join(","),
+        path_options.path_strict,
+        path_options.path_file.as_deref().unwrap_or(""),
+        path_options.path_extension.as_deref().unwrap_or(""),
+    )
 }
 
 /// The fingerprint a cache should be keyed by: the game-version fingerprint
@@ -1238,6 +1259,49 @@ mod tests {
         let mut c = RuleSet::new();
         c.types = vec![mk("event", Some("id")), mk("tech", Some("id"))];
         assert_ne!(ruleset_shape_hash(&a), ruleset_shape_hash(&c));
+    }
+
+    #[test]
+    fn ruleset_shape_hash_follows_complex_enum_definitions() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let shape = |cwt: &str| {
+            let parsed = cwtools_parser::parser::parse_string(cwt, &table);
+            ruleset_shape_hash(&cwtools_rules::rules_converter::ast_to_ruleset(
+                &parsed, &table,
+            ))
+        };
+        let stats = |path: &str, body: &str| {
+            format!(
+                "complex_enum[stats] = {{ path = \"{path}\" start_from_root = yes name = {{ {body} }} }}"
+            )
+        };
+        let other =
+            "complex_enum[other] = { path = \"game/common/other\" name = { enum_name = scalar } }";
+        let enums = |defs: &[&str]| format!("enums = {{ {} }}", defs.join("\n"));
+
+        let alpha = stats("game/common/alpha", "enum_name = scalar");
+        let base = shape(&enums(&[alpha.as_str(), other]));
+
+        assert_eq!(base, shape(&enums(&[alpha.as_str(), other])));
+        assert_eq!(base, shape(&enums(&[other, alpha.as_str()])));
+
+        let moved = stats("game/common/beta", "enum_name = scalar");
+        let regrouped = stats("game/common/alpha", "group = { enum_name }");
+        let rooted = alpha.replace("start_from_root = yes", "start_from_root = no");
+        let filtered = alpha.replace(
+            "start_from_root",
+            "path_file = \"stats.txt\" start_from_root",
+        );
+        for (what, changed) in [
+            ("path", enums(&[moved.as_str(), other])),
+            ("name tree", enums(&[regrouped.as_str(), other])),
+            ("start_from_root", enums(&[rooted.as_str(), other])),
+            ("path_file", enums(&[filtered.as_str(), other])),
+            ("removed definition", enums(&[alpha.as_str()])),
+            ("no definitions", String::new()),
+        ] {
+            assert_ne!(base, shape(&changed), "{what} must change the shape");
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@ use cwtools_info::{IndexedUseSite, TypeInstance, UseSite};
 use cwtools_parser::ast::ParsedFile;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{InlineScripts, references};
+use cwtools_validation::{CancelFlag, InlineScripts, references};
 
 use crate::scan::ScanSummary;
 use crate::validate::NameTokens;
@@ -36,6 +36,10 @@ pub(crate) enum HoldPoint {
     TypeUsesMerge,
     WatchedFile,
     ValidatePrepared,
+    ValidateBeforeAcceptance,
+    DependentUsesPrepared,
+    ExportSweepSnapshot,
+    LoadingBarActiveChecked,
 }
 
 /// A one-shot condvar gate: the first `hold` at the configured point blocks
@@ -232,16 +236,28 @@ pub(crate) struct VanillaState {
     pub(crate) var_names: Option<Arc<Vec<String>>>,
     pub(crate) scripted_loc_names: Option<Arc<Vec<String>>>,
     pub(crate) scripted_gui_names: Option<Arc<Vec<String>>>,
+    /// Shape hash of the ruleset this payload was built under. `None` for a payload of unknown
+    /// origin (a client-supplied cache), which a rules reload keeps.
+    pub(crate) rules_shape: Option<String>,
 }
 
 /// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,
 /// then release it before acquiring `config` or `info_service` or doing I/O.
 /// Other multi-lock paths document their order at their use sites.
+#[derive(Default)]
+pub(crate) struct PendingExportSweep {
+    pub(crate) revision: u64,
+    pub(crate) pending: bool,
+    pub(crate) full: bool,
+    pub(crate) names: NameTokens,
+}
+
 pub(crate) struct DocumentState {
     /// Orders versioned diagnostic sends against document version changes. A
     /// validation may finish while didChange is queued, so the version check
     /// and its client send must be one serialized operation.
     pub(crate) diagnostic_publication_lock: tokio::sync::Mutex<()>,
+    pub(crate) loading_bar_publication_lock: tokio::sync::Mutex<()>,
     pub(crate) baseline: Mutex<crate::baseline_runtime::State>,
     pub(crate) documents: Mutex<DocumentStore>,
     pub(crate) config: parking_lot::RwLock<Config>,
@@ -322,6 +338,7 @@ pub(crate) struct DocumentState {
     /// Tokens of names whose open dependents still need a sweep: queued by paths that do
     /// not sweep themselves, re-queued when a sweep is superseded.
     pub(crate) pending_changed_names: Mutex<NameTokens>,
+    pub(crate) pending_export_sweep: Mutex<PendingExportSweep>,
     pub(crate) type_uses: parking_lot::RwLock<HashMap<String, references::UsedInstances>>,
     #[allow(clippy::type_complexity)]
     pub(crate) type_uses_merged: parking_lot::Mutex<Option<(u64, Arc<references::UsedInstances>)>>,
@@ -1356,6 +1373,17 @@ pub(crate) struct DebounceTask {
     pub(crate) id: u64,
     pub(crate) abort: tokio::task::AbortHandle,
     pub(crate) finished: tokio::sync::oneshot::Receiver<()>,
+    /// The sync traversal's cancel signal, which the task abort cannot reach
+    /// inside `block_in_place` (#1196).
+    pub(crate) cancel_flag: Arc<CancelFlag>,
+}
+
+impl DebounceTask {
+    /// Stops the rule traversal at its next block boundary and aborts the task (#1196).
+    pub(crate) fn cancel(&self) {
+        self.cancel_flag.cancel();
+        self.abort.abort();
+    }
 }
 
 pub(crate) fn remove_debounce_task(
@@ -1813,6 +1841,7 @@ impl DocumentState {
         cwtools_validation::per_game::seed_comparison_literals(&string_table);
         Self {
             diagnostic_publication_lock: tokio::sync::Mutex::new(()),
+            loading_bar_publication_lock: tokio::sync::Mutex::new(()),
             baseline: Mutex::new(crate::baseline_runtime::State::default()),
             documents: Mutex::new(DocumentStore::new()),
             config: parking_lot::RwLock::new(Config::new()),
@@ -1861,6 +1890,7 @@ impl DocumentState {
             edit_generation: AtomicU64::new(0),
             doc_tokens: parking_lot::RwLock::new(HashMap::new()),
             pending_changed_names: Mutex::new(NameTokens::default()),
+            pending_export_sweep: Mutex::new(PendingExportSweep::default()),
             type_uses: parking_lot::RwLock::new(HashMap::new()),
             type_uses_merged: parking_lot::Mutex::new(None),
             type_uses_revision: AtomicU64::new(0),

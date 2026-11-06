@@ -203,7 +203,7 @@ pub(super) fn validate_alias_usage(
         scope_context,
         &mut produced,
     );
-    if !ctx.alias_branch_budget_exhausted() {
+    if !ctx.stop_traversal() {
         ctx.alias_memo_store(memo_key, &produced);
     }
     errors.append(&mut produced);
@@ -220,7 +220,7 @@ fn validate_alias_usage_uncached(
     scope_context: &mut Option<ScopeContext>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if ctx.alias_branch_budget_exhausted() {
+    if ctx.stop_traversal() {
         return;
     }
     let table = ctx.table;
@@ -445,7 +445,10 @@ fn alias_mismatch_error(
 
 #[cfg(test)]
 mod tests {
-    use crate::{Prepared, ValidationError, build_scope_registry_arc, validate_prepared_inner};
+    use crate::{
+        CancelFlag, Prepared, ValidationError, build_scope_registry_arc,
+        validate_prepared_cancellable, validate_prepared_inner,
+    };
     use cwtools_parser::parser::parse_string;
     use cwtools_rules::rules_converter::ast_to_ruleset;
     use cwtools_string_table::string_table::StringTable;
@@ -470,9 +473,14 @@ alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
         script
     }
 
-    fn branches_for(depth: usize) -> (Vec<ValidationError>, usize) {
+    fn prepared_for(rules_src: &str) -> (StringTable, cwtools_rules::rules_types::RuleSet) {
         let table = StringTable::new();
-        let ruleset = ast_to_ruleset(&parse_string(RECURSIVE_RULES, &table), &table);
+        let ruleset = ast_to_ruleset(&parse_string(rules_src, &table), &table);
+        (table, ruleset)
+    }
+
+    fn branches_for(depth: usize) -> (Vec<ValidationError>, usize) {
+        let (table, ruleset) = prepared_for(RECURSIVE_RULES);
         let parsed = parse_string(&recursive_script(depth), &table);
         let registry = build_scope_registry_arc(&ruleset, None);
         let prepared = Prepared {
@@ -488,7 +496,7 @@ alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
             scope_checks: false,
             var_checks: false,
         };
-        validate_prepared_inner(&parsed, "game/common/foo/test.txt", &prepared, None)
+        validate_prepared_inner(&parsed, "game/common/foo/test.txt", &prepared, None, None)
     }
 
     #[test]
@@ -515,6 +523,73 @@ alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
         assert!(
             deeper - shallow <= 32,
             "four more levels should cost a few branches, went from {shallow} to {deeper}"
+        );
+    }
+
+    /// A cancelled run must stop inside the nested alias expansion and never
+    /// report its partial result (#1196).
+    #[test]
+    fn cancellation_stops_nested_alias_traversal_early_without_partial_results() {
+        const DEPTH: usize = 20;
+        let (table, ruleset) = prepared_for(RECURSIVE_RULES);
+        let parsed = parse_string(&recursive_script(DEPTH), &table);
+        let registry = build_scope_registry_arc(&ruleset, None);
+        let prepared = Prepared {
+            ruleset: &ruleset,
+            table: &table,
+            game: None,
+            type_index: None,
+            modifier_keys: None,
+            loc_index: None,
+            extra_loc_keys: None,
+            inline_scripts: None,
+            registry: registry.as_ref(),
+            scope_checks: false,
+            var_checks: false,
+        };
+        let path = "game/common/foo/test.txt";
+
+        let control = CancelFlag::default();
+        let (full_errors, full_branches) =
+            validate_prepared_inner(&parsed, path, &prepared, None, Some(&control));
+        assert!(
+            full_errors.iter().any(|error| error.code == Some("CW263")),
+            "the control must reach the deepest invalid field: {full_errors:?}"
+        );
+        assert!(
+            control.polls() > 2,
+            "the traversal must poll: {}",
+            control.polls()
+        );
+
+        // Half the control's polls lands deep inside the nested expansion.
+        let trip = control.polls() / 2;
+        let tripped = CancelFlag::default();
+        tripped.cancel_at_poll(trip);
+        let (partial_errors, partial_branches) =
+            validate_prepared_inner(&parsed, path, &prepared, None, Some(&tripped));
+        assert!(
+            tripped.polls() < control.polls(),
+            "the cancelled traversal must exit early: {} vs {}",
+            tripped.polls(),
+            control.polls()
+        );
+        assert!(
+            partial_branches > 0 && partial_branches < full_branches,
+            "the trip must land mid-expansion, after some branches and before all: \
+             {partial_branches} of {full_branches}"
+        );
+        assert!(
+            partial_errors.len() < full_errors.len(),
+            "the cancelled run must leave later blocks unvisited"
+        );
+
+        // The public entry point reports cancellation, never the partial errors.
+        let tripped = CancelFlag::default();
+        tripped.cancel_at_poll(trip);
+        assert!(
+            validate_prepared_cancellable(&parsed, path, &prepared, &tripped).is_none(),
+            "a cancelled nested-alias traversal must not return partial success"
         );
     }
 }

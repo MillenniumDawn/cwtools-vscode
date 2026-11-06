@@ -11,8 +11,8 @@ use crate::validate::{NameTokens, name_tokens};
 const WATCHED_FOLDER_EXPANSION_MAX_ENTRIES: usize = 10_000;
 
 use super::{
-    WATCHED_BATCH_PANIC_ONCE, WATCHED_DEBOUNCE_MS, env_flag, resolve_watched_deletes,
-    spawn_logging_panics, watched_batch_over_cap, watched_batch_slot_is_ours, watched_stat_sig,
+    WATCHED_BATCH_PANIC_ONCE, env_flag, resolve_watched_deletes, spawn_logging_panics,
+    watched_batch_over_cap, watched_batch_slot_is_ours, watched_debounce, watched_stat_sig,
 };
 
 /// What a watched delete pass changed, so the batch can scope its dependent sweep
@@ -104,7 +104,7 @@ impl Backend {
         let client = self.client.clone();
         let state = self.state.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(WATCHED_DEBOUNCE_MS)).await;
+            tokio::time::sleep(watched_debounce()).await;
             let changes: HashSet<String> = { state.watched_pending.lock().drain().collect() };
             let deletes: Vec<String> = {
                 let mut deleted = state.watched_deleted.lock();
@@ -346,6 +346,7 @@ impl Backend {
                     // or dropped index entry, so those sweeps have no name scope (#1023, #1067).
                     let scope = (!(resources_changed || index_changed)).then_some(&queued);
                     self.revalidate_open_dependents("", generation, scope).await;
+                    self.sweep_pending_exports(generation).await;
                 }
             }
             if refresh_features {

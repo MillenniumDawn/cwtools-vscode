@@ -13,6 +13,7 @@ use cwtools_file_manager::file_manager::{ScanBudget, ScanBytes, read_text_capped
 use cwtools_parser::ast::ParseError;
 use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -151,11 +152,46 @@ fn collect_cwt_files(
             .extension()
             .map(|e| e.eq_ignore_ascii_case("cwt"))
             .unwrap_or(false)
+            || is_modifiers_log(&path)
         {
             *remaining_files -= 1;
             out.push(path);
         }
     }
+}
+
+/// The game-generated `logs/modifiers.log` some configs ship in place of a `modifiers` section.
+fn is_modifiers_log(path: &Path) -> bool {
+    let named = |name: Option<&std::ffi::OsStr>, want: &str| {
+        name.is_some_and(|n| n.eq_ignore_ascii_case(want))
+    };
+    named(path.file_name(), "modifiers.log")
+        && named(path.parent().and_then(Path::file_name), "logs")
+}
+
+/// Reads the `- name, Category: X` lines and skips everything else.
+fn parse_modifiers_log(content: &str) -> Vec<(String, String)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let (name, category) = line.strip_prefix("- ")?.split_once(", Category: ")?;
+            let name = name.trim();
+            (!name.is_empty() && !name.contains(char::is_whitespace))
+                .then(|| (name.to_string(), category.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Appends the log's modifiers that the rules do not already define, so a config entry wins.
+fn append_log_modifiers(dst: &mut Vec<(String, String)>, log: Vec<(String, String)>) {
+    if log.is_empty() {
+        return;
+    }
+    let mut seen: HashSet<String> = dst.iter().map(|(name, _)| name.to_lowercase()).collect();
+    dst.extend(
+        log.into_iter()
+            .filter(|(name, _)| seen.insert(name.to_lowercase())),
+    );
 }
 
 pub fn merge_ruleset(dst: &mut RuleSet, src: RuleSet) {
@@ -190,6 +226,7 @@ struct FileRules {
     ruleset: RuleSet,
     ref_candidates: Vec<crate::config_validation::RefCandidate>,
     def_positions: Vec<CwtDefPosition>,
+    log_modifiers: Vec<(String, String)>,
     errors: Vec<RuleParseError>,
 }
 
@@ -203,6 +240,7 @@ fn load_cwt_file(
         ruleset: RuleSet::new(),
         ref_candidates: Vec::new(),
         def_positions: Vec::new(),
+        log_modifiers: Vec::new(),
         errors: Vec::new(),
     };
     let unreadable = |message: String| {
@@ -226,6 +264,8 @@ fn load_cwt_file(
                 .is_some_and(|n| n.eq_ignore_ascii_case("folders.cwt"))
             {
                 out.ruleset.folders = parse_folders_list(&content);
+            } else if is_modifiers_log(path) {
+                out.log_modifiers = parse_modifiers_log(&content);
             } else {
                 let parsed = parse_string(&content, table);
                 out.errors.extend(
@@ -318,12 +358,15 @@ fn combine_file_rules(
 ) -> (RuleSet, Vec<RuleParseError>) {
     let mut combined = RuleSet::new();
     let mut ref_candidates: Vec<crate::config_validation::RefCandidate> = Vec::new();
+    let mut log_modifiers: Vec<(String, String)> = Vec::new();
     for file in per_file {
         errors.extend(file.errors);
         merge_ruleset(&mut combined, file.ruleset);
         ref_candidates.extend(file.ref_candidates);
         combined.def_positions.extend(file.def_positions);
+        log_modifiers.extend(file.log_modifiers);
     }
+    append_log_modifiers(&mut combined.modifiers, log_modifiers);
 
     let refused = post_process(&mut combined);
     errors.extend(
@@ -473,6 +516,85 @@ thing = { second = any }
         assert_eq!(dst.enums[0].description, "first description");
         assert_eq!(dst.enums[0].values, ["first", "shared", "second"]);
         assert_eq!(dst.enum_by_name().get("shared"), Some(&0));
+    }
+
+    #[test]
+    fn modifiers_log_keeps_only_name_and_category_lines() {
+        let log = "[15:44:08][modifier.cpp:2200]: \r\n == MODIFIER DOCUMENTATION ==\r\n\
+                   -- Pop scope modifiers will generally work on planets.\r\n\
+                   Printing Modifier Definitions:\r\n\
+                   - blank_modifier, Category: Pops\r\n\
+                   - pop_happiness, Category: Pops, AI Economy\r\n\
+                   - no_category_here\r\n\
+                   - , Category: Pops\r\n\
+                   - two words, Category: Pops\r\n\
+                   - pop_happiness, Category: Planets\r\n\
+                   Category: Pops\r\n";
+        assert_eq!(
+            parse_modifiers_log(log),
+            [
+                ("blank_modifier".to_string(), "Pops".to_string()),
+                ("pop_happiness".to_string(), "Pops, AI Economy".to_string()),
+                ("pop_happiness".to_string(), "Planets".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn modifiers_log_is_found_by_name_and_parent_directory() {
+        for (path, expected) in [
+            ("rules/logs/modifiers.log", true),
+            ("logs/Modifiers.LOG", true),
+            ("modifiers.log", false),
+            ("rules/modifiers.log", false),
+            ("rules/logs/scopes.log", false),
+            ("rules/logs/modifiers.cwt", false),
+        ] {
+            assert_eq!(is_modifiers_log(Path::new(path)), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn load_ruleset_from_dir_reads_the_nested_modifiers_log_after_the_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config");
+        std::fs::create_dir_all(config.join("logs")).unwrap();
+        std::fs::write(
+            config.join("logs").join("modifiers.log"),
+            "Printing Modifier Definitions:\n\
+             - from_config, Category: Planets\n\
+             - FROM_LOG, Category: Pops\n\
+             - from_log, Category: Pops\n",
+        )
+        .unwrap();
+        std::fs::write(
+            config.join("modifiers.cwt"),
+            "modifiers = {\n    from_config = Pops\n    from_cwt = Country\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("modifiers.log"),
+            "- stray, Category: Pops\n",
+        )
+        .unwrap();
+
+        let (ruleset, errors) =
+            load_ruleset_from_dir(tmp.path(), &StringTable::new(), ScanBudget::default());
+
+        assert!(errors.is_empty(), "{errors:?}");
+        let modifiers: Vec<(&str, &str)> = ruleset
+            .modifiers
+            .iter()
+            .map(|(name, category)| (name.as_str(), category.as_str()))
+            .collect();
+        assert_eq!(
+            modifiers,
+            [
+                ("from_config", "Pops"),
+                ("from_cwt", "Country"),
+                ("FROM_LOG", "Pops"),
+            ]
+        );
     }
 
     #[cfg(unix)]

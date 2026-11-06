@@ -477,6 +477,36 @@ fn session_load_checks_calls_against_base_game_scripted_parameters() {
     assert_eq!(errors_in("bad.txt"), 1);
 }
 
+const VALUE_SET_RULES: &str = "alias[effect:set_country_flag] = value_set[country_flag]\n";
+
+/// A live `--vanilla` load must hold the base game's value-set members, as a load
+/// from the base-game cache does, so both give the same diagnostics.
+#[test]
+fn session_load_merges_base_game_value_set_members() {
+    let tmp = write_tree(&[
+        ("rules/flags.cwt", VALUE_SET_RULES),
+        (
+            "vanilla/common/things/v.txt",
+            "vanilla_thing = { set_country_flag = vanilla_flag }\n",
+        ),
+        (
+            "mod/common/things/m.txt",
+            "mod_thing = { set_country_flag = mod_flag }\n",
+        ),
+    ]);
+    let mut config = workspace_config(tmp.path());
+    config.vanilla = Some(tmp.path().join("vanilla"));
+
+    let session = Session::load(config);
+
+    let flags = &session.type_index().value_set_values;
+    assert!(flags.contains("country_flag", "mod_flag"));
+    assert!(
+        flags.contains("country_flag", "vanilla_flag"),
+        "the base game's value-set members should reach the index"
+    );
+}
+
 // ── CW113 case-sensitive filepath check ─────────────────────────────────────
 
 /// A mod whose `ref.gfx` references `gfx/test/button.dds` while the on-disk file
