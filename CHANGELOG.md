@@ -3,9 +3,17 @@
 #### Extension
 
 * Reject a regular file configured as `rules_folder`, warn, and use the managed rules directory instead. Existing directories and path normalization are unchanged. (#1220)
+#### Tooling
+
+* Reject host and Node coverage reports that omit executable source modules, and require each module to have one coverage owner. Declaration and type-only files are excluded; coverage floors are unchanged. (#1229)
+#### Extension
+
+* Show an error when saving a graph PNG or JSON fails. Canceling the save dialog stays silent, and a later export can still succeed. (#1221)
+* Apply ignore-code quick fixes to the current settings buffer without discarding unsaved changes. Preserve JSONC comments and unrelated settings, create missing settings files, and merge legacy nested ignore lists into the flat setting. Refuse symlinked, unreadable, malformed, or nonregular settings targets. Ignore lists now follow the diagnostic's workspace folder. (#1234, #1235, #1252, #1253, #1254)
 
 #### Engine
 
+* Reject stale localisation create-key quick fixes in VS Code, including targets opened after the action was requested. Keep target versions in individual and batched edits, and resolve sibling insertion positions from the current target text. (#1251)
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
@@ -20,6 +28,10 @@
 * Stop copying every exported name into two owned sets on each edit. The before and after snapshots now hold the token hashes the open-document sweep already matches on. (#1182)
 * Supply the `scripted_effect_params` enum the way the F# engine did, when a config uses it without defining it. Its values are the `$PARAM$` names (`$NAME|default$` counts as `NAME`) and the `[[NAME]` and `[[!NAME]` conditional-block names in `common/scripted_effects` and `common/scripted_triggers`, indexed per file so edits update them. Like CW500, the check needs the base game loaded. With it, a scripted trigger call that passes a name no scripted effect or trigger declares is reported (as CW240), ignoring case. Scripted effect calls are not checked yet, because the Stellaris config's `alias[effect:<scripted_effect>] = yes` overload accepts any block first. A `--vanilla` run that parses the install now keeps the base game's names, as a run that reads the cache already did. Completion inside a scripted call now offers those names, from every scripted effect and trigger rather than only the callee. A config that defines the enum or a complex enum of that name keeps its own. The base-game cache version moves, so older caches rebuild. (#1008)
 * Rebuild the base-game index after a rules reload that changes the type or complex enum definitions, instead of keeping what the old rules found. A reload that leaves those alone keeps the index, and a rebuild with no members left clears the old ones. The base-game cache key now covers complex enum definitions, so a changed complex enum no longer reuses an older cache; cache files keep their layout. A live `--vanilla` run now also merges the base game's value-set members, as a run that reads the cache already did. (#1208)
+
+#### Tooling
+
+* Isolate extension-host test labels in separate VS Code profiles without restoring other windows. Include multi-root settings safety tests in the host coverage gate.
 
 ### 4.0.6
 
