@@ -3,48 +3,12 @@ use std::path::Path;
 
 use tower_lsp::lsp_types::*;
 
-const SETTINGS_KEY: [&str; 3] = ["cwtools", "errors", "ignore"];
-
-pub(super) fn updated_settings_json(code: &str, existing: Option<&str>) -> Option<String> {
-    let mut root: serde_json::Value = match existing {
-        None => serde_json::json!({}),
-        Some(text) if text.trim().is_empty() => serde_json::json!({}),
-        Some(text) => serde_json::from_str(text).ok()?,
-    };
-    let mut cursor = root.as_object_mut()?;
-    for (i, key) in SETTINGS_KEY.iter().enumerate() {
-        let is_last = i == SETTINGS_KEY.len() - 1;
-        if is_last {
-            let ignore = cursor.entry(*key).or_insert_with(|| serde_json::json!([]));
-            let list = ignore.as_array_mut()?;
-            if !list
-                .iter()
-                .any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(code)))
-            {
-                list.push(serde_json::Value::String(code.to_string()));
-            }
-        } else {
-            cursor = cursor
-                .entry(*key)
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()?;
-        }
-    }
-    let mut out = serde_json::to_string_pretty(&root).ok()?;
-    out.push('\n');
-    Some(out)
-}
-
 pub(super) fn ignore_code_actions(
     diagnostics: &[Diagnostic],
     ignored: &[String],
     workspace_root: Option<&Path>,
-    settings_content: Option<&str>,
 ) -> Vec<CodeActionOrCommand> {
-    let Some(root) = workspace_root else {
-        return Vec::new();
-    };
-    let Ok(settings_uri) = Url::from_file_path(root.join(".vscode").join("settings.json")) else {
+    let Some(uri) = workspace_root.and_then(|root| Url::from_file_path(root).ok()) else {
         return Vec::new();
     };
     let mut seen: HashSet<&str> = HashSet::new();
@@ -53,34 +17,33 @@ pub(super) fn ignore_code_actions(
         let Some(NumberOrString::String(code)) = diag.code.as_ref() else {
             continue;
         };
+        let bytes = code.as_bytes();
+        if bytes.len() != 5
+            || !bytes[..2].eq_ignore_ascii_case(b"CW")
+            || !bytes[2..].iter().all(u8::is_ascii_digit)
+        {
+            continue;
+        }
         if !seen.insert(code.as_str()) {
             continue;
         }
         if ignored.iter().any(|i| i.eq_ignore_ascii_case(code)) {
             continue;
         }
-        let Some(updated) = updated_settings_json(code, settings_content) else {
-            continue;
-        };
         let related: Vec<Diagnostic> = diagnostics
             .iter()
             .filter(|d| d.code.as_ref() == Some(&NumberOrString::String(code.clone())))
             .cloned()
             .collect();
-        let whole_file = TextEdit {
-            range: Range::new(Position::new(0, 0), Position::new(u32::MAX, u32::MAX)),
-            new_text: updated,
-        };
-        let mut changes = std::collections::HashMap::new();
-        changes.insert(settings_uri.clone(), vec![whole_file]);
+        let title = cwtools_i18n::format(cwtools_i18n::Key::ActionIgnoreCode, &[code]);
         actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title: cwtools_i18n::format(cwtools_i18n::Key::ActionIgnoreCode, &[code]),
+            title: title.clone(),
             kind: Some(CodeActionKind::QUICKFIX),
             diagnostics: Some(related),
-            edit: Some(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
+            command: Some(Command {
+                title,
+                command: "cwtools.ignoreDiagnosticCode".to_string(),
+                arguments: Some(vec![serde_json::json!(uri), serde_json::json!(code)]),
             }),
             ..Default::default()
         }));
@@ -101,75 +64,15 @@ mod tests {
     }
 
     #[test]
-    fn new_settings_file_gets_the_section() {
-        let updated = updated_settings_json("CW100", None).expect("new file builds");
-        let parsed: serde_json::Value = serde_json::from_str(&updated).expect("valid json");
-        assert_eq!(parsed["cwtools"]["errors"]["ignore"][0], "CW100");
-    }
-
-    #[test]
-    fn empty_settings_file_gets_the_section() {
-        let updated = updated_settings_json("CW100", Some("")).expect("empty file builds");
-        let parsed: serde_json::Value = serde_json::from_str(&updated).expect("valid json");
-        assert_eq!(parsed["cwtools"]["errors"]["ignore"][0], "CW100");
-    }
-
-    #[test]
-    fn existing_list_is_appended_and_deduped_case_insensitively() {
-        let existing = r#"{
-  "cwtools": { "errors": { "ignore": ["cw100", "CW246"] } }
-}"#;
-        let updated = updated_settings_json("CW107", Some(existing)).expect("appends");
-        let parsed: serde_json::Value = serde_json::from_str(&updated).expect("valid json");
-        assert_eq!(
-            parsed["cwtools"]["errors"]["ignore"].as_array().unwrap(),
-            &["cw100", "CW246", "CW107"]
-        );
-        let dup = updated_settings_json("CW246", Some(&updated)).expect("dedupes");
-        let parsed: serde_json::Value = serde_json::from_str(&dup).expect("valid json");
-        assert_eq!(
-            parsed["cwtools"]["errors"]["ignore"]
-                .as_array()
-                .unwrap()
-                .len(),
-            3,
-            "a code already present must not be added twice"
-        );
-    }
-
-    #[test]
-    fn unrelated_settings_survive() {
-        let existing = r#"{
-  "editor.formatOnSave": true
-}"#;
-        let updated = updated_settings_json("CW100", Some(existing)).expect("builds");
-        let parsed: serde_json::Value = serde_json::from_str(&updated).expect("valid json");
-        assert_eq!(parsed["editor.formatOnSave"], true);
-        assert_eq!(parsed["cwtools"]["errors"]["ignore"][0], "CW100");
-    }
-
-    #[test]
-    fn malformed_or_non_object_settings_decline() {
-        assert!(updated_settings_json("CW100", Some("not json")).is_none());
-        assert!(updated_settings_json("CW100", Some("[1, 2]")).is_none());
-        assert!(updated_settings_json("CW100", Some("null")).is_none());
-    }
-
-    #[test]
-    fn non_array_ignore_key_declines() {
-        let existing = r#"{ "cwtools": { "errors": { "ignore": "CW100" } } }"#;
-        assert!(updated_settings_json("CW246", Some(existing)).is_none());
-    }
-
-    #[test]
     fn actions_are_built_per_unique_code() {
         let root = abs_path("ws");
+        let uri = Url::from_file_path(&root).unwrap();
         let diags = vec![
             diagnostic("CW100"),
             diagnostic("CW100"),
             diagnostic("CW246"),
         ];
-        let actions = ignore_code_actions(&diags, &[], Some(&root), None);
+        let actions = ignore_code_actions(&diags, &[], Some(&root));
         assert_eq!(actions.len(), 2, "one action per distinct code");
         let CodeActionOrCommand::CodeAction(first) = &actions[0] else {
             panic!("expected a CodeAction");
@@ -177,14 +80,14 @@ mod tests {
         assert_eq!(first.title, "Ignore CW100 in this workspace");
         assert_eq!(first.kind, Some(CodeActionKind::QUICKFIX));
         assert_eq!(first.diagnostics.as_ref().unwrap().len(), 2);
-        let changes = first
-            .edit
-            .as_ref()
-            .and_then(|e| e.changes.as_ref())
-            .expect("edit carries changes");
-        let (uri, edits) = changes.iter().next().expect("one file edited");
-        assert!(uri.path().ends_with(".vscode/settings.json"));
-        assert_eq!(edits.len(), 1, "whole-file replace");
+        assert!(first.edit.is_none(), "the client owns settings edits");
+        let command = first.command.as_ref().expect("client command");
+        assert_eq!(command.command, "cwtools.ignoreDiagnosticCode");
+        assert_eq!(command.title, first.title);
+        assert_eq!(
+            command.arguments,
+            Some(vec![serde_json::json!(uri), serde_json::json!("CW100")])
+        );
     }
 
     #[test]
@@ -194,21 +97,34 @@ mod tests {
             ..Default::default()
         };
         let root = abs_path("ws");
-        let actions = ignore_code_actions(&[numeric], &[], Some(&root), None);
+        let actions = ignore_code_actions(&[numeric], &[], Some(&root));
         assert!(actions.is_empty(), "numeric codes have no name to ignore");
 
-        let already = ignore_code_actions(
-            &[diagnostic("CW100")],
-            &["cw100".to_string()],
-            Some(&root),
-            None,
-        );
+        let already =
+            ignore_code_actions(&[diagnostic("CW100")], &["cw100".to_string()], Some(&root));
         assert!(already.is_empty(), "already-ignored codes are skipped");
     }
 
     #[test]
+    fn foreign_codes_yield_no_actions() {
+        let root = abs_path("ws");
+        let diags = [
+            diagnostic("yaml-schema"),
+            diagnostic(""),
+            diagnostic("CW1234"),
+            diagnostic("cw100"),
+        ];
+        let actions = ignore_code_actions(&diags, &[], Some(&root));
+        assert_eq!(actions.len(), 1);
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected action")
+        };
+        assert_eq!(action.title, "Ignore cw100 in this workspace");
+    }
+
+    #[test]
     fn no_workspace_root_yields_no_actions() {
-        let actions = ignore_code_actions(&[diagnostic("CW100")], &[], None, None);
+        let actions = ignore_code_actions(&[diagnostic("CW100")], &[], None);
         assert!(actions.is_empty());
     }
 }
