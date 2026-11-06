@@ -677,6 +677,7 @@ fn over_cap_batches(server: &mut TestServer) -> usize {
 fn test_watched_created_folder_over_budget_retries_after_losing_scan_cas() {
     let signals = tempfile::tempdir().unwrap();
     let parse_gate = signals.path().join("parse-hold");
+    let retry_gate = signals.path().join("retry-hold");
     let rules = r#"
         types = {
             type[decision] = { path = "game/common/decisions" }
@@ -691,7 +692,8 @@ fn test_watched_created_folder_over_budget_retries_after_losing_scan_cas() {
         storm_base()
             .file("gfx/present.dds", "present")
             .rules_file("r.cwt", rules)
-            .env("CWTOOLS_PARSE_HOLD_FILE", &parse_gate),
+            .env("CWTOOLS_PARSE_HOLD_FILE", &parse_gate)
+            .env("CWTOOLS_SCAN_HOLD_FILE", &retry_gate),
     );
     server.write_file(PICTURE_DOC_REL, text);
     server.open(PICTURE_DOC_REL, text);
@@ -703,7 +705,11 @@ fn test_watched_created_folder_over_budget_retries_after_losing_scan_cas() {
 
     std::fs::write(&parse_gate, b"hold").unwrap();
     server.reindex_until_scan_starts();
-    server.read_until("the reindex scan's held Parse phase", is_scan_started);
+    server.read_until("the reindex scan's held Parse phase", |frame| {
+        is_scan_started(frame) && frame["params"]["percentage"] == 3
+    });
+    // Keep the retry from overwriting the first scan's unconsumed release marker.
+    std::fs::write(&retry_gate, b"hold").unwrap();
     let folder_path = server.path("gfx/large");
     std::fs::create_dir_all(&folder_path).unwrap();
     std::fs::write(folder_path.join("new_pic.dds"), "texture").unwrap();
@@ -724,6 +730,7 @@ fn test_watched_created_folder_over_budget_retries_after_losing_scan_cas() {
 
     std::fs::remove_file(&parse_gate).unwrap();
     wait_for_scan_release(&server.scan_release_path());
+    std::fs::remove_file(&retry_gate).unwrap();
     assert!(
         poll_until(
             Instant::now() + Duration::from_secs(30),
