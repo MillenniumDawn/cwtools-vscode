@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Show an error when saving a graph PNG or JSON fails. Canceling the save dialog stays silent, and a later export can still succeed. (#1221)
 * Apply ignore-code quick fixes to the current settings buffer without discarding unsaved changes. Preserve JSONC comments and unrelated settings, create missing settings files, and merge legacy nested ignore lists into the flat setting. Refuse symlinked, unreadable, malformed, or nonregular settings targets. Ignore lists now follow the diagnostic's workspace folder. (#1234, #1235, #1252, #1253, #1254)
 
 #### Engine
