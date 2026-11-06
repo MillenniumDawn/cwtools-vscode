@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Watch an explicitly supplied `--vanilla` directory in `validate --watch`, deduplicated against the rules, workspace and parent roots, so an edit under the vanilla install reruns validation without another workspace change. Mod ignore-dir exclusions are not applied to the vanilla root, and an unset vanilla adds no root. (#1268)
+
 ### 4.0.7
 
 #### Extension
