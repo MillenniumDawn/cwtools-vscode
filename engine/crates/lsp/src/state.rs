@@ -12,7 +12,7 @@ use cwtools_info::{IndexedUseSite, TypeInstance, UseSite};
 use cwtools_parser::ast::ParsedFile;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{InlineScripts, references};
+use cwtools_validation::{CancelFlag, InlineScripts, references};
 
 use crate::scan::ScanSummary;
 use crate::validate::NameTokens;
@@ -36,6 +36,9 @@ pub(crate) enum HoldPoint {
     TypeUsesMerge,
     WatchedFile,
     ValidatePrepared,
+    ValidateBeforeAcceptance,
+    DependentUsesPrepared,
+    ExportSweepSnapshot,
     LoadingBarActiveChecked,
 }
 
@@ -241,6 +244,14 @@ pub(crate) struct VanillaState {
 /// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,
 /// then release it before acquiring `config` or `info_service` or doing I/O.
 /// Other multi-lock paths document their order at their use sites.
+#[derive(Default)]
+pub(crate) struct PendingExportSweep {
+    pub(crate) revision: u64,
+    pub(crate) pending: bool,
+    pub(crate) full: bool,
+    pub(crate) names: NameTokens,
+}
+
 pub(crate) struct DocumentState {
     /// Orders versioned diagnostic sends against document version changes. A
     /// validation may finish while didChange is queued, so the version check
@@ -327,6 +338,7 @@ pub(crate) struct DocumentState {
     /// Tokens of names whose open dependents still need a sweep: queued by paths that do
     /// not sweep themselves, re-queued when a sweep is superseded.
     pub(crate) pending_changed_names: Mutex<NameTokens>,
+    pub(crate) pending_export_sweep: Mutex<PendingExportSweep>,
     pub(crate) type_uses: parking_lot::RwLock<HashMap<String, references::UsedInstances>>,
     #[allow(clippy::type_complexity)]
     pub(crate) type_uses_merged: parking_lot::Mutex<Option<(u64, Arc<references::UsedInstances>)>>,
@@ -1361,6 +1373,17 @@ pub(crate) struct DebounceTask {
     pub(crate) id: u64,
     pub(crate) abort: tokio::task::AbortHandle,
     pub(crate) finished: tokio::sync::oneshot::Receiver<()>,
+    /// The sync traversal's cancel signal, which the task abort cannot reach
+    /// inside `block_in_place` (#1196).
+    pub(crate) cancel_flag: Arc<CancelFlag>,
+}
+
+impl DebounceTask {
+    /// Stops the rule traversal at its next block boundary and aborts the task (#1196).
+    pub(crate) fn cancel(&self) {
+        self.cancel_flag.cancel();
+        self.abort.abort();
+    }
 }
 
 pub(crate) fn remove_debounce_task(
@@ -1867,6 +1890,7 @@ impl DocumentState {
             edit_generation: AtomicU64::new(0),
             doc_tokens: parking_lot::RwLock::new(HashMap::new()),
             pending_changed_names: Mutex::new(NameTokens::default()),
+            pending_export_sweep: Mutex::new(PendingExportSweep::default()),
             type_uses: parking_lot::RwLock::new(HashMap::new()),
             type_uses_merged: parking_lot::Mutex::new(None),
             type_uses_revision: AtomicU64::new(0),

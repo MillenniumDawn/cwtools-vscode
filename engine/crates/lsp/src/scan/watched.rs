@@ -346,6 +346,7 @@ impl Backend {
                     // or dropped index entry, so those sweeps have no name scope (#1023, #1067).
                     let scope = (!(resources_changed || index_changed)).then_some(&queued);
                     self.revalidate_open_dependents("", generation, scope).await;
+                    self.sweep_pending_exports(generation).await;
                 }
             }
             if refresh_features {
