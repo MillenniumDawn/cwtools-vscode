@@ -606,11 +606,15 @@ fn value_token_span(line: &[char], from: usize) -> Option<(usize, usize)> {
     let start = i;
     if line[i] == '"' {
         i += 1;
-        while i < line.len() && line[i] != '"' {
-            i += 1;
-        }
-        if i < line.len() {
-            i += 1;
+        while i < line.len() {
+            if line[i] == '\\' && i + 1 < line.len() && matches!(line[i + 1], '\\' | '"') {
+                i += 2;
+            } else if line[i] == '"' {
+                i += 1;
+                break;
+            } else {
+                i += 1;
+            }
         }
     } else {
         while i < line.len() && !line[i].is_whitespace() && !matches!(line[i], '#' | '{' | '}') {
@@ -1290,6 +1294,49 @@ mod tests {
     fn value_span_covers_a_quoted_string_including_spaces() {
         let line: Vec<char> = r#"a = "two words" # c"#.chars().collect();
         assert_eq!(value_token_span(&line, PAST_EQ), Some((4, 15)));
+    }
+
+    #[test]
+    fn value_span_respects_quoted_escape_rules() {
+        for (text, expected) in [
+            (r#"a = "a\"b" # c"#, r#""a\"b""#),
+            (r#"a = "a\\" # c"#, r#""a\\""#),
+            (r#"a = "unfinished\"x"#, r#""unfinished\"x"#),
+            (r#"a = "plain" # c"#, r#""plain""#),
+        ] {
+            let line: Vec<char> = text.chars().collect();
+            let (start, end) = value_token_span(&line, PAST_EQ).unwrap();
+            assert_eq!(line[start..end].iter().collect::<String>(), expected);
+        }
+    }
+
+    #[test]
+    fn escaped_quotes_produce_full_utf16_semantic_span() {
+        let text = "a = \"😀\\\"x\"\n";
+        let tokens = tokens_for(text);
+        assert_eq!(at(&tokens, 0, 4).length, 7);
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(text, &table);
+        let utf32 = semantic_tokens(&ast, &table, text, &PositionEncodingKind::UTF32, None, None);
+        assert_eq!(at(&utf32, 0, 4).length, 6);
+        let before_text = "a = \"😀\"\n";
+        let before_ast = cwtools_parser::parser::parse_string(before_text, &table);
+        let before = encode(semantic_tokens(
+            &before_ast,
+            &table,
+            before_text,
+            &PositionEncodingKind::UTF16,
+            None,
+            None,
+        ));
+        let after = encode(tokens);
+        let edit = &compute_semantic_delta(&before, &after)[0];
+        let mut reconstructed = before;
+        reconstructed.splice(
+            (edit.start / 5) as usize..((edit.start + edit.delete_count) / 5) as usize,
+            edit.data.clone().unwrap_or_default(),
+        );
+        assert_eq!(reconstructed, after);
     }
 
     #[test]
