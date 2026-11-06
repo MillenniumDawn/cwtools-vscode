@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Report the missing UTF-8 BOM error (CW254) once per physical localisation file. Multi-language CSV files parsed one projection per language and repeated the file-level error for every projection; language-specific entry diagnostics are unchanged. (#1263)
+
 ### 4.0.7
 
 #### Extension
