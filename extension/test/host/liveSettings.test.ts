@@ -300,6 +300,81 @@ suite("Live settings", function () {
 		}
 	}
 
+	async function checkStaleLocalisation(initiallyOpen: boolean): Promise<void> {
+		await withExternalRules(async ({ file, loads }) => {
+			const count = loads().length;
+			await fs.writeFile(file, `types = { type[safety_thing] = {
+ path = "game/common/live_settings"
+ localisation = {
+  ## required
+  name = "$"
+  ## required
+  desc = "$_desc"
+ }
+} }
+safety_thing = { x = scalar }\n`);
+			assert.ok(await waitUntil(() => loads().length > count));
+			const locUri = vscode.Uri.file(path.join(SAMPLE_ROOT, "localisation/cwtools_live_settings_l_english.yml"));
+			if (!initiallyOpen) assert.ok(!vscode.workspace.textDocuments.some((doc) => doc.uri.toString() === locUri.toString()));
+			let loc = initiallyOpen ? await vscode.workspace.openTextDocument(locUri) : undefined;
+			const originalLoc = await fs.readFile(locUri.fsPath, "utf8");
+			const originalScript = document.getText();
+			try {
+				const setup = new vscode.WorkspaceEdit();
+				setup.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), "cwtools_live_setting = { x = yes }\n");
+				assert.ok(await vscode.workspace.applyEdit(setup));
+				const missingKey = () => vscode.languages.getDiagnostics(document.uri).find((diag) =>
+					(typeof diag.code === "object" ? diag.code.value : diag.code) === "CW100" && diag.message.includes("cwtools_live_setting_desc"));
+				assert.ok(await waitUntil(() => missingKey() !== undefined, 30_000));
+				const requestAction = async () => {
+					let actions: vscode.CodeAction[] | undefined;
+					let action: vscode.CodeAction | undefined;
+					assert.ok(await waitUntil(async () => {
+						const diagnostic = missingKey();
+						if (!diagnostic) return false;
+						actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+							"vscode.executeCodeActionProvider", document.uri, diagnostic.range, vscode.CodeActionKind.QuickFix.value,
+						);
+						action = actions?.find((candidate) => candidate.command?.command === "cwtools.applyCodeAction");
+						return action !== undefined;
+					}), `versioned localisation edits must use the guarded command: ${JSON.stringify(actions)}`);
+					assert.ok(action?.command);
+					assert.strictEqual(action.edit, undefined);
+					return action.command;
+				};
+				const stale = await requestAction();
+				const staleArgs = stale.arguments as [vscode.WorkspaceEdit, { uri: string; version: number | null }[]];
+				assert.strictEqual(staleArgs[1].find((target) => target.uri === locUri.toString())?.version, loc?.version ?? null);
+				loc ??= await vscode.workspace.openTextDocument(locUri);
+				const userEdit = new vscode.WorkspaceEdit();
+				userEdit.insert(loc.uri, new vscode.Position(1, 0), "# User edit\n");
+				assert.ok(await vscode.workspace.applyEdit(userEdit));
+				const changedText = loc.getText();
+				assert.strictEqual(await vscode.commands.executeCommand(stale.command, ...staleArgs), false);
+				assert.strictEqual(loc.getText(), changedText, "a stale action must not modify the target");
+				const fresh = await requestAction();
+				const freshArgs = fresh.arguments as unknown[];
+				assert.strictEqual(await vscode.commands.executeCommand(fresh.command, ...freshArgs), true);
+				assert.ok(loc.getText().includes('# User edit\n cwtools_live_setting:0 "English setting"\n cwtools_live_setting_desc:0 "TODO"'), JSON.stringify(loc.getText()));
+			} finally {
+				const restore = new vscode.WorkspaceEdit();
+				restore.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), originalScript);
+				if (loc) restore.replace(loc.uri, new vscode.Range(0, 0, loc.lineCount, 0), originalLoc);
+				await vscode.workspace.applyEdit(restore);
+				if (loc) {
+					await vscode.window.showTextDocument(loc);
+					await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+				}
+			}
+		});
+	}
+
+	for (const initiallyOpen of [false, true]) {
+		test(`rejects a stale localisation quick fix for an initially ${initiallyOpen ? "open" : "closed"} target and applies a fresh one`, async () => {
+			await checkStaleLocalisation(initiallyOpen);
+		});
+	}
+
 	test("switches rules folders and watches external rules files live", async function () {
 		this.timeout(70_000);
 		await withExternalRules(async ({ file, loads }) => {
