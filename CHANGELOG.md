@@ -43,6 +43,7 @@
 
 * Isolate extension-host test labels in separate VS Code profiles without restoring other windows. Include multi-root settings safety tests in the host coverage gate.
 * Hold the watched-folder retry scan until its predecessor's release marker is consumed, so the regression test cannot lose a completion signal.
+* Stop the rules-recovery test's watcher and restore file permissions if the test exits early.
 
 ### 4.0.6
 

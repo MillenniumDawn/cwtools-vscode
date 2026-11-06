@@ -572,6 +572,19 @@ fn run_watch_rules_recovery(single_file: bool) {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    struct Cleanup {
+        child: std::process::Child,
+        rule: std::path::PathBuf,
+        permissions: std::fs::Permissions,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::set_permissions(&self.rule, self.permissions.clone());
+        }
+    }
+
     let event = fixture_text("discover/mod_a/events/test.txt");
     let mod_dir = write_tree(&[("events/test.txt", &event)]);
     let rules = tempfile::tempdir().unwrap();
@@ -584,7 +597,7 @@ fn run_watch_rules_recovery(single_file: bool) {
         return; // Elevated users can read mode-000 files.
     }
     std::fs::set_permissions(&rule, permissions.clone()).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cwtools"))
+    let child = Command::new(env!("CARGO_BIN_EXE_cwtools"))
         .envs(cwtools_test_support::scratch_home_env())
         .args(["validate", "--game", "stellaris", "--watch", "--directory"])
         .arg(mod_dir.path())
@@ -599,10 +612,15 @@ fn run_watch_rules_recovery(single_file: bool) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let mut cleanup = Cleanup {
+        child,
+        rule: rule.clone(),
+        permissions: permissions.clone(),
+    };
     let (tx, lines) = mpsc::channel();
     let streams: [Box<dyn Read + Send>; 2] = [
-        Box::new(child.stdout.take().unwrap()),
-        Box::new(child.stderr.take().unwrap()),
+        Box::new(cleanup.child.stdout.take().unwrap()),
+        Box::new(cleanup.child.stderr.take().unwrap()),
     ];
     for stream in streams {
         let tx = tx.clone();
@@ -635,9 +653,9 @@ fn run_watch_rules_recovery(single_file: bool) {
     let recovered = failed && wait("CW107      -0 +1");
     // SAFETY: sends SIGINT to the child this test spawned.
     unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+        libc::kill(cleanup.child.id() as libc::pid_t, libc::SIGINT);
     }
-    let status = child.wait().unwrap();
+    let status = cleanup.child.wait().unwrap();
     assert!(
         watching && failed && recovered,
         "watch did not retry and recover"
