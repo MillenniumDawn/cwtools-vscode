@@ -280,6 +280,8 @@ fn rules_at_pos_from_candidates(
             &mut *subtype_merge_memo.borrow_mut(),
         )),
         type_uses: None,
+        // Position resolution is request-scoped and never cancelled (#1196).
+        cancel: None,
     };
 
     let result = (|| {
@@ -427,6 +429,7 @@ pub fn scope_transitions_with_limit(
         alias_memo: RefCell::new(crate::ctx::AliasMemo::default()),
         subtype_merge_memo: RefCell::new(crate::ctx::SubtypeMergeMemo::default()),
         type_uses: None,
+        cancel: None,
     };
     let path_candidates = path_candidates_for_file(&file_path.to_lowercase(), prepared.ruleset);
     let mut out = Vec::new();

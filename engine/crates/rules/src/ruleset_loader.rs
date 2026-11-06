@@ -24,6 +24,8 @@ pub struct RuleParseError {
     pub code: &'static str,
     pub severity: ErrorSeverity,
     pub message: String,
+    /// An input could not be acquired due to an I/O error.
+    pub retryable_io: bool,
 }
 
 impl RuleParseError {
@@ -41,6 +43,7 @@ impl RuleParseError {
             code: code.id,
             severity: code.severity,
             message,
+            retryable_io: false,
         }
     }
 
@@ -73,13 +76,15 @@ impl std::fmt::Display for RuleParseError {
 }
 
 fn directory_read_error(dir: &Path, error: std::io::Error) -> RuleParseError {
-    RuleParseError::new(
+    let mut diagnostic = RuleParseError::new(
         &CW600_RULES_FILE_UNREADABLE,
         dir.to_path_buf(),
         1,
         0,
         format!("read directory error: {error}"),
-    )
+    );
+    diagnostic.retryable_io = true;
+    diagnostic
 }
 
 fn alias_expansion_error(
@@ -123,7 +128,13 @@ fn collect_cwt_files(
                 continue;
             }
         };
-        let Ok(ft) = entry.file_type() else { continue };
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(error) => {
+                errors.push(directory_read_error(&entry.path(), error));
+                continue;
+            }
+        };
         kids.push((entry.file_name(), entry.path(), ft));
     }
     kids.sort_by(|a, b| a.0.cmp(&b.0));
@@ -282,7 +293,12 @@ fn load_cwt_file(
                 );
             }
         }
-        Err(e) => out.errors.push(unreadable(format!("read error: {}", e))),
+        Err(e) => {
+            let mut diagnostic = unreadable(format!("read error: {}", e));
+            diagnostic.retryable_io =
+                matches!(e, cwtools_file_manager::file_manager::FileError::Io(_));
+            out.errors.push(diagnostic);
+        }
     }
     out
 }
@@ -294,13 +310,22 @@ pub fn load_ruleset_from_file(
     table: &StringTable,
     budget: ScanBudget,
 ) -> Result<(RuleSet, Vec<RuleParseError>), String> {
+    load_ruleset_from_file_typed(path, table, budget).map_err(|e| e.to_string())
+}
+
+/// Like `load_ruleset_from_file`, retaining the acquisition error classification.
+pub fn load_ruleset_from_file_typed(
+    path: &Path,
+    table: &StringTable,
+    budget: ScanBudget,
+) -> Result<(RuleSet, Vec<RuleParseError>), RuleParseError> {
     let file = load_cwt_file(path, table, budget, &ScanBytes::new());
     if let Some(error) = file
         .errors
         .iter()
         .find(|error| error.code == CW600_RULES_FILE_UNREADABLE.id)
     {
-        return Err(error.to_string());
+        return Err(error.clone());
     }
     Ok(combine_file_rules(path, vec![file], Vec::new()))
 }
@@ -702,6 +727,7 @@ thing = { second = any }
             errors.iter().any(|e| e.file.ends_with("huge.cwt")),
             "over-cap file must be reported as a read error: {errors:?}"
         );
+        assert!(errors.iter().all(|e| !e.retryable_io));
         let _ = ruleset;
     }
 

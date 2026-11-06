@@ -174,7 +174,7 @@ suite("engine — detectFromFolder", () => {
 
 suite("engine — resolveRulesFolder", () => {
 	test.each([undefined, "   "])("an unset or blank value %j resolves to nothing", (raw) => {
-		assert.deepStrictEqual(resolveRulesFolder(raw, { exists: () => true }), {
+		assert.deepStrictEqual(resolveRulesFolder(raw, { isDirectory: () => true }), {
 			path: undefined,
 			existed: false,
 		});
@@ -207,7 +207,7 @@ suite("engine — resolveRulesFolder", () => {
 		["an absolute path ignores the workspace root", "/absolute/path", { ...linux, workspaceRoot: "/mods/mymod" }, "/absolute/path"],
 	])("%s", (_name, raw, opts, expected) => {
 		assert.deepStrictEqual(
-			resolveRulesFolder(raw, { ...opts, exists: (p) => p === expected }),
+			resolveRulesFolder(raw, { ...opts, isDirectory: (p) => p === expected }),
 			{ path: expected, existed: true },
 		);
 	});
@@ -215,7 +215,7 @@ suite("engine — resolveRulesFolder", () => {
 	test("set-but-missing returns existed:false with a trimmed best-effort path", () => {
 		const r = resolveRulesFolder('  "C:\\Users\\me\\missing"  ', {
 			...win32,
-			exists: () => false,
+			isDirectory: () => false,
 		});
 		assert.strictEqual(r.existed, false);
 		assert.strictEqual(r.path, path.win32.normalize("C:\\Users\\me\\missing"));

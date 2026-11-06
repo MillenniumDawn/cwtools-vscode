@@ -1421,15 +1421,19 @@ impl Backend {
                 Some(ast) => {
                     let lines = DocLines::new(&text, encoding.clone());
                     let diags = match ruleset_snap.as_ref() {
-                        Some(ruleset) => self.validate_parsed_prebuilt(
-                            &uri,
-                            &ast,
-                            &modifier_keys_snap,
-                            ruleset,
-                            game,
-                            registry_snap.as_ref(),
-                            &lines,
-                        ),
+                        Some(ruleset) => {
+                            self.validate_parsed_prebuilt(
+                                &uri,
+                                &ast,
+                                &modifier_keys_snap,
+                                ruleset,
+                                game,
+                                registry_snap.as_ref(),
+                                &lines,
+                                true,
+                            )
+                            .0
+                        }
                         None => parse_errors_to_diagnostics(&ast.errors, &lines),
                     };
                     tracing::info!(

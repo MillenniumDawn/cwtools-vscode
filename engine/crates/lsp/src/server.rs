@@ -69,6 +69,10 @@ impl Backend {
         let client = self.client.clone();
         let state = self.state.clone();
         let key = uri.clone();
+        // Per-debounce cancel signal: the abort cannot reach the sync traversal
+        // inside `block_in_place` (#1196).
+        let cancel_flag = Arc::new(cwtools_validation::CancelFlag::default());
+        let task_cancel_flag = Arc::clone(&cancel_flag);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
@@ -84,7 +88,7 @@ impl Backend {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
             Backend { client, state }
-                .debounced_validate(uri, version, generation, trigger)
+                .debounced_validate(uri, version, generation, trigger, &task_cancel_flag)
                 .await;
         });
         let abort = handle.abort_handle();
@@ -109,11 +113,12 @@ impl Backend {
                 id,
                 abort,
                 finished: finished_rx,
+                cancel_flag,
             },
         );
         let _ = start_tx.send(());
         if let Some(previous) = previous {
-            previous.abort.abort();
+            previous.cancel();
         }
     }
 
@@ -720,7 +725,7 @@ impl Backend {
         };
         let pending_validation = self.state.debounce_handles.lock().remove(&uri);
         if let Some(validation) = pending_validation {
-            validation.abort.abort();
+            validation.cancel();
             let _ = validation.finished.await;
         }
 
@@ -917,6 +922,7 @@ impl Backend {
             )
             .await;
         }
+        self.sweep_pending_exports(generation).await;
         self.request_code_lens_refresh().await;
     }
 }

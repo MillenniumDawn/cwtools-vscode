@@ -282,6 +282,8 @@ suite("GraphPanel", function () {
 		);
 		const call = handled()!;
 		await call.returnValue;
+		handler.restore();
+		dialog.restore();
 		assert.strictEqual(dialog.callCount, 1);
 		return call.args[0];
 	}
@@ -356,14 +358,34 @@ suite("GraphPanel", function () {
 	});
 
 	for (const [command, message] of saves) {
-		test(`${command} writes nothing when the save dialog is cancelled`, async function () {
+		test(`${command} reports a failed save and can save successfully afterwards`, async function () {
 			const panel = createPanel();
 			panel.initialiseGraph(graphData, 1.0);
 			await waitForRenderedGraph(panel);
+			const error = sandbox.stub(vscode.window, "showErrorMessage").resolves();
+
+			await runSave(panel, command, message, tempDir);
+
+			assert.ok(await waitUntil(() => error.called, 30_000));
+			assert.strictEqual(error.callCount, 1);
+			assert.match(error.firstCall.args[0], /^CWTools: failed to save graph: .+/);
+
+			const dest = path.join(tempDir, message === "saveImage" ? "export.png" : "export.json");
+			await runSave(panel, command, message, dest);
+			assert.ok(fs.statSync(dest).isFile());
+			assert.strictEqual(error.callCount, 1);
+		});
+
+		test(`${command} writes nothing and reports no error when the save dialog is cancelled`, async function () {
+			const panel = createPanel();
+			panel.initialiseGraph(graphData, 1.0);
+			await waitForRenderedGraph(panel);
+			const error = sandbox.stub(vscode.window, "showErrorMessage").resolves();
 
 			await runSave(panel, command, message, undefined);
 
 			assert.deepStrictEqual(fs.readdirSync(tempDir), ["graph.json"]);
+			assert.strictEqual(error.called, false);
 		});
 	}
 

@@ -628,3 +628,105 @@ fn discover_workspace_files_parity_with_session_preserves_order() {
         "discovery must be sorted: {direct_paths:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn partial_workspace_and_parent_walks_only_mark_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = write_tree(&[
+        ("modroot/common/nested/a.txt", "a = 1"),
+        ("parent/common/nested/b.txt", "b = 1"),
+        ("rules/f.cwt", "types = { type[x] = { path = \"common\" } }"),
+    ]);
+    for (root, parent) in [("modroot", false), ("parent", true)] {
+        let blocked = tmp.path().join(root).join("common/nested");
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&blocked).is_ok() {
+            std::fs::set_permissions(&blocked, original).unwrap();
+            return; // An elevated user bypasses the permission fixture.
+        }
+        let mut config = workspace_config(tmp.path());
+        config.directory = tmp.path().join("modroot");
+        if parent {
+            config.parent_roots.push(tmp.path().join("parent"));
+        }
+        let session = Session::load(config);
+        std::fs::set_permissions(&blocked, original).unwrap();
+        assert!(
+            !session.discovery_failed,
+            "partial walk must preserve batch exit behavior"
+        );
+        assert!(
+            session.discovery_incomplete,
+            "{root} partial walk must be retried by watch"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn partial_multi_mod_walk_marks_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = write_tree(&[
+        ("workspace/mod/a.mod", "name = \"A\"\npath = \"alpha\"\n"),
+        ("workspace/alpha/common/nested/a.txt", "a = 1"),
+        ("rules/f.cwt", "types = { type[x] = { path = \"common\" } }"),
+    ]);
+    let blocked = tmp.path().join("workspace/alpha/common/nested");
+    let original = std::fs::metadata(&blocked).unwrap().permissions();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&blocked).is_ok() {
+        std::fs::set_permissions(&blocked, original).unwrap();
+        return;
+    }
+    let mut config = workspace_config(tmp.path());
+    config.directory = tmp.path().join("workspace");
+    assert_eq!(
+        cwtools_file_manager::file_manager::classify_directory(&config.directory),
+        cwtools_file_manager::file_manager::DirectoryType::MultipleMod
+    );
+    let session = Session::load(config);
+    std::fs::set_permissions(&blocked, original).unwrap();
+    assert!(!session.discovery_failed);
+    assert!(session.discovery_incomplete);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_multi_mod_descriptor_and_directory_mark_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = write_tree(&[
+        (
+            "workspace/mod/a.mod",
+            "name = \"A\"\npath = \"hidden/alpha\"\n",
+        ),
+        ("workspace/mods/b.mod", "name = \"B\"\npath = \"bravo\"\n"),
+        ("workspace/hidden/alpha/common/a.txt", "a = 1"),
+        ("workspace/bravo/common/b.txt", "b = 1"),
+        ("rules/f.cwt", "types = { type[x] = { path = \"common\" } }"),
+    ]);
+    for relative in ["workspace/mod/a.mod", "workspace/mod", "workspace/hidden"] {
+        let blocked = tmp.path().join(relative);
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let accessible = if blocked.is_dir() {
+            std::fs::read_dir(&blocked).is_ok()
+        } else {
+            std::fs::read(&blocked).is_ok()
+        };
+        if accessible {
+            std::fs::set_permissions(&blocked, original).unwrap();
+            return;
+        }
+        let mut config = workspace_config(tmp.path());
+        config.directory = tmp.path().join("workspace");
+        let session = Session::load(config);
+        std::fs::set_permissions(&blocked, original).unwrap();
+        assert!(!session.discovery_failed);
+        assert!(
+            session.discovery_incomplete,
+            "{relative} must trigger retry"
+        );
+    }
+}

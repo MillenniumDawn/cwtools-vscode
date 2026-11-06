@@ -87,6 +87,40 @@ fn precision_field_three_decimals_is_clean() {
 }
 
 #[test]
+fn precision_handles_exponents_without_rounding() {
+    for (value, flagged) in [
+        ("1e-5", true),
+        ("0.00001", true),
+        ("100e-5", false),
+        ("1.2300e-3", true),
+        ("1.2300e-2", true),
+        ("1.2300e-1", false),
+        ("1.2345e1", false),
+        ("1e-3", false),
+        ("0e-9999", false),
+        ("1e-9999", true),
+        ("1e9999", false),
+        ("1e-999999999999999999999", true),
+        ("-1E-5", true),
+        ("1e-5?scope", true),
+        ("\"1e-5^scope\"", true),
+    ] {
+        let c = codes(
+            RULES,
+            &format!("foo = {{ prec = {value} }}"),
+            &with_index(&vars(&[])),
+        );
+        assert_eq!(
+            c.iter().any(|code| code == "CW270"),
+            flagged,
+            "{value}: {c:?}"
+        );
+    }
+    let c = codes(RULES, "foo = { add = 1e-5 }", &with_index(&vars(&[])));
+    assert!(c.iter().any(|code| code == "CW271"), "{c:?}");
+}
+
+#[test]
 fn undefined_variable_is_cw246() {
     // Index has a different variable, so it is non-empty but lacks `mystery`.
     let c = codes(
