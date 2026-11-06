@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.7
+
 #### Extension
 
 * Reject a regular file configured as `rules_folder`, warn, and use the managed rules directory instead. Existing directories and path normalization are unchanged. (#1220)
