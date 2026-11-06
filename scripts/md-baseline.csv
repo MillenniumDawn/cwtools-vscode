@@ -19593,3 +19593,6 @@ music/music.asset,80,Warning,CW100,Localisation key axis_war_1 is not defined fo
 music/music.asset,85,Warning,CW100,Localisation key axis_war_2 is not defined for any language
 music/music.asset,90,Warning,CW100,Localisation key axis_war_3 is not defined for any language
 music/music.asset,95,Warning,CW100,Localisation key axis_war_4 is not defined for any language
+common/national_focus/05_georgia.txt,4749,Error,CW240,"Field 'set_war_support' has value '-1', expected a number between 0 and 1"
+events/05_australia_events.txt,7952,Error,CW240,"Field 'add_war_support' has value '-2', expected a number between -1 and 1"
+events/05_netherlands.txt,12191,Error,CW240,"Field 'add_war_support' has value '15', expected a number between -1 and 1"
