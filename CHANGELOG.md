@@ -1,5 +1,8 @@
 ### Unreleased
 
+#### Tooling
+
+* Reject host and Node coverage reports that omit executable source modules, and require each module to have one coverage owner. Declaration and type-only files are excluded; coverage floors are unchanged. (#1229)
 #### Extension
 
 * Show an error when saving a graph PNG or JSON fails. Canceling the save dialog stays silent, and a later export can still succeed. (#1221)

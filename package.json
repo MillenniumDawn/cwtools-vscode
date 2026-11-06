@@ -18,7 +18,7 @@
     "test:coverage": "node scripts/build/python.mjs scripts/build/host_coverage.py && node scripts/build/python.mjs scripts/build/coverage_summary.py --host-only",
     "test:node": "vitest run",
     "test:node:watch": "vitest",
-    "test:node:coverage": "vitest run --coverage",
+    "test:node:coverage": "vitest run --coverage && node scripts/build/python.mjs scripts/build/coverage_metrics.py coverage-node/coverage-summary.json",
     "bench:node": "vitest bench --run"
   },
   "dependencies": {
