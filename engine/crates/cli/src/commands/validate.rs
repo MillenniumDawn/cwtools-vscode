@@ -132,10 +132,7 @@ pub(super) fn run(args: ValidateArgs) {
     // counts as a change. Ctrl-C ends a watch with status 0, even mid-load.
     let poller = watching.then(|| {
         watch::exit_on_interrupt();
-        let roots = [rules.clone(), directory.clone()]
-            .into_iter()
-            .chain(parent_roots.iter().cloned())
-            .collect();
+        let roots = watch::roots(&rules, &directory, &parent_roots, vanilla.as_deref());
         watch::Poller::new(roots)
     });
 

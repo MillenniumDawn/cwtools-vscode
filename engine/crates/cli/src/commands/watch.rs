@@ -1,14 +1,17 @@
 //! `validate --watch`: notice that the inputs changed, and print what the
 //! re-run did to the diagnostics.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use cwtools_file_manager::path_identity;
 
 use crate::diag::{Diag, severity_rank};
 use crate::run::note;
@@ -16,6 +19,32 @@ use crate::run::note;
 /// The shortest pause between polls. A change must hold still for one more
 /// poll before it counts, so a save that touches many files reloads once.
 const POLL: Duration = Duration::from_millis(500);
+
+/// The roots a watch walks: the ruleset, the workspace, the parent roots, and
+/// the vanilla install when one was supplied explicitly. Deduplicated with
+/// `path_identity`, this crate's path key, so one tree is never walked twice.
+/// Every root is walked as-is: the mod's ignore-dir and exclusion filters
+/// decide what validates, not what counts as a change, and an unset vanilla
+/// adds no root.
+pub(crate) fn roots(
+    rules: &Path,
+    directory: &Path,
+    parents: &[PathBuf],
+    vanilla: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut seen: HashSet<Cow<'_, str>> = HashSet::new();
+    let mut watched: Vec<PathBuf> = Vec::new();
+    for root in std::iter::once(rules)
+        .chain(std::iter::once(directory))
+        .chain(parents.iter().map(PathBuf::as_path))
+        .chain(vanilla)
+    {
+        if seen.insert(path_identity(root)) {
+            watched.push(root.to_path_buf());
+        }
+    }
+    watched
+}
 
 /// Watches the roots a validate run reads by polling file metadata, so it
 /// needs no platform watcher.
@@ -464,5 +493,87 @@ mod tests {
         fs::create_dir(dir.path().join(".git")).unwrap();
         fs::write(dir.path().join(".git").join("index"), "x").unwrap();
         assert_eq!(fingerprint(&roots), before);
+    }
+
+    /// An explicit `--vanilla` install is an input of the run, so a file change
+    /// under it moves the fingerprint with no edit to the workspace at all.
+    #[test]
+    fn an_explicit_vanilla_directory_is_watched() {
+        let rules = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let vanilla = tempfile::tempdir().unwrap();
+        let watched = roots(rules.path(), workspace.path(), &[], Some(vanilla.path()));
+        let poller = Poller::new(watched);
+        let before = poller.seen;
+
+        let file = vanilla.path().join("events").join("vanilla.txt");
+        fs::create_dir(vanilla.path().join("events")).unwrap();
+        fs::write(&file, "x = 1\n").unwrap();
+
+        assert_ne!(
+            fingerprint(&poller.roots),
+            before,
+            "an edit under an explicit --vanilla root must move the fingerprint"
+        );
+    }
+
+    /// One tree is never walked twice: vanilla that repeats the workspace, the
+    /// ruleset or a parent root is dropped as a duplicate.
+    #[test]
+    fn vanilla_equal_to_another_root_is_watched_once() {
+        let rules = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+
+        let as_workspace = roots(
+            rules.path(),
+            workspace.path(),
+            &[parent.path().to_path_buf()],
+            Some(workspace.path()),
+        );
+        assert_eq!(
+            as_workspace,
+            vec![
+                rules.path().to_path_buf(),
+                workspace.path().to_path_buf(),
+                parent.path().to_path_buf()
+            ],
+            "vanilla equal to the workspace is not walked twice"
+        );
+
+        let as_rules = roots(rules.path(), workspace.path(), &[], Some(rules.path()));
+        assert_eq!(
+            as_rules,
+            vec![rules.path().to_path_buf(), workspace.path().to_path_buf()],
+            "vanilla equal to the rules root is not walked twice"
+        );
+    }
+
+    /// With no vanilla supplied there is no vanilla root: the watched list is
+    /// exactly rules, workspace and parents, and a change elsewhere is invisible.
+    #[test]
+    fn an_unset_vanilla_adds_no_root() {
+        let rules = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let vanilla = tempfile::tempdir().unwrap();
+        let watched = roots(
+            rules.path(),
+            workspace.path(),
+            &[workspace.path().to_path_buf()],
+            None,
+        );
+        assert_eq!(
+            watched,
+            vec![rules.path().to_path_buf(), workspace.path().to_path_buf()],
+            "an unset vanilla adds no root and a duplicate parent stays deduplicated"
+        );
+
+        let before = fingerprint(&watched);
+        fs::write(vanilla.path().join("outside.txt"), "x = 1\n").unwrap();
+        assert_eq!(
+            fingerprint(&watched),
+            before,
+            "a directory outside the watched roots stays outside the fingerprint"
+        );
     }
 }
