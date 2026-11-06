@@ -512,6 +512,18 @@ mod tests {
     }
 
     #[test]
+    fn hyphenated_references_resolve_or_report_missing_with_formatting() {
+        let svc = service_from(&[(
+            "a_l_english.yml",
+            "l_english:\n defined-key: \"value\"\n source: \"$defined-key|Y$ $missing-key|Y$\"\n",
+        )]);
+        let diags = validate_loc_project(&svc);
+        let refs: Vec<_> = diags.iter().filter(|d| d.code == "CW225").collect();
+        assert_eq!(refs.len(), 1, "{diags:?}");
+        assert!(refs[0].message.contains("missing-key"));
+    }
+
+    #[test]
     fn filename_without_lang_maps_to_cw255() {
         let svc = service_from(&[("events.yml", "l_english:\n key1: \"hi\"\n")]);
         let diags = validate_loc_project(&svc);

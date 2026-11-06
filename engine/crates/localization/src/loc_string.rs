@@ -115,7 +115,7 @@ fn is_loc_ref_key(key: &str) -> bool {
     !key.is_empty()
         && key
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
 }
 
 fn parse_bracket(s: &str, start: usize) -> Option<(LocElement<'_>, usize)> {
@@ -252,6 +252,19 @@ mod tests {
     fn test_simple_ref() {
         let elems = parse_loc_elements("$FOO$");
         assert_eq!(elems, vec![LocElement::Ref("FOO")]);
+    }
+
+    #[test]
+    fn hyphenated_reference_does_not_expand_dynamic_syntax() {
+        assert_eq!(
+            parse_loc_elements("$some-key|Y$"),
+            vec![LocElement::Ref("some-key")]
+        );
+        assert!(
+            !parse_loc_elements("$some-[Root.GetName]$")
+                .iter()
+                .any(|e| matches!(e, LocElement::Ref(_)))
+        );
     }
 
     #[test]

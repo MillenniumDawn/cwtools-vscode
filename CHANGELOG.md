@@ -10,6 +10,8 @@
 
 #### Engine
 
+* Recognize hyphenated localization references when checking for undefined keys. (#1261)
+
 * Strip the file-leading UTF-8 BOM from CSV localization keys and headers while preserving value offsets. (#1244)
 
 * Reject stale localisation create-key quick fixes in VS Code, including targets opened after the action was requested. Keep target versions in individual and batched edits, and resolve sibling insertion positions from the current target text. (#1251)
