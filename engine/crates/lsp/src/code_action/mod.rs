@@ -47,20 +47,10 @@ impl Backend {
                     cfg.workspace_roots.first().cloned(),
                 )
             };
-            let settings_content = if let Some(root) = root.as_ref() {
-                let path = root.join(".vscode").join("settings.json");
-                tokio::task::spawn_blocking(move || std::fs::read_to_string(path).ok())
-                    .await
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
             actions.extend(ignore_code::ignore_code_actions(
                 &params.context.diagnostics,
                 &ignored,
                 root.as_deref(),
-                settings_content.as_deref(),
             ));
         }
         if wants(only, &CodeActionKind::SOURCE_FIX_ALL)

@@ -3,7 +3,7 @@ import * as path from "path";
 import { writeFile } from "fs/promises";
 import * as crypto from "crypto";
 import { graphTruncationNotice, type GraphData, type GraphPanelState } from "../common/graphTypes";
-import { logError, logWarn } from "./logger";
+import { errorMessage, logError, logWarn } from "./logger";
 import { confirmOpen } from "./trustedPaths";
 
 export enum State {
@@ -250,6 +250,14 @@ export class GraphPanel {
 			}
 		} catch (error) {
 			logError("graph webview message handler failed", error);
+			if (
+				(message.command === "saveImage" || message.command === "saveJson") &&
+				!(error instanceof vscode.CancellationError)
+			) {
+				void vscode.window.showErrorMessage(
+					vscode.l10n.t("CWTools: failed to save graph: {0}", errorMessage(error)),
+				);
+			}
 		}
 	}
 

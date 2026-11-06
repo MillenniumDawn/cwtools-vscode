@@ -7,6 +7,7 @@ import type {
 } from "vscode";
 import {
 	CancellationError,
+	CodeAction,
 	RelativePattern,
 	Uri,
 	commands,
@@ -42,6 +43,7 @@ import {
 	type LiveServerSettings,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
+import { guardCodeActionEdit } from "./codeActionEdit";
 import type { RulesSetup } from "./rulesSetup";
 import {
 	CWT_WATCH_GLOB,
@@ -110,7 +112,7 @@ export function observeRulesFileNotifications(): {
 
 // Settings-to-server mapping lives in reindexSettings.ts (pure, unit-tested);
 // this just reads the raw config values.
-function readIgnoreOptions(): {
+function readIgnoreOptions(workspaceFolder: WorkspaceFolder): {
 	ignoreFilePatterns: string[];
 	ignoredErrorCodes: string[];
 } {
@@ -118,7 +120,7 @@ function readIgnoreOptions(): {
 	return mapIgnoreOptions(
 		cfg.get<string[]>("ignore_patterns"),
 		cfg.get<string[]>("errors.ignorefiles"),
-		cfg.get<string[]>("errors.ignore"),
+		workspace.getConfiguration("cwtools", workspaceFolder.uri).get<string[]>("errors.ignore"),
 	);
 }
 
@@ -553,6 +555,13 @@ export function createLanguageClient(
 
 
 	const middleware: LanguageClientOptions["middleware"] = {
+		provideCodeActions: async (document, range, context, token, next) => {
+			const actions = await next(document, range, context, token);
+			for (const action of actions ?? []) {
+				if (action instanceof CodeAction) guardCodeActionEdit(action);
+			}
+			return actions;
+		},
 		workspace: {
 			// Extension-keyed globs also catch files the server's own discovery
 			// walk skips, and its watched-file path doesn't re-apply that skip
@@ -697,7 +706,7 @@ export function createLanguageClient(
 		initializationOptions: () => {
 			startupRoots = readStartupRoots();
 			isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
-			const ignoreOptions = readIgnoreOptions();
+			const ignoreOptions = readIgnoreOptions(cfg.workspaceFolder);
 			return {
 				language: cfg.language,
 				rulesCache: currentRulesCache,
@@ -825,7 +834,7 @@ export function createLanguageClient(
 					return;
 				const settings = {
 					...buildSettingsPayload(
-						readIgnoreOptions(),
+						readIgnoreOptions(cfg.workspaceFolder),
 						readBackgroundReindexMinutes(),
 						readBackgroundReindexIdleSeconds(),
 						readLiveServerSettings(cfg.workspaceFolder),
