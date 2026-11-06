@@ -18,6 +18,8 @@ pub(crate) fn parse_csv_loc_per_lang(
     let column_langs = column_langs.unwrap_or(CK2_COLUMN_LANGS);
     let stream_name: Arc<str> = Arc::from(name);
     let mut out = Vec::new();
+    let has_bom = text.starts_with('\u{feff}');
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
     for (line_num, line) in text.lines().enumerate() {
         let trimmed = line.trim();
@@ -49,7 +51,7 @@ pub(crate) fn parse_csv_loc_per_lang(
                 .map(|p| p.chars().count())
                 .sum::<usize>()
                 + col_idx;
-            let desc_column = leading_ws + prefix_chars;
+            let desc_column = leading_ws + prefix_chars + usize::from(has_bom && line_num == 0);
 
             out.push((
                 key.clone(),
@@ -92,6 +94,25 @@ mod tests {
                           key2;More English;More French;;;\n\
                           # comment\n\
                           key3;Last entry;;;;";
+
+    #[test]
+    fn leading_bom_is_not_part_of_key_or_header() {
+        let entries = parse_csv_loc_for_lang(
+            "\u{feff}key;Text;;;;\nnext\u{feff};Other;;;;",
+            "test.csv",
+            Lang::English,
+        );
+        assert_eq!(entries[0].key, "key");
+        assert_eq!(entries[0].desc_column, 5);
+        assert_eq!(entries[1].key, "next\u{feff}");
+        let header = parse_csv_loc_for_lang(
+            "\u{feff}#CODE;ENGLISH\nkey;Text;;;;",
+            "test.csv",
+            Lang::English,
+        );
+        assert_eq!(header.len(), 1);
+        assert_eq!(header[0].key, "key");
+    }
 
     #[test]
     fn test_per_lang_english() {

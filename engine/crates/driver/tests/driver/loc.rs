@@ -3,6 +3,22 @@ use cwtools_localization::Lang;
 
 use crate::common::{THING_RULES, loc_gate_workspace, workspace_config, write_tree};
 
+#[test]
+fn bom_prefixed_csv_loads_without_invalid_key_diagnostic() {
+    let ws = write_tree(&[
+        ("rules/things.cwt", THING_RULES),
+        ("mod/localisation/bom.csv", "\u{feff}csv_key;Text;;;;\n"),
+    ]);
+    let session = Session::load(workspace_config(ws.path()));
+    assert!(session.loc_index().exists_any("csv_key"));
+    assert!(
+        !session
+            .loc_project_diagnostics()
+            .iter()
+            .any(|d| d.code == "CW276")
+    );
+}
+
 // ── CW100 loc gate ───────────────────────────────────────────────────────────
 
 fn cw100_count(workspace: &std::path::Path) -> usize {
