@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import coverage_metrics
 import host_coverage
 import hosttest
 from paths import BUILD_DIR
@@ -426,6 +427,11 @@ def test_runs_host_live_and_restart_labels_in_one_coverage_command(
     monkeypatch.setattr(host_coverage, "test_cli_command", make_test_cli_command)
     monkeypatch.setattr(host_coverage, "run_with_timeout", record_command)
 
+    monkeypatch.setattr(
+        coverage_metrics,
+        "executable_source_ownership",
+        lambda: ({"extension/src/host/lspClient.ts"}, set()),
+    )
     argv = ["--skip-compile"] if skip_compile else []
     assert host_coverage.main(argv) == 0
     expected_compile_commands = (

@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Reject host and Node coverage reports that omit executable source modules, and require each module to have one coverage owner. Declaration and type-only files are excluded; coverage floors are unchanged. (#1229)
+
 #### Engine
 
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
