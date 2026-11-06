@@ -14,14 +14,21 @@
 #### Engine
 
 * Serialize loading-bar state checks and client notifications so a progress tick cannot reopen the bar after another operation closes it. (#1283)
+* Recognize hyphenated localization references when checking for undefined keys. (#1261)
+
+* Strip the file-leading UTF-8 BOM from CSV localization keys and headers while preserving value offsets. (#1244)
+
 * Reject stale localisation create-key quick fixes in VS Code, including targets opened after the action was requested. Keep target versions in individual and batched edits, and resolve sibling insertion positions from the current target text. (#1251)
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
+* Apply variable-field precision checks consistently to exponent notation. (#1265)
 * Read the watched-file debounce from `CWTOOLS_WATCHED_DEBOUNCE_MS`, in milliseconds. The default stays 500 ms when the variable is unset or not a number. The `lsp` test harness sets 50 ms and its watched-file drains wait 500 ms instead of 900 ms. (#1199)
 * Fence semantic-token hashing, cache copies, delta diffing and encoding without changing token results or cache behavior. (#1181)
+* Ignore trailing localization comments when collecting references and commands. (#1262)
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
+* Keep escaped quotes and backslashes inside semantic string token spans. (#1271)
 * Apply hover debug, hover scope display, and background-reindex timing changes without revalidating open documents or invalidating the workspace scan fingerprint.
 * Read the core modifiers from a config's `logs/modifiers.log` when it has one, as the F# engine did. The Stellaris config has no `modifiers` section and lists them only there, so every core modifier in a `modifier` block was reported as an unexpected field (CW263). The `- name, Category: X` lines are merged with any `modifiers` section, which wins on a name both define, and other lines are ignored. On the Stellaris test corpus 274 of the 692 CW263 findings go away and nothing new appears. The block's values are still not checked as numbers, because `alias[modifier:<modifier>]` has no instances to match. (#1203)
 * Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
