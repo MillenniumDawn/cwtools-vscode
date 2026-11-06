@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import coverage_metrics
 from coverage_metrics import (
     COVERAGE_METRICS,
     HOST_COVERAGE_DROPS,
@@ -13,7 +14,13 @@ from coverage_metrics import (
     HOST_COVERAGE_THRESHOLDS,
     FileCoverage,
     Metric,
-    validate_host_coverage_summary,
+    source_ownership,
+)
+from coverage_metrics import (
+    validate_host_coverage_metrics as validate_host_coverage_summary,
+)
+from coverage_metrics import (
+    validate_host_coverage_summary as validate_host_inventory,
 )
 from coverage_summary import (
     SOURCES,
@@ -55,6 +62,23 @@ def test_accepts_non_empty_host_and_common_source_coverage() -> None:
             r"C:\repo\extension\src\common\graphTypes.ts": file_coverage(),
         }
     )
+
+
+def test_rejects_a_missing_executable_host_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        coverage_metrics,
+        "executable_source_ownership",
+        lambda: ({"extension/src/host/lspClient.ts"}, set()),
+    )
+    with pytest.raises(RuntimeError, match="missing executable host modules"):
+        validate_host_inventory(
+            {
+                "total": file_coverage(),
+                "/repo/extension/src/host/graphPanel.ts": file_coverage(),
+            }
+        )
 
 
 def test_rejects_a_report_containing_only_dependencies() -> None:
@@ -282,6 +306,19 @@ def test_lists_the_worst_covered_rust_files() -> None:
     assert "engine/crates/c.rs" not in rendered
     assert "2 worst-covered files of 3" in rendered
     assert "Full report is in the `rust-coverage` artifact" in rendered
+
+
+def test_executable_sources_have_exactly_one_coverage_owner() -> None:
+    sources = {
+        "extension/src/common/graphTypes.ts",
+        "extension/src/host/engine.ts",
+        "extension/src/webview/graph.ts",
+    }
+    included = sources - {"extension/src/common/graphTypes.ts"}
+    host, node = source_ownership(sources, included)
+    assert host == {"extension/src/common/graphTypes.ts"}
+    assert node == included
+    assert host.isdisjoint(node)
 
 
 def test_host_coverage_drops_match_vitest_owned_host_modules() -> None:
