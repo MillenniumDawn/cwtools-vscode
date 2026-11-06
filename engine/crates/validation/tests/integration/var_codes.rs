@@ -493,3 +493,118 @@ fn mod_and_vanilla_both_resolve_and_dedup() {
     );
     assert!(!c.contains(&"CW246".to_string()), "got: {:?}", c);
 }
+
+// ── Issue #1241: min/max bounds on variable_field values ───────────────────
+// A keyed `key = value` leaf under `variable_field[0..10]` must reject numeric
+// values outside the configured range with CW240, the same bounds bare values
+// are matched against (where an out-of-range value matches no leafvalue rule
+// and gets CW264). Boundaries and dynamic values stay accepted.
+
+const BOUNDS_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    key = variable_field[0..10]
+    ## cardinality = 0..inf
+    variable_field[0..10]
+}
+"#;
+
+#[test]
+fn keyed_variable_field_above_max_is_cw240() {
+    for value in ["100", "10.5", "100.25", "\"100\""] {
+        let c = codes(
+            BOUNDS_RULES,
+            &format!("foo = {{ key = {value} }}"),
+            &with_index(&vars(&["my_var"])),
+        );
+        assert!(
+            c.iter().any(|code| code == "CW240"),
+            "above max {value}: {c:?}"
+        );
+    }
+}
+
+#[test]
+fn keyed_variable_field_below_min_is_cw240() {
+    for value in ["-5", "-0.5", "\"-5\""] {
+        let c = codes(
+            BOUNDS_RULES,
+            &format!("foo = {{ key = {value} }}"),
+            &with_index(&vars(&["my_var"])),
+        );
+        assert!(
+            c.iter().any(|code| code == "CW240"),
+            "below min {value}: {c:?}"
+        );
+    }
+}
+
+#[test]
+fn keyed_variable_field_boundaries_are_clean() {
+    for value in ["0", "10", "0.0", "10.0", "\"0\"", "\"10\""] {
+        let c = codes(
+            BOUNDS_RULES,
+            &format!("foo = {{ key = {value} }}"),
+            &with_index(&vars(&["my_var"])),
+        );
+        assert!(
+            !c.iter().any(|code| code == "CW240"),
+            "boundary {value}: {c:?}"
+        );
+    }
+}
+
+#[test]
+fn keyed_variable_field_accepts_references_and_dynamic_values() {
+    for value in [
+        "my_var",
+        "@my_const",
+        "[expr]",
+        "$TAG$_x",
+        "yes",
+        "no",
+        "\"\"",
+    ] {
+        let c = codes(
+            BOUNDS_RULES,
+            &format!("foo = {{ key = {value} }}"),
+            &with_index(&vars(&["my_var"])),
+        );
+        assert!(c.is_empty(), "dynamic {value}: {c:?}");
+    }
+}
+
+#[test]
+fn keyed_and_bare_variable_values_enforce_the_same_bounds() {
+    let idx = vars(&["my_var"]);
+    for (value, out_of_bounds) in [
+        ("0", false),
+        ("10", false),
+        ("5.5", false),
+        ("my_var", false),
+        ("-5", true),
+        ("100", true),
+        ("10.5", true),
+    ] {
+        let c = codes(
+            BOUNDS_RULES,
+            &format!("foo = {{ {value} }}"),
+            &with_index(&idx),
+        );
+        assert_eq!(
+            c.iter().any(|code| code == "CW264"),
+            out_of_bounds,
+            "bare {value}: {c:?}"
+        );
+        let keyed = codes(
+            BOUNDS_RULES,
+            &format!("foo = {{ key = {value} }}"),
+            &with_index(&idx),
+        );
+        assert_eq!(
+            keyed.iter().any(|code| code == "CW240"),
+            out_of_bounds,
+            "keyed {value}: {keyed:?}"
+        );
+    }
+}

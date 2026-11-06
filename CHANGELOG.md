@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Apply the configured min/max bounds to keyed variable_field values, reporting out-of-range numbers as CW240 instead of accepting them. Integer and floating values and numeric strings are checked against the same comparison bare values use. Dynamic values, variable references, and the int-only (CW271) and 32-bit precision (CW270) checks are unchanged. (#1241)
+
 ### 4.0.7
 
 #### Extension
