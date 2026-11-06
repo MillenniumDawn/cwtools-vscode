@@ -202,6 +202,52 @@ fn test_create_loc_key_code_action_inserts_after_sibling_key() {
 }
 
 #[test]
+fn test_create_loc_key_actions_keep_open_target_versions() {
+    let loc_rel = "localisation/things_l_english.yml";
+    for key in ["my_thing", "unrelated"] {
+        let loc_text = format!("l_english:\n {key}:0 \"My Thing\"\n");
+        let mut server = thing_builder()
+            .file(loc_rel, loc_text.as_str())
+            .init_opts(json!({ "localisationLanguages": ["English", "French"] }))
+            .spawn_scanned();
+        server.open(loc_rel, &loc_text);
+        server.open(THING_REL, THING_TEXT);
+        let diagnostics: Vec<Value> = server
+            .wait_for_diags(THING_REL)
+            .into_iter()
+            .filter(|diag| diag["code"] == "CW100")
+            .collect();
+        assert_eq!(diagnostics.len(), if key == "my_thing" { 1 } else { 2 });
+        let response = server.call("textDocument/codeAction", json!({
+            "textDocument": { "uri": server.uri(THING_REL) },
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 1, "character": 0 } },
+            "context": { "diagnostics": diagnostics, "only": ["quickfix"] }
+        }));
+        server.stop();
+
+        let actions = response["result"].as_array().expect("actions");
+        assert_eq!(
+            actions.len(),
+            2,
+            "one merged creation action plus ignore: {response}"
+        );
+        let edits: Vec<&Value> = actions
+            .iter()
+            .filter_map(|action| action["edit"]["documentChanges"].as_array())
+            .flatten()
+            .filter(|op| op["textDocument"]["uri"] == server.uri(loc_rel))
+            .collect();
+        assert!(
+            !edits.is_empty(),
+            "expected existing-target edits: {response}"
+        );
+        for edit in edits {
+            assert_eq!(edit["textDocument"]["version"], 1, "{response}");
+        }
+    }
+}
+
+#[test]
 fn test_create_loc_key_code_action_creates_a_new_loc_file_when_the_workspace_has_none() {
     // The third resolution tier (`LocInsertTarget::NewFile`): the workspace
     // has no loc file at all, so the create-loc-key action must add a

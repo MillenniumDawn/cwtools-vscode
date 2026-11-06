@@ -102,10 +102,23 @@ pub(crate) fn key_token_end(leaf: &Leaf, key: &str, table: &StringTable) -> Sour
 }
 
 pub(crate) fn decimal_places(s: &str) -> usize {
-    match s.split_once('.') {
-        Some((_, frac)) => frac.trim_end_matches('0').len(),
-        None => 0,
+    let (mantissa, exponent) = s.split_once(['e', 'E']).unwrap_or((s, "0"));
+    let exponent = exponent.parse::<i64>().unwrap_or_else(|_| {
+        if exponent.starts_with('-') {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    });
+    let fractional = mantissa.split_once('.').map_or(0, |(_, frac)| frac.len());
+    let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
+    let significant = digits.trim_end_matches('0');
+    if significant.is_empty() {
+        return 0;
     }
+    let trailing = digits.len() - significant.len();
+    let scale = fractional as i128 - trailing as i128 - exponent as i128;
+    usize::try_from(scale.max(0)).unwrap_or(usize::MAX)
 }
 
 pub(crate) fn resolves_as_scope_key(ctx: &ScopeContext, key: &str) -> bool {
