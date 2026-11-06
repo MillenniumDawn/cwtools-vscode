@@ -242,11 +242,31 @@ pub fn validate_loc_project_with_union(
 
     let hardcoded = hardcoded_loc_set();
     let additional_loc_keys = HashSet::new();
+    // One physical file can parse into several `LocFile` projections (a CSV gets one
+    // per language), all sharing the same path and on-disk encoding. Emitting file-level
+    // diagnostics per projection would duplicate CW254 once per language, so a single
+    // emitter per physical path is decided here, sequentially and in `files()` order,
+    // before the parallel pass. Deciding it inside `par_iter` with a shared flag would
+    // be racy, and `files()` is a deterministic `Vec`, so nothing depends on HashMap or
+    // parallel collection order. Entry diagnostics stay per projection below.
+    let cw254_emitters: Vec<bool> = {
+        let mut claimed = HashSet::new();
+        service
+            .files()
+            .iter()
+            .map(|file| {
+                lang_selected(file, langs)
+                    && should_emit_cw254(file)
+                    && claimed.insert(file.path.clone())
+            })
+            .collect()
+    };
     service
         .files()
         .par_iter()
-        .filter(|file| lang_selected(file, langs))
-        .flat_map_iter(|file| {
+        .enumerate()
+        .filter(|(_, file)| lang_selected(file, langs))
+        .flat_map_iter(|(i, file)| {
             build_diagnostics(
                 file,
                 &file.path,
@@ -254,7 +274,7 @@ pub fn validate_loc_project_with_union(
                 &additional_loc_keys,
                 extra_valid_refs,
                 hardcoded,
-                should_emit_cw254(file),
+                cw254_emitters[i],
             )
             .into_iter()
         })
@@ -628,6 +648,74 @@ mod tests {
             .collect();
         assert_eq!(cw254.len(), 1, "missing-BOM file should warn CW254");
         assert_eq!(cw254[0].severity, ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn multi_language_csv_emits_one_cw254_per_physical_file() {
+        // A CSV parses into one `LocFile` per language column, all sharing the
+        // physical path and encoding. The BOM error is a property of the file,
+        // not of a language projection, so full validation must report it once.
+        let csv = "#CODE;English;French;German;;Spanish\nKEY_A;Hello;Bonjour;Hallo;;Hola\n";
+        let svc = service_with_encoding(&[(
+            "mod/localisation/localisation.csv",
+            csv,
+            Some(FileEncoding::Utf8NoBom),
+        )]);
+        assert!(svc.files().len() > 1, "a CSV should parse per language");
+        let cw254: Vec<_> = validate_loc_project(&svc)
+            .into_iter()
+            .filter(|d| d.code == "CW254")
+            .collect();
+        assert_eq!(cw254.len(), 1, "one CW254 per physical file: {cw254:?}");
+        assert_eq!(cw254[0].file, "mod/localisation/localisation.csv");
+    }
+
+    #[test]
+    fn language_filtered_csv_still_emits_one_cw254() {
+        let csv = "#CODE;English;French;German;;Spanish\nKEY_A;Hello;Bonjour;Hallo;;Hola\n";
+        let svc = service_with_encoding(&[(
+            "mod/localisation/localisation.csv",
+            csv,
+            Some(FileEncoding::Utf8NoBom),
+        )]);
+        let langs = [Lang::English, Lang::French];
+        let cw254: Vec<_> = validate_loc_project_scoped(&svc, Some(&langs), &HashSet::new())
+            .into_iter()
+            .filter(|d| d.code == "CW254")
+            .collect();
+        assert_eq!(cw254.len(), 1, "one CW254 for two selected projections");
+    }
+
+    #[test]
+    fn csv_entry_diagnostics_stay_per_language() {
+        // The BOM dedupe must not collapse per-entry diagnostics: only the
+        // projection whose value is broken reports CW268, and a placeholder
+        // reports once per language, each with its own language label.
+        let csv = "#CODE;English;French\nKEY_A;\"unclosed;\"Bonjour\"\nKEY_B;\"REPLACE_ME\";\"REPLACE_ME\"\n";
+        let svc = service_with_encoding(&[("l.csv", csv, Some(FileEncoding::Utf8NoBom))]);
+        let diags = validate_loc_project(&svc);
+        let cw268: Vec<&LocDiagnostic> = diags.iter().filter(|d| d.code == "CW268").collect();
+        assert_eq!(
+            cw268.len(),
+            1,
+            "CW268 should fire only for the broken value: {diags:?}"
+        );
+        let cw234: Vec<&LocDiagnostic> = diags.iter().filter(|d| d.code == "CW234").collect();
+        assert_eq!(
+            cw234.len(),
+            2,
+            "one placeholder diagnostic per language: {diags:?}"
+        );
+        assert!(
+            cw234
+                .iter()
+                .any(|d| d.message.to_lowercase().contains("english"))
+        );
+        assert!(
+            cw234
+                .iter()
+                .any(|d| d.message.to_lowercase().contains("french"))
+        );
     }
 
     #[test]

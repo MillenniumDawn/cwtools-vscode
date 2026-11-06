@@ -3,6 +3,7 @@
 #### Engine
 
 * Watch an explicitly supplied `--vanilla` directory in `validate --watch`, deduplicated against the rules, workspace and parent roots, so an edit under the vanilla install reruns validation without another workspace change. Mod ignore-dir exclusions are not applied to the vanilla root, and an unset vanilla adds no root. (#1268)
+* Report the missing UTF-8 BOM error (CW254) once per physical localisation file. Multi-language CSV files parsed one projection per language and repeated the file-level error for every projection; language-specific entry diagnostics are unchanged. (#1263)
 
 ### 4.0.7
 
