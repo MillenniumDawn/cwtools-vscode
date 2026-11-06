@@ -1,5 +1,8 @@
 ### Unreleased
 
+#### Extension
+
+* Reject a regular file configured as `rules_folder`, warn, and use the managed rules directory instead. Existing directories and path normalization are unchanged. (#1220)
 #### Tooling
 
 * Reject host and Node coverage reports that omit executable source modules, and require each module to have one coverage owner. Declaration and type-only files are excluded; coverage floors are unchanged. (#1229)
@@ -10,6 +13,7 @@
 
 #### Engine
 
+* Serialize loading-bar state checks and client notifications so a progress tick cannot reopen the bar after another operation closes it. (#1283)
 * Recognize hyphenated localization references when checking for undefined keys. (#1261)
 
 * Strip the file-leading UTF-8 BOM from CSV localization keys and headers while preserving value offsets. (#1244)
