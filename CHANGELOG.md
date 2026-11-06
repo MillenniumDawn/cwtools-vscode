@@ -3,21 +3,15 @@
 #### Extension
 
 * Reject a regular file configured as `rules_folder`, warn, and use the managed rules directory instead. Existing directories and path normalization are unchanged. (#1220)
-#### Tooling
-
-* Reject host and Node coverage reports that omit executable source modules, and require each module to have one coverage owner. Declaration and type-only files are excluded; coverage floors are unchanged. (#1229)
-#### Extension
-
 * Show an error when saving a graph PNG or JSON fails. Canceling the save dialog stays silent, and a later export can still succeed. (#1221)
 * Apply ignore-code quick fixes to the current settings buffer without discarding unsaved changes. Preserve JSONC comments and unrelated settings, create missing settings files, and merge legacy nested ignore lists into the flat setting. Refuse symlinked, unreadable, malformed, or nonregular settings targets. Ignore lists now follow the diagnostic's workspace folder. (#1234, #1235, #1252, #1253, #1254)
 
 #### Engine
 
+* Quote carriage returns in CLI CSV diagnostic fields so CSV readers preserve them within a single row. (#1222)
 * Serialize loading-bar state checks and client notifications so a progress tick cannot reopen the bar after another operation closes it. (#1283)
 * Recognize hyphenated localization references when checking for undefined keys. (#1261)
-
 * Strip the file-leading UTF-8 BOM from CSV localization keys and headers while preserving value offsets. (#1244)
-
 * Reject stale localisation create-key quick fixes in VS Code, including targets opened after the action was requested. Keep target versions in individual and batched edits, and resolve sibling insertion positions from the current target text. (#1251)
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
 * Retry `validate --watch` reloads after an unreadable rules file or workspace discovery failure, with a capped backoff, instead of waiting for another edit.
@@ -41,6 +35,7 @@
 
 #### Tooling
 
+* Reject host and Node coverage reports that omit executable source modules, and require each module to have one coverage owner. Declaration and type-only files are excluded; coverage floors are unchanged. (#1229)
 * Isolate extension-host test labels in separate VS Code profiles without restoring other windows. Include multi-root settings safety tests in the host coverage gate.
 * Hold the watched-folder retry scan until its predecessor's release marker is consumed, so the regression test cannot lose a completion signal.
 * Stop the rules-recovery test's watcher and restore file permissions if the test exits early.
