@@ -169,6 +169,7 @@ pub(super) fn run(args: ValidateArgs) {
         vanilla_notice,
         discovery_failed,
         session,
+        ..
     } = analyze(&job, true);
 
     let total_errors = diags
@@ -281,7 +282,7 @@ pub(super) fn run(args: ValidateArgs) {
         drop(session);
         watch::follow(poller, diags, || {
             let rerun = analyze(&job, false);
-            if rerun.discovery_failed {
+            if rerun.discovery_failed || rerun.discovery_incomplete || rerun.rules_unreadable {
                 eprintln!("warn: could not read the inputs; keeping the previous results");
                 return None;
             }
@@ -324,6 +325,8 @@ struct Analysis {
     diags: Vec<Diag>,
     vanilla_notice: Option<String>,
     discovery_failed: bool,
+    discovery_incomplete: bool,
+    rules_unreadable: bool,
     /// Held so a failing plain run exits before paying for the teardown.
     session: SessionWithFiles,
 }
@@ -537,6 +540,8 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
     let mut sources = SourceLines::default();
     let mut diags: Vec<Diag> = Vec::new();
 
+    let rules_unreadable = rule_errors.iter().any(|e| e.retryable_io);
+
     // The ruleset's own problems lead the report: they explain whatever the
     // checks below then failed to catch. Hashed against the rules root so a
     // baseline survives the ruleset being checked out elsewhere, and filtered
@@ -675,6 +680,8 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
         diags,
         vanilla_notice,
         discovery_failed: session.discovery_failed,
+        discovery_incomplete: session.discovery_incomplete,
+        rules_unreadable,
         session,
     }
 }

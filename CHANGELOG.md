@@ -20,6 +20,7 @@
 
 * Reject stale localisation create-key quick fixes in VS Code, including targets opened after the action was requested. Keep target versions in individual and batched edits, and resolve sibling insertion positions from the current target text. (#1251)
 * Skip the rustdoc doc-test pass in the 14 library crates with no Rust doc examples by setting `doctest = false`. `cargo test --workspace` now runs doc tests only for `error_codes` and `i18n`. The workspace manifest check fails when a crate with `doctest = false` has a Rust doc example. (#1198)
+* Retry `validate --watch` reloads after an unreadable rules file or workspace discovery failure, with a capped backoff, instead of waiting for another edit.
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
@@ -42,6 +43,7 @@
 
 * Isolate extension-host test labels in separate VS Code profiles without restoring other windows. Include multi-root settings safety tests in the host coverage gate.
 * Hold the watched-folder retry scan until its predecessor's release marker is consumed, so the regression test cannot lose a completion signal.
+* Stop the rules-recovery test's watcher and restore file permissions if the test exits early.
 
 ### 4.0.6
 

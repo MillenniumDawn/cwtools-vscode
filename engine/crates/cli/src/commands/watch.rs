@@ -32,9 +32,9 @@ impl Poller {
         Self { roots, seen }
     }
 
-    /// Block until the roots differ from the last snapshot and have stopped
-    /// changing, then adopt the new state as the snapshot.
-    fn wait(&mut self) {
+    /// Block until the roots differ from the last successful snapshot and have
+    /// stopped changing. The caller adopts the snapshot after validation succeeds.
+    fn wait(&self) -> u64 {
         let mut last = self.seen;
         let mut pause = POLL;
         loop {
@@ -44,8 +44,7 @@ impl Poller {
             // Ten times the walk keeps an idle watch of a large mod near a tenth of a core.
             pause = POLL.max(started.elapsed() * 10);
             if now != self.seen && now == last {
-                self.seen = now;
-                return;
+                return now;
             }
             last = now;
         }
@@ -62,11 +61,29 @@ pub(crate) fn follow(
 ) -> ! {
     note("Watching for changes (Ctrl-C to stop)");
     loop {
-        poller.wait();
+        let snapshot = poller.wait();
         note("Change detected, validating again");
-        let Some(next) = rerun() else { continue };
+        let (snapshot, next) = retry(poller.roots.as_slice(), snapshot, &mut rerun, thread::sleep);
+        poller.seen = snapshot;
         print!("{}", delta_report(&previous, &next));
         previous = next;
+    }
+}
+
+fn retry<T>(
+    roots: &[PathBuf],
+    mut snapshot: u64,
+    rerun: &mut impl FnMut() -> Option<T>,
+    mut sleep: impl FnMut(Duration),
+) -> (u64, T) {
+    let mut pause = Duration::from_secs(1);
+    loop {
+        if let Some(result) = rerun() {
+            return (snapshot, result);
+        }
+        sleep(pause);
+        pause = (pause * 2).min(Duration::from_secs(30));
+        snapshot = fingerprint(roots);
     }
 }
 
@@ -377,6 +394,66 @@ mod tests {
         let before = fingerprint(&roots);
         fs::write(&file, "types = { }\n").unwrap();
         assert_ne!(fingerprint(&roots), before);
+    }
+
+    #[test]
+    fn failed_validation_does_not_consume_the_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let poller = Poller::new(vec![dir.path().to_path_buf()]);
+        let previous = poller.seen;
+        fs::write(dir.path().join("changed.txt"), "change").unwrap();
+        poller.wait();
+        assert_eq!(poller.seen, previous);
+    }
+
+    #[test]
+    fn retries_failed_passes_with_bounded_backoff_and_a_fresh_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        let original = fingerprint(&roots);
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let (snapshot, result) = retry(
+            &roots,
+            original,
+            &mut || {
+                attempts += 1;
+                (attempts == 8).then_some("ok")
+            },
+            |pause| {
+                waits.push(pause.as_secs());
+                fs::write(dir.path().join("changed.txt"), "change").unwrap();
+            },
+        );
+        assert_eq!(result, "ok");
+        assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
+        assert_ne!(snapshot, original);
+        assert_eq!(snapshot, fingerprint(&roots));
+    }
+
+    #[test]
+    fn change_during_successful_retry_is_not_consumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        let before = fingerprint(&roots);
+        let mut attempts = 0;
+        let (snapshot, ()) = retry(
+            &roots,
+            before,
+            &mut || {
+                attempts += 1;
+                if attempts == 1 {
+                    None
+                } else {
+                    fs::write(dir.path().join("during.txt"), "new input").unwrap();
+                    Some(())
+                }
+            },
+            |_| {},
+        );
+        assert_eq!(attempts, 2);
+        assert_eq!(snapshot, before);
+        assert_ne!(snapshot, fingerprint(&roots));
     }
 
     #[test]
