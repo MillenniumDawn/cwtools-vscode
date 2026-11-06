@@ -21,6 +21,8 @@ import { runCancellableExecuteCommand } from "./commandProgress";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
 import { GAMES } from "./games";
 import { findVanillaInstallations, vanillaContentRoot } from "./baseGame";
+import { ignoreDiagnosticCode } from "./ignoreDiagnostic";
+import { applyCodeAction } from "./codeActionEdit";
 // Type-only: the graph panel stays lazily imported (it pulls in the webview
 // plumbing), and `import type` is erased, so naming its shape here doesn't
 // pull it into the activation path.
@@ -202,6 +204,8 @@ export function registerCommands(
 ): void {
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showReferences", showReferences),
+		commands.registerCommand("cwtools.ignoreDiagnosticCode", ignoreDiagnosticCode),
+		commands.registerCommand("cwtools.applyCodeAction", applyCodeAction),
 	);
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.writeDiagnosticsBaseline", async (targetValue?: unknown) => {
