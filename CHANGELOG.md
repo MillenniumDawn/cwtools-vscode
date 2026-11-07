@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
+
 #### Engine
 
 * Apply the configured min/max bounds to keyed variable_field values, reporting out-of-range numbers as CW240 instead of accepting them. Integer and floating values and numeric strings are checked against the same comparison bare values use. Dynamic values, variable references, and the int-only (CW271) and 32-bit precision (CW270) checks are unchanged. The pinned Millennium Dawn baseline gains three CW240 rows: set_war_support = -1 in common/national_focus/05_georgia.txt, add_war_support = -2 in events/05_australia_events.txt, and add_war_support = 15 in events/05_netherlands.txt. (#1241)
