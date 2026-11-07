@@ -176,6 +176,23 @@ mod tests {
     }
 
     #[test]
+    fn dollar_reference_extraction_respects_the_value_size_limit() {
+        let cap = crate::yaml_parser::MAX_LOC_VALUE_BYTES;
+        for (len, expected) in [
+            (cap - 1, vec!["ref"]),
+            (cap, vec!["ref"]),
+            (cap + 1, vec![]),
+        ] {
+            let desc = format!("$ref${}", "x".repeat(len - "$ref$".len()));
+            let text = format!("key;{desc};;;;\n");
+            let entries = parse_csv_loc_for_lang(&text, "test.csv", Lang::English);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].refs, expected, "value length: {len}");
+            assert_eq!(entries[0].desc, desc);
+        }
+    }
+
+    #[test]
     fn malformed_dollar_runs_are_not_references() {
         let text = "key1;costs 100$ and $5 [x];F;;S\n";
         let all = parse_csv_loc_per_lang(text, "test.csv", None);
