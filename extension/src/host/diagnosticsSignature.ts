@@ -16,7 +16,10 @@ export interface DiagnosticLike {
 	code?: string | number | { value: string | number };
 	message: string;
 	source?: string;
-	relatedInformation?: readonly unknown[];
+	relatedInformation?: readonly {
+		location: { uri: { toString(): string }; range: RangeLike };
+		message: string;
+	}[];
 }
 
 function codeString(code: DiagnosticLike["code"]): string | number | null {
@@ -39,7 +42,14 @@ export function diagnosticsSignature(
 		d.severity ?? null,
 		codeString(d.code),
 		d.source ?? null,
-		(d.relatedInformation?.length ?? 0) > 0,
+		(d.relatedInformation ?? []).map(({ location, message }) => [
+			location.uri.toString(),
+			location.range.start.line,
+			location.range.start.character,
+			location.range.end.line,
+			location.range.end.character,
+			message,
+		]),
 		d.message,
 	]);
 	return `${diagnostics.length}:${fnv1a(JSON.stringify(normalized)).toString(16)}`;
