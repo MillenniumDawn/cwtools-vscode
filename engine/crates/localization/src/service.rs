@@ -48,7 +48,7 @@ impl LocService {
             .into_par_iter()
             .map(|path| {
                 let path_str = path.to_string_lossy().to_string();
-                match read_text_capped_with_encoding(&path, budget.max_file_size) {
+                match read_text_capped_with_encoding(&path, budget.read_cap()) {
                     Ok((text, enc, n)) => {
                         if !bytes.try_reserve(n, budget.max_bytes) {
                             return Err((path_str, "scan byte budget exceeded".to_string()));
@@ -484,5 +484,32 @@ mod tests {
                 .any(|f| f.path.ends_with("huge_l_english.yml")),
             "over-cap file must not load"
         );
+    }
+
+    #[test]
+    fn from_paths_treats_a_zero_per_file_cap_as_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("localisation")).unwrap();
+        std::fs::write(
+            tmp.path().join("localisation").join("real_l_english.yml"),
+            "l_english:\n key:0 \"value\"\n",
+        )
+        .unwrap();
+
+        let budget = ScanBudget {
+            max_file_size: 0,
+            ..ScanBudget::default()
+        };
+        let service = LocService::from_paths(
+            vec![tmp.path().join("localisation/real_l_english.yml")],
+            budget,
+            None,
+        );
+        assert!(service.errors().is_empty(), "{:?}", service.errors());
+        assert_eq!(service.files().len(), 1);
+        let file = &service.files()[0];
+        assert_eq!(file.entries.len(), 1);
+        assert_eq!(file.entries[0].key, "key");
+        assert_eq!(file.entries[0].desc, "\"value\"");
     }
 }
