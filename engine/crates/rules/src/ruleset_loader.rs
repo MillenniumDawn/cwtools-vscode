@@ -252,7 +252,7 @@ fn load_cwt_file(
             message,
         )
     };
-    match read_text_capped(path, budget.max_file_size) {
+    match read_text_capped(path, budget.read_cap()) {
         Ok((content, n)) => {
             if !bytes.try_reserve(n, budget.max_bytes) {
                 out.errors
@@ -339,7 +339,7 @@ pub fn load_ruleset_from_dir(
 
     let mut cwt_files = Vec::new();
     let mut errors = Vec::new();
-    let mut remaining = budget.max_files;
+    let mut remaining = budget.files_remaining();
     collect_cwt_files(dir, &mut cwt_files, &mut errors, &mut remaining);
 
     let bytes = ScanBytes::new();
@@ -729,6 +729,60 @@ thing = { second = any }
         );
         assert!(errors.iter().all(|e| !e.retryable_io));
         let _ = ruleset;
+    }
+
+    #[test]
+    fn load_ruleset_from_dir_treats_a_zero_file_budget_as_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("a.cwt"),
+            "localisation_commands = { GetName = any }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("b.cwt"),
+            "localisation_commands = { GetTag = any }\n",
+        )
+        .unwrap();
+
+        let budget = ScanBudget {
+            max_files: 0,
+            ..ScanBudget::default()
+        };
+        let (ruleset, errors) = load_ruleset_from_dir(tmp.path(), &StringTable::new(), budget);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            ruleset.localisation_commands.contains("getname"),
+            "a.cwt must load under a zero file budget: {:?}",
+            ruleset.localisation_commands
+        );
+        assert!(
+            ruleset.localisation_commands.contains("gettag"),
+            "b.cwt must load under a zero file budget: {:?}",
+            ruleset.localisation_commands
+        );
+    }
+
+    #[test]
+    fn load_ruleset_from_dir_treats_a_zero_per_file_cap_as_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("commands.cwt"),
+            "localisation_commands = { GetName = any }\n",
+        )
+        .unwrap();
+
+        let budget = ScanBudget {
+            max_file_size: 0,
+            ..ScanBudget::default()
+        };
+        let (ruleset, errors) = load_ruleset_from_dir(tmp.path(), &StringTable::new(), budget);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            ruleset.localisation_commands.contains("getname"),
+            "a real rules file must load under a zero per-file cap: {:?}",
+            ruleset.localisation_commands
+        );
     }
 
     #[test]

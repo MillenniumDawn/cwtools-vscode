@@ -102,6 +102,7 @@ pub fn read_text_with_encoding(path: &Path) -> Result<(String, FileEncoding), Fi
 /// Read a file as text through a hard byte cap, returning the raw byte count. An over-cap
 /// file is refused, not truncated, since a truncated script would parse into garbage.
 /// Bulk discovery uses this; the unbounded [`read_text`] is for a file opened by name.
+/// Zero is a literal cap; use [`ScanBudget::read_cap`] to normalize unlimited budgets.
 pub fn read_text_capped(path: &Path, max_bytes: u64) -> Result<(String, u64), FileError> {
     read_text_capped_with_encoding(path, max_bytes).map(|(s, _, n)| (s, n))
 }
@@ -349,6 +350,26 @@ impl Default for ScanBudget {
     }
 }
 
+impl ScanBudget {
+    /// Convert a zero file limit to an unlimited discovery countdown.
+    pub fn files_remaining(&self) -> usize {
+        if self.max_files == 0 {
+            usize::MAX
+        } else {
+            self.max_files
+        }
+    }
+
+    /// Convert a zero per-file limit to an unlimited hard read cap.
+    pub fn read_cap(&self) -> u64 {
+        if self.max_file_size == 0 {
+            u64::MAX
+        } else {
+            self.max_file_size
+        }
+    }
+}
+
 /// Atomic running total of bytes read in one scan, shared across the parallel read
 /// fan-out so the whole scan stops adding files once the total-byte budget is exhausted.
 #[derive(Debug, Default)]
@@ -540,7 +561,7 @@ impl FileManager {
         };
         let mut state = WalkState {
             out: Vec::new(),
-            remaining_files: self.config.scan_budget.max_files,
+            remaining_files: self.config.scan_budget.files_remaining(),
         };
         walk_dir_generic(
             dir,
@@ -627,7 +648,7 @@ pub fn discover_paths(
         };
         let mut state = WalkState {
             out: Vec::new(),
-            remaining_files: config.scan_budget.max_files,
+            remaining_files: config.scan_budget.files_remaining(),
         };
         walk_dir_generic(
             root,
@@ -936,7 +957,7 @@ fn discover_files_multi_mod_with_failures(
     use std::collections::HashMap;
 
     let mut best: HashMap<String, (PathBuf, usize)> = HashMap::new();
-    let mut remaining = budget.max_files;
+    let mut remaining = budget.files_remaining();
     let mut failures = Vec::new();
 
     let mut sources: Vec<(usize, &Path, &[String])> = Vec::new();
@@ -2535,6 +2556,33 @@ replace_path = "COMMON/ideas"
         assert_eq!(paths.len(), 3, "discovery must stop at the file budget");
     }
 
+    #[test]
+    fn collect_paths_treats_a_zero_file_budget_as_unlimited() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let root = tmp.path();
+        for i in 0..10 {
+            std::fs::write(root.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let config = FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            scan_budget: ScanBudget {
+                max_files: 0,
+                max_bytes: 0,
+                max_file_size: 0,
+            },
+            ..Default::default()
+        };
+        let fm = FileManager::new(config);
+        let mut paths = Vec::new();
+        fm.collect_paths(root, &mut paths, &mut Vec::new()).unwrap();
+        assert_eq!(
+            paths.len(),
+            10,
+            "a zero file budget must not stop discovery: {paths:?}"
+        );
+    }
+
     /// The multi-mod walk must reject symlinks too.
     #[cfg(unix)]
     #[test]
@@ -2573,6 +2621,39 @@ replace_path = "COMMON/ideas"
         );
     }
 
+    #[test]
+    fn multi_mod_walk_treats_a_zero_file_budget_as_unlimited() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("moda/common")).unwrap();
+        std::fs::write(root.join("moda/common/one.txt"), "x").unwrap();
+        std::fs::write(root.join("moda/common/two.txt"), "x").unwrap();
+
+        let mods = vec![ResolvedMod {
+            descriptor: ModDescriptor {
+                name: "ModA".into(),
+                path: Some(root.join("moda").to_str().unwrap().to_string()),
+                replace_paths: vec![],
+            },
+            root: root.join("moda"),
+        }];
+        let files = discover_files_multi_mod(
+            None,
+            &mods,
+            &["common".to_string()],
+            &[],
+            ScanBudget {
+                max_files: 0,
+                ..ScanBudget::default()
+            },
+        );
+        assert_eq!(
+            files.len(),
+            2,
+            "a zero file budget must not stop the walk: {files:?}"
+        );
+    }
+
     /// `read_text_capped` refuses a file over the cap rather than truncating it,
     /// so a special file that reports length 0 can't be read to EOF.
     #[test]
@@ -2591,6 +2672,24 @@ replace_path = "COMMON/ideas"
         assert!(
             err.to_string().contains("read cap"),
             "error must name the cap, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_text_capped_refuses_a_hard_zero_cap() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let file = tmp.path().join("any.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(
+            matches!(read_text_capped(&file, 0), Err(FileError::OverLimit { .. })),
+            "a zero cap must refuse a non-empty file"
+        );
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(
+            read_text_capped(&file, 0)
+                .expect("an empty file fits a zero cap")
+                .1,
+            0
         );
     }
 
@@ -2952,6 +3051,41 @@ replace_path = "COMMON/ideas"
         assert_eq!(report.files.len(), 2);
         assert!(report.files[0].path.starts_with(first.path()));
         assert!(report.files[1].path.starts_with(second.path()));
+    }
+
+    #[test]
+    fn discover_paths_treats_a_zero_file_budget_as_unlimited() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        for root in [first.path(), second.path()] {
+            for name in ["a_l_english.yml", "b_l_english.yml"] {
+                let path = root.join("localisation").join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "").unwrap();
+            }
+        }
+        let config = FileManagerConfig {
+            root: first.path().to_path_buf(),
+            scan_budget: ScanBudget {
+                max_files: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let report = discover_paths(
+            &[first.path(), second.path()],
+            &config,
+            &[FileKind::Localisation],
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.files.len(),
+            4,
+            "a zero file budget must not stop discovery: {:?}",
+            report.files
+        );
     }
 
     #[test]
