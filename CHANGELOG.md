@@ -6,6 +6,7 @@
 
 #### Engine
 
+* Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
 * Fail `cwtools parse <dir>` when a rules directory contains error-severity diagnostics, preserving its summary and errors. Loader warnings still exit successfully. (#1248)
 
 * Apply the configured min/max bounds to keyed variable_field values, reporting out-of-range numbers as CW240 instead of accepting them. Integer and floating values and numeric strings are checked against the same comparison bare values use. Dynamic values, variable references, and the int-only (CW271) and 32-bit precision (CW270) checks are unchanged. The pinned Millennium Dawn baseline gains three CW240 rows: set_war_support = -1 in common/national_focus/05_georgia.txt, add_war_support = -2 in events/05_australia_events.txt, and add_war_support = 15 in events/05_netherlands.txt. (#1241)
