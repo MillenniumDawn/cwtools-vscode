@@ -33,7 +33,13 @@ const diagnostics: DiagnosticLike[] = Array.from(
 		code: i % 2 === 0 ? `CW${i % 100}` : { value: i % 100 },
 		message: `Expected localisation key event_${i}_desc to exist for language l_english`,
 		source: "CWTools",
-		relatedInformation: i % 10 === 0 ? [{}] : undefined,
+		relatedInformation: i % 10 === 0 ? [{
+			location: {
+				uri: { toString: () => `file:///workspace/mod/declaration_${i}.txt` },
+				range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+			},
+			message: "Declared here",
+		}] : undefined,
 	}),
 );
 
