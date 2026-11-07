@@ -1,4 +1,5 @@
 use crate::commands::{Lang, LocEntry, Position};
+use crate::loc_string::{LocElement, parse_loc_elements};
 use std::sync::Arc;
 
 pub const CK2_COLUMN_LANGS: &[Option<Lang>] = &[
@@ -44,6 +45,18 @@ pub(crate) fn parse_csv_loc_per_lang(
             let Some(lang) = *maybe_lang else { continue };
 
             let desc = parts.get(col_idx).copied().unwrap_or("").to_string();
+            // Collect references without enabling YAML/Jomini command validation.
+            let refs = if desc.len() > crate::yaml_parser::MAX_LOC_VALUE_BYTES {
+                Vec::new()
+            } else {
+                parse_loc_elements(&desc)
+                    .into_iter()
+                    .filter_map(|e| match e {
+                        LocElement::Ref(r) => Some(r.to_string()),
+                        _ => None,
+                    })
+                    .collect()
+            };
 
             let position = Position::new(Arc::clone(&stream_name), line_num + 1, 1);
             let prefix_chars: usize = parts[..col_idx.min(parts.len())]
@@ -63,7 +76,7 @@ pub(crate) fn parse_csv_loc_per_lang(
                     position,
                     desc_column,
                     error_range: None,
-                    refs: Vec::new(),
+                    refs,
                     commands: Vec::new(),
                     jomini_commands: Vec::new(),
                 },
@@ -140,6 +153,50 @@ mod tests {
         let entries = parse_csv_loc_for_lang(SAMPLE, "test.csv", Lang::Spanish);
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].desc, "Spanish text");
+    }
+
+    #[test]
+    fn dollar_references_are_extracted_but_commands_stay_empty() {
+        let text = "# ignored;$comment$;;;;\nkey1;$en$ [GetName] [Scope.Owner.GetName];$fr$;$de$;$gap$;$es$\n";
+        let all = parse_csv_loc_per_lang(text, "test.csv", None);
+        assert_eq!(all.len(), 4);
+        for ((_, _, entry), expected) in all.iter().zip(["en", "fr", "de", "es"]) {
+            assert_eq!(entry.refs, [expected], "{}", entry.desc);
+            assert!(
+                entry.commands.is_empty(),
+                "CSV brackets are not commands: {}",
+                entry.desc
+            );
+            assert!(
+                entry.jomini_commands.is_empty(),
+                "CSV brackets are not commands: {}",
+                entry.desc
+            );
+        }
+    }
+
+    #[test]
+    fn dollar_reference_extraction_respects_the_value_size_limit() {
+        let cap = crate::yaml_parser::MAX_LOC_VALUE_BYTES;
+        for (len, expected) in [
+            (cap - 1, vec!["ref"]),
+            (cap, vec!["ref"]),
+            (cap + 1, vec![]),
+        ] {
+            let desc = format!("$ref${}", "x".repeat(len - "$ref$".len()));
+            let text = format!("key;{desc};;;;\n");
+            let entries = parse_csv_loc_for_lang(&text, "test.csv", Lang::English);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].refs, expected, "value length: {len}");
+            assert_eq!(entries[0].desc, desc);
+        }
+    }
+
+    #[test]
+    fn malformed_dollar_runs_are_not_references() {
+        let text = "key1;costs 100$ and $5 [x];F;;S\n";
+        let all = parse_csv_loc_per_lang(text, "test.csv", None);
+        assert!(all.iter().all(|(_, _, entry)| entry.refs.is_empty()));
     }
 
     #[test]

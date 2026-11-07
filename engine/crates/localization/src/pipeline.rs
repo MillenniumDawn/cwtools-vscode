@@ -588,6 +588,23 @@ mod tests {
     }
 
     #[test]
+    fn csv_dollar_reference_maps_to_cw225_and_defined_ref_stays_clean() {
+        let csv = "#CODE;English;French;German;;Spanish\n\
+                   KEY_A;Hello $missing_en$;Bonjour $missing_fr$;Hallo $missing_de$;;Hola $missing_es$\n\
+                   KEY_B;See $KEY_A$;Aussi $KEY_A$;Auch $KEY_A$;;$KEY_A$\n";
+        let svc = service_from(&[("mod/localisation/localisation.csv", csv)]);
+        let diags = validate_loc_project(&svc);
+        let cw225: Vec<_> = diags.iter().filter(|d| d.code == "CW225").collect();
+        assert_eq!(cw225.len(), 4, "got: {diags:?}");
+        for missing in ["missing_en", "missing_fr", "missing_de", "missing_es"] {
+            assert!(
+                cw225.iter().any(|diag| diag.message.contains(missing)),
+                "missing {missing}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
     fn csv_loc_file_skips_yaml_lang_header_check() {
         let csv = "#CODE;English;French;German;;Spanish\nKEY_A;Hello;Bonjour;Hallo;;Hola\n";
         let svc = service_from(&[("mod/localisation/localisation.csv", csv)]);
