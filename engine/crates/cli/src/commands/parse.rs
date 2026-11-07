@@ -1,5 +1,6 @@
 //! `parse`: summarize one script file, or a directory of `.cwt` rule files.
 
+use cwtools_error_codes::ErrorSeverity;
 use cwtools_file_manager::file_manager::{FileManager, FileManagerConfig, ScanBudget};
 use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
@@ -14,10 +15,21 @@ pub(super) fn run(file: PathBuf) {
         let table = StringTable::new();
         let (ruleset, errors) = load_ruleset_from_dir(&file, &table, ScanBudget::default());
         for err in &errors {
-            eprintln!("warn: {}", err);
+            let severity = if err.severity == ErrorSeverity::Error {
+                "error"
+            } else {
+                "warn"
+            };
+            eprintln!("{}: {}", severity, err);
         }
         println!("Parsed rule directory: {}", file.display());
         print_ruleset_summary(&ruleset, false);
+        if errors
+            .iter()
+            .any(|err| err.severity == ErrorSeverity::Error)
+        {
+            std::process::exit(EXIT_USAGE);
+        }
     } else {
         let mut manager = FileManager::new(FileManagerConfig::default());
         match manager.parse_single_file(&file) {

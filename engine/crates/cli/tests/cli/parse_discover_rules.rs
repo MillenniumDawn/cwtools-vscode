@@ -38,6 +38,31 @@ fn test_parse_missing_file_fails() {
 // ── Parse errors ─────────────────────────────────────────────────────────────
 
 #[test]
+fn test_parse_malformed_rules_directory_reports_errors_and_exits_nonzero() {
+    let tmp = write_tree(&[("broken.cwt", "foo = { broken =\n")]);
+    cwtools()
+        .args(["parse", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(2)
+        // The summary still goes to stdout unchanged.
+        .stdout(predicate::str::contains("Parsed rule directory"))
+        .stdout(predicate::str::contains("Types:"))
+        .stderr(predicate::str::contains("CW604"));
+}
+
+#[test]
+fn test_parse_rules_directory_with_only_loader_warnings_succeeds() {
+    let tmp = write_tree(&[("warn.cwt", "## cardinality = 0..x\nr = { a = bool }\n")]);
+    cwtools()
+        .args(["parse", tmp.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Parsed rule directory"))
+        .stderr(predicate::str::contains("CW603"));
+}
+
+#[test]
 fn test_parse_reports_errors_and_exits_nonzero() {
     let tmp = write_tree(&[("bad.txt", "a = { b = ")]);
     let file = tmp.path().join("bad.txt");
