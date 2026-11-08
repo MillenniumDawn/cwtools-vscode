@@ -750,6 +750,46 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn changing_a_value_set_alias_recollects_vanilla_members() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let vanilla = tmp.path().join("vanilla");
+        let scripts = vanilla.join("common/ideas");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("base.txt"), "set_flag = ready_flag\n").unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".into();
+            config.workspace_roots = vec![workspace];
+            config.vanilla_dir = Some(vanilla);
+            config.cache_dir = Some(tmp.path().join("cache"));
+            config.refresh_roots();
+        }
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let rules = |ns: &str| {
+            let src = format!("alias[effect:set_flag] = value_set[{ns}]");
+            let parsed = cwtools_parser::parser::parse_string(&src, &table);
+            cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table)
+        };
+        backend.set_ruleset(rules("country_flag"));
+        scan_base_game(&backend).await;
+        assert!(
+            backend.state.info_service.read().type_index.value_set_values
+                .contains("country_flag", "ready_flag")
+        );
+
+        backend.set_ruleset(rules("state_flag"));
+        scan_base_game(&backend).await;
+        let info = backend.state.info_service.read();
+        assert!(
+            !info.type_index.value_set_values.contains("country_flag", "ready_flag")
+        );
+        assert!(info.type_index.value_set_values.contains("state_flag", "ready_flag"));
+    }
+
     #[test]
     fn stage_does_not_install_before_merge() {
         let backend = test_backend();

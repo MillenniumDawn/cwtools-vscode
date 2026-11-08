@@ -156,6 +156,25 @@ pub fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
         })
         .collect();
     parts.extend(ruleset.complex_enums.iter().map(complex_enum_shape));
+    // The collectors depend on these derived maps and on variable-defining
+    // effect names. Rebuild from aliases so partially constructed rulesets also
+    // hash correctly without relying on cached lookup indexes.
+    let (effects, fields) = ruleset.value_set_effect_definitions();
+    parts.extend(
+        effects
+            .iter()
+            .map(|(key, ns)| format!("value_set:{key:?}:{ns:?}")),
+    );
+    parts.extend(
+        fields
+            .iter()
+            .map(|(key, fields)| format!("value_set_fields:{key:?}:{fields:?}")),
+    );
+    parts.extend(
+        crate::variable_defining_effects(ruleset)
+            .iter()
+            .map(|key| format!("variable_effect:{key:?}")),
+    );
     parts.sort();
     if !ruleset.folders.is_empty() {
         let mut folders = ruleset.folders.clone();
@@ -1302,6 +1321,47 @@ mod tests {
         ] {
             assert_ne!(base, shape(&changed), "{what} must change the shape");
         }
+    }
+
+    #[test]
+    fn ruleset_shape_hash_follows_value_set_and_variable_collection_rules() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let rules = |src: &str| {
+            let parsed = cwtools_parser::parser::parse_string(src, &table);
+            cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table)
+        };
+        let a = rules("alias[effect:set_flag] = value_set[country_flag]");
+        let b = rules("alias[effect:set_flag] = value_set[state_flag]");
+        assert_eq!(ruleset_shape_hash(&a), ruleset_shape_hash(&a));
+        assert_ne!(ruleset_shape_hash(&a), ruleset_shape_hash(&b));
+
+        let fields_a = rules("alias[effect:set_flag] = { flag = value_set[country_flag] }");
+        let fields_b = rules("alias[effect:set_flag] = { name = value_set[country_flag] }");
+        assert_ne!(ruleset_shape_hash(&fields_a), ruleset_shape_hash(&fields_b));
+
+        // First value-set and named fields stay the same; only the variable
+        // collector's effect-name set changes.
+        let plain = rules("alias[effect:toggle] = { value_set[flag] = scalar }");
+        let variable = rules(
+            "alias[effect:toggle] = { value_set[flag] = scalar value_set[variable] = scalar }",
+        );
+        assert_eq!(plain.value_set_effects(), variable.value_set_effects());
+        assert_eq!(
+            plain.value_set_effect_fields(),
+            variable.value_set_effect_fields()
+        );
+        assert_ne!(ruleset_shape_hash(&plain), ruleset_shape_hash(&variable));
+
+        let mut unindexed = RuleSet::new();
+        unindexed.aliases = variable.aliases.clone();
+        assert_eq!(ruleset_shape_hash(&variable), ruleset_shape_hash(&unindexed));
+
+        let first = "alias[effect:set_a] = value_set[first]";
+        let second = "alias[effect:set_b] = value_set[second]";
+        assert_eq!(
+            ruleset_shape_hash(&rules(&format!("{first}\n{second}"))),
+            ruleset_shape_hash(&rules(&format!("{second}\n{first}")))
+        );
     }
 
     #[test]
