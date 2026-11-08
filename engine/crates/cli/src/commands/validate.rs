@@ -338,67 +338,6 @@ fn validation_exit_code(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{prepare_script_source, validation_exit_code};
-    use crate::diag::SourceLines;
-    use cwtools_driver::{RulesInput, Session, SessionConfig};
-    use cwtools_file_manager::path_identity;
-    use cwtools_game::Game;
-
-    #[test]
-    fn reporting_never_rereads_a_grown_script_without_its_snapshot_bound() {
-        for grow_before_validation in [true, false] {
-            let tmp = tempfile::tempdir().unwrap();
-            let root = tmp.path().join("mod");
-            let scripts = root.join("common/ideas");
-            std::fs::create_dir_all(&scripts).unwrap();
-            let path = scripts.join("test.txt");
-            std::fs::write(&path, "x = 1\n").unwrap();
-            let rules = tmp.path().join("rules.cwt");
-            std::fs::write(&rules, "").unwrap();
-            let session = Session::load(SessionConfig {
-                game: Game::Hoi4,
-                rules: RulesInput::File(rules),
-                directory: root,
-                parent_roots: vec![],
-                vanilla: None,
-                vanilla_cache: None,
-                vanilla_cache_auto: None,
-                ignore_files: &[],
-                ignore_dirs: &[],
-                loc_languages: None,
-                case_sensitive_files: false,
-                on_rules_diagnostic: None,
-            });
-            let source = session
-                .parsed_files()
-                .iter()
-                .find(|f| f.path == path)
-                .unwrap();
-            if grow_before_validation {
-                std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
-            }
-            let _ = session.validate_all();
-            if !grow_before_validation {
-                assert!(!session.is_incomplete());
-                std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
-            }
-            let key = path_identity(&path);
-            let mut sources = SourceLines::default();
-            prepare_script_source(&mut sources, &session, source, &key);
-            assert_eq!(sources.trimmed_path(&key, &path, 1), "");
-            assert!(session.is_incomplete());
-        }
-    }
-
-    #[test]
-    fn incomplete_validation_is_not_a_successful_exit() {
-        assert_eq!(validation_exit_code(0, false, false, false), 0);
-        assert_ne!(validation_exit_code(0, false, true, false), 0);
-    }
-}
-
 /// Everything one pass reads, resolved once from the flags and `cwtools.toml`.
 struct Job {
     game: String,
@@ -797,5 +736,66 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
         discovery_incomplete: session.is_incomplete() || rebuild_incomplete,
         rules_unreadable,
         session,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prepare_script_source, validation_exit_code};
+    use crate::diag::SourceLines;
+    use cwtools_driver::{RulesInput, Session, SessionConfig};
+    use cwtools_file_manager::path_identity;
+    use cwtools_game::Game;
+
+    #[test]
+    fn reporting_never_rereads_a_grown_script_without_its_snapshot_bound() {
+        for grow_before_validation in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("mod");
+            let scripts = root.join("common/ideas");
+            std::fs::create_dir_all(&scripts).unwrap();
+            let path = scripts.join("test.txt");
+            std::fs::write(&path, "x = 1\n").unwrap();
+            let rules = tmp.path().join("rules.cwt");
+            std::fs::write(&rules, "").unwrap();
+            let session = Session::load(SessionConfig {
+                game: Game::Hoi4,
+                rules: RulesInput::File(rules),
+                directory: root,
+                parent_roots: vec![],
+                vanilla: None,
+                vanilla_cache: None,
+                vanilla_cache_auto: None,
+                ignore_files: &[],
+                ignore_dirs: &[],
+                loc_languages: None,
+                case_sensitive_files: false,
+                on_rules_diagnostic: None,
+            });
+            let source = session
+                .parsed_files()
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap();
+            if grow_before_validation {
+                std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
+            }
+            let _ = session.validate_all();
+            if !grow_before_validation {
+                assert!(!session.is_incomplete());
+                std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
+            }
+            let key = path_identity(&path);
+            let mut sources = SourceLines::default();
+            prepare_script_source(&mut sources, &session, source, &key);
+            assert_eq!(sources.trimmed_path(&key, &path, 1), "");
+            assert!(session.is_incomplete());
+        }
+    }
+
+    #[test]
+    fn incomplete_validation_is_not_a_successful_exit() {
+        assert_eq!(validation_exit_code(0, false, false, false), 0);
+        assert_ne!(validation_exit_code(0, false, true, false), 0);
     }
 }
