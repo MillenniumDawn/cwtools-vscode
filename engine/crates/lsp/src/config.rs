@@ -1218,10 +1218,8 @@ impl Backend {
             reindex_idle_secs = ?reindex_idle_secs,
             "config updated via didChangeConfiguration"
         );
-        if rescan {
-            if !self.validate_entire_workspace(false).await {
-                self.spawn_deferred_revalidation("didChangeConfiguration");
-            }
+        if rescan && !self.validate_entire_workspace(false).await {
+            self.spawn_deferred_revalidation("didChangeConfiguration");
         }
     }
 
