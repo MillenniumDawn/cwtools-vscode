@@ -278,7 +278,11 @@ fn sparse_replacement_scopes_keep_their_parsed_depth() {
         "prevprevprev",
         "prevprevprevprev",
     ] {
-        let near = if depth.starts_with("from") { "from" } else { "prev" };
+        let near = if depth.starts_with("from") {
+            "from"
+        } else {
+            "prev"
+        };
         let rules = format!(
             r#"
 scopes = {{
