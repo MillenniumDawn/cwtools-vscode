@@ -254,6 +254,36 @@ mod tests {
         assert_eq!(ctx.root, ScopeId(200));
     }
 
+    #[test]
+    fn replace_scope_preserves_sparse_depths() {
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(
+            None,
+            None,
+            &[String::new(), "201".into(), String::new(), "203".into()],
+            &[String::new(), String::new(), "202".into()],
+        );
+        assert_eq!(
+            ctx.from,
+            vec![SCOPE_ANY, ScopeId(201), SCOPE_ANY, ScopeId(203)]
+        );
+        assert_eq!(
+            ctx.scopes,
+            vec![ScopeId(202), SCOPE_ANY, SCOPE_ANY, ScopeId(205)]
+        );
+        assert_eq!(ctx.get_from(2), ScopeId(201));
+        assert_eq!(ctx.get_from(4), ScopeId(203));
+        assert_eq!(ctx.get_from(1), SCOPE_ANY);
+        assert_eq!(
+            ctx.change_scope("prevprevprev"),
+            ScopeResult::NewScope {
+                scope: ScopeId(202),
+                ignore_keys: vec![],
+            }
+        );
+    }
+
     // ── FROM chain tests ──────────────────────────────────────────────────────
 
     #[test]

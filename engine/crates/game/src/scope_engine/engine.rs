@@ -119,8 +119,16 @@ impl ScopeContext {
         };
         let root_id = root.and_then(resolve);
         let this_id = this.and_then(resolve);
-        let from_ids: Vec<ScopeId> = froms.iter().filter_map(|n| resolve(n)).collect();
-        let prev_ids: Vec<ScopeId> = prevs.iter().filter_map(|n| resolve(n)).collect();
+        // The parser leaves empty strings for unset shallower depths. Retain each
+        // slot so a deeper replacement never shifts towards the current scope.
+        let from_ids: Vec<ScopeId> = froms
+            .iter()
+            .map(|n| resolve(n).unwrap_or(SCOPE_ANY))
+            .collect();
+        let prev_ids: Vec<ScopeId> = prevs
+            .iter()
+            .map(|n| resolve(n).unwrap_or(SCOPE_ANY))
+            .collect();
 
         if let Some(r) = root_id {
             self.root = r;
