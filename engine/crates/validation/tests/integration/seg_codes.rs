@@ -223,6 +223,53 @@ fn replace_scope_seeds_root_state_scope() {
     assert!(!c.contains(&"CW105".to_string()), "got: {:?}", c);
 }
 
+const REPLACE_SCOPE_PREV_RULES: &str = r#"
+scopes = {
+    Country = { aliases = { country } }
+    State = { aliases = { state } }
+    Province = { aliases = { province } }
+}
+types = { type[foo] = { path = "game/common/foo" } }
+## replace_scope = { this = country root = country prev = province prevprev = state }
+foo = {
+    prev = {
+        prev = {
+            alias_name[trigger] = alias_match_left[trigger]
+        }
+        alias_name[trigger] = alias_match_left[trigger]
+    }
+    alias_name[trigger] = alias_match_left[trigger]
+}
+## scope = province
+alias[trigger:province_only] = bool
+## scope = state
+alias[trigger:state_only] = bool
+"#;
+
+#[test]
+fn replace_scope_prev_chain_orders_prev_blocks() {
+    let c = codes(
+        REPLACE_SCOPE_PREV_RULES,
+        "foo = { prev = { province_only = yes } }",
+        &HOI4,
+    );
+    assert!(!c.contains(&"CW104".to_string()), "got: {:?}", c);
+
+    let c = codes(
+        REPLACE_SCOPE_PREV_RULES,
+        "foo = { prev = { state_only = yes } }",
+        &HOI4,
+    );
+    assert!(c.contains(&"CW104".to_string()), "got: {:?}", c);
+
+    let c = codes(
+        REPLACE_SCOPE_PREV_RULES,
+        "foo = { prev = { prev = { state_only = yes } } }",
+        &HOI4,
+    );
+    assert!(!c.contains(&"CW104".to_string()), "got: {:?}", c);
+}
+
 /// A `scope[country]` target field. Resolving the chain from the default country
 /// scope catches a target that lands in the wrong scope (CW243) or uses a link in
 /// the wrong scope (CW245).

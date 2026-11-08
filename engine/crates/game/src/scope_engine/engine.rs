@@ -137,6 +137,8 @@ impl ScopeContext {
         if !prev_ids.is_empty() {
             let current = self.scopes.last().copied().unwrap_or(self.root);
             let mut new_scopes = prev_ids;
+            // PREV is the frame immediately below current.
+            new_scopes.reverse();
             new_scopes.push(current);
             self.scopes = new_scopes;
         }
