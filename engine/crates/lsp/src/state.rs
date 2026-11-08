@@ -30,6 +30,7 @@ pub(crate) use crate::loc_text::LocText;
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
+    ScanAfterVanilla,
     Pass2Before,
     Pass2Mid,
     Pass2After,
@@ -241,11 +242,15 @@ pub(crate) struct VanillaState {
     /// Shape hash of the ruleset this payload was built under. `None` for a payload of unknown
     /// origin (a client-supplied cache), which a rules reload keeps.
     pub(crate) rules_shape: Option<String>,
+    /// Revisions protected by `vanilla_state`, to order overlapping walks of the
+    /// same retained payload, including an attempted walk that later fails.
+    pub(crate) merge_attempt_revision: u64,
+    pub(crate) publication_revision: u64,
 }
 
-/// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,
-/// then release it before acquiring `config` or `info_service` or doing I/O.
-/// Other multi-lock paths document their order at their use sites.
+/// Vanilla publication orders nested locks as vanilla_state -> info_service -> config;
+/// rule updates order vanilla_state -> rules -> info_service. Other multi-lock paths
+/// document their order at their use sites.
 #[derive(Default)]
 pub(crate) struct PendingExportSweep {
     pub(crate) revision: u64,

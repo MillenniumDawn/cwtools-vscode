@@ -878,7 +878,7 @@ mod tests {
                 scripted_gui_names: Vec::new(),
             },
         });
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
 
         assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
 

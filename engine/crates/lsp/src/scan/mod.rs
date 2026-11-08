@@ -20,7 +20,9 @@ mod watched;
 mod workspace;
 
 pub(crate) use loc::ParentLocKey;
-pub(crate) use vanilla::{VanillaLoc, VanillaLocKey, vanilla_fingerprint};
+pub(crate) use vanilla::{VanillaLoader, VanillaLoc, VanillaLocKey, vanilla_fingerprint};
+#[cfg(test)]
+pub(crate) use vanilla::test_capped_vanilla_loader;
 pub use vanilla::{resolve_source_uris, source_uri};
 
 #[derive(Debug, Clone, Default)]
@@ -1455,7 +1457,7 @@ mod tests {
                 ..Default::default()
             },
         });
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
 
         let info = backend.state.info_service.read();
         assert!(
