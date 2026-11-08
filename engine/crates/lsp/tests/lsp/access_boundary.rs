@@ -7,6 +7,35 @@ use crate::common::{GOTO_RULES, TestServer, path_uri};
 const BOUNDARY_REL: &str = "common/national_focus/f.txt";
 const BOUNDARY_TEXT: &str = "outer = {\n    inner = {\n        x = 1\n    }\n}\n";
 
+#[test]
+fn file_list_entry_matches_the_client_tree_contract() {
+    let mut server = TestServer::builder()
+        .file(BOUNDARY_REL, BOUNDARY_TEXT)
+        .init_opts(json!({ "language": "hoi4" }))
+        .spawn();
+    server.initialized();
+    let uri = server.uri(BOUNDARY_REL);
+    let frame = server.read_until("the workspace file-list entry", |frame| {
+        frame["method"] == "updateFileList"
+            && frame["params"]["fileList"]
+                .as_array()
+                .is_some_and(|files| files.iter().any(|file| file["uri"] == uri))
+    });
+    server.stop();
+    let entry = frame["params"]["fileList"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["uri"] == uri)
+        .unwrap();
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../../extension/test/fixtures/file-list-entry.json"
+    ))
+    .unwrap();
+    assert_eq!(entry["scope"], expected["scope"]);
+    assert_eq!(entry["logicalpath"], expected["logicalpath"]);
+}
+
 /// `initializationOptions.vanillaCache` is a client-chosen path read inside
 /// `initialize` itself. Pointed at a character device it read to EOF there, so
 /// the handshake never came back and the window sat dead with no diagnostics.

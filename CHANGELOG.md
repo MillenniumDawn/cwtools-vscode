@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Show each path component once in the Files view, using the server's logical path. (#1269)
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
 
 #### Engine
