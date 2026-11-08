@@ -278,7 +278,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: cargo clippy
         run: >-
-          cargo clippy --workspace --all-targets --all-features --
+          cargo clippy --locked --workspace --all-targets --all-features --
           -D warnings
       - name: Install cargo-machete
         if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
@@ -328,9 +328,9 @@ jobs:
       # Same feature set as the test step below, or the test step recompiles
       # every crate whose features differ instead of reusing these artifacts.
       - name: cargo build (debug)
-        run: cargo build --workspace --all-targets --all-features
+        run: cargo build --locked --workspace --all-targets --all-features
       - name: cargo test
-        run: cargo test --workspace --all-features --no-fail-fast
+        run: cargo test --locked --workspace --all-features --no-fail-fast
 
   # The client build helpers run on Windows too. No Rust test reads the
   # compiled client, so this runs beside test-rs instead of ahead of cargo.
@@ -396,7 +396,7 @@ jobs:
       - name: cargo build at MSRV
         env:
           MSRV: ${{ steps.msrv.outputs.version }}
-        run: cargo +"$MSRV" build --workspace --all-targets
+        run: cargo +"$MSRV" build --locked --workspace --all-targets
 
   # Fuzzing in CI is a smoke run, not a fuzzing campaign: -runs=0 replays
   # the committed seed corpus once and exits. Deterministic, ~seconds of
@@ -555,7 +555,7 @@ jobs:
       # exit 2.
       - name: cargo build --release -p cwtools_cli
         working-directory: engine
-        run: cargo build --release -p cwtools_cli
+        run: cargo build --locked --release -p cwtools_cli
       - name: Run vanilla guard
         env:
           # `validate` always enables the .cwb parse cache and has no flag
@@ -633,7 +633,7 @@ jobs:
             ${{ runner.os }}-cargo-release-target-
       - name: cargo build --release -p cwtools_cli
         working-directory: engine
-        run: cargo build --release -p cwtools_cli
+        run: cargo build --locked --release -p cwtools_cli
       # After the build, so a compile error costs no checkout. Most of that
       # working tree is art the guard never opens, and there is no trimming
       # it down: the run indexes whatever is on disk, so a narrower checkout

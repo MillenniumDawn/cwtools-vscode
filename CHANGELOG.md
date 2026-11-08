@@ -40,6 +40,9 @@
 * Show each path component once in the Files view, using the server's logical path. (#1269)
 
 ### 4.0.8
+#### Tooling
+
+* Enforce the committed Rust lockfile in CI, coverage, guard and release builds. (#1218)
 
 #### Extension
 

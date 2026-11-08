@@ -191,6 +191,7 @@ def main() -> int:
         [
             "cargo",
             "llvm-cov",
+            "--locked",
             "--workspace",
             "--all-features",
             "--lcov",
