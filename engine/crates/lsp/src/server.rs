@@ -932,7 +932,8 @@ impl Backend {
         }
 
         if !changed_loc_keys.is_empty() {
-            self.refresh_after_watched_loc_changes(&changed_loc_keys).await;
+            self.refresh_after_watched_loc_changes(&changed_loc_keys)
+                .await;
         }
 
         let mut changed_names: NameTokens = names_before

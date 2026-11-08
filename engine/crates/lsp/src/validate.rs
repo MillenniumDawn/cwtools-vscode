@@ -4331,8 +4331,7 @@ mod ignored_tests {
             std::fs::create_dir_all(&loc_dir).unwrap();
             let path = loc_dir.join("definition_l_english.yml");
             let source = crate::paths::path_to_uri(&path);
-            let dependent =
-                crate::paths::path_to_uri(&loc_dir.join("reference_l_english.yml"));
+            let dependent = crate::paths::path_to_uri(&loc_dir.join("reference_l_english.yml"));
             let initial = "\u{feff}l_english:\n DEF_KEY:0 \"definition\"\n";
             let edited = "\u{feff}l_english:\n DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n";
             let reference = "\u{feff}l_english:\n REF_KEY:0 \"see $new_key$\"\n";
@@ -4374,7 +4373,13 @@ mod ignored_tests {
             backend
                 .process_watched_batch(HashSet::from([source.clone()]), Vec::new())
                 .await;
-            assert!(!backend.state.loc_watched_overlay.read().contains_key(&source));
+            assert!(
+                !backend
+                    .state
+                    .loc_watched_overlay
+                    .read()
+                    .contains_key(&source)
+            );
             publications.lock().clear();
             backend
                 .did_close_impl(DidCloseTextDocumentParams {
@@ -4389,10 +4394,12 @@ mod ignored_tests {
                     loop {
                         if publications.lock().iter().any(|p| {
                             p.uri.as_str() == dependent
-                                && p.diagnostics.iter().any(|d| matches!(
-                                    &d.code,
-                                    Some(NumberOrString::String(code)) if code == "CW225"
-                                ))
+                                && p.diagnostics.iter().any(|d| {
+                                    matches!(
+                                        &d.code,
+                                        Some(NumberOrString::String(code)) if code == "CW225"
+                                    )
+                                })
                         }) {
                             break;
                         }

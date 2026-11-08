@@ -269,7 +269,7 @@ fn test_closing_loc_reconciles_saved_and_discarded_keys_after_watched_event() {
         // Revalidate the reference once more to prove the closed-file overlay
         // itself agrees with disk even when no key-set diff was needed.
         server.change(reference_rel, 2, &reference);
-        let codes = server.diag_codes_for("reference_l_english.yml", 2);
+        let codes = server.diag_codes_for("reference_l_english.yml", 1);
         assert_eq!(
             codes.contains(&"CW225".to_string()),
             !saved,
