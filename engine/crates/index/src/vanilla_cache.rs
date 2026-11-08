@@ -1354,7 +1354,10 @@ mod tests {
 
         let mut unindexed = RuleSet::new();
         unindexed.aliases = variable.aliases.clone();
-        assert_eq!(ruleset_shape_hash(&variable), ruleset_shape_hash(&unindexed));
+        assert_eq!(
+            ruleset_shape_hash(&variable),
+            ruleset_shape_hash(&unindexed)
+        );
 
         let first = "alias[effect:set_a] = value_set[first]";
         let second = "alias[effect:set_b] = value_set[second]";

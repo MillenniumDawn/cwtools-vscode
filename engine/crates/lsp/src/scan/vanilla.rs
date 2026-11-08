@@ -777,7 +777,12 @@ mod tests {
         backend.set_ruleset(rules("country_flag"));
         scan_base_game(&backend).await;
         assert!(
-            backend.state.info_service.read().type_index.value_set_values
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .value_set_values
                 .contains("country_flag", "ready_flag")
         );
 
@@ -785,9 +790,16 @@ mod tests {
         scan_base_game(&backend).await;
         let info = backend.state.info_service.read();
         assert!(
-            !info.type_index.value_set_values.contains("country_flag", "ready_flag")
+            !info
+                .type_index
+                .value_set_values
+                .contains("country_flag", "ready_flag")
         );
-        assert!(info.type_index.value_set_values.contains("state_flag", "ready_flag"));
+        assert!(
+            info.type_index
+                .value_set_values
+                .contains("state_flag", "ready_flag")
+        );
     }
 
     #[test]
