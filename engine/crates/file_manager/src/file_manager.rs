@@ -299,7 +299,10 @@ pub struct DiscoveryFailure {
 
 impl DiscoveryFailure {
     pub fn file_count_budget(path: PathBuf) -> Self {
-        Self { path, error: FILE_COUNT_BUDGET_ERROR.to_string() }
+        Self {
+            path,
+            error: FILE_COUNT_BUDGET_ERROR.to_string(),
+        }
     }
 
     pub fn is_file_count_budget(&self) -> bool {
@@ -743,9 +746,7 @@ pub fn discover_paths_multi_mod(config: &FileManagerConfig, kinds: &[FileKind]) 
         &include_dirs,
         &config.exclude_dir_patterns,
         config.scan_budget,
-        &|path, logical| {
-            accept_discovered_path(config, kinds, path, logical.to_string()).is_some()
-        },
+        &|path, logical| accept_discovered_path(config, kinds, path, logical.to_string()).is_some(),
     );
     failures.extend(walk_failures);
     DiscoveryReport {
@@ -1292,13 +1293,7 @@ fn collect_files_recursive(
             if skip {
                 continue;
             }
-            collect_files_recursive(
-                &path,
-                root_prefix,
-                priority,
-                exclude_dir_patterns,
-                state,
-            );
+            collect_files_recursive(&path, root_prefix, priority, exclude_dir_patterns, state);
         } else {
             let logical = compute_logical_path_with_root(&path, root_prefix);
             if !(state.eligible)(&path, &logical) {
@@ -3300,7 +3295,7 @@ replace_path = "COMMON/ideas"
     }
 
     #[test]
-    fn discover_paths_enforces_the_budget_per_root() {
+    fn discover_paths_shares_the_budget_across_roots() {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         for root in [first.path(), second.path()] {
@@ -3324,9 +3319,11 @@ replace_path = "COMMON/ideas"
         )
         .unwrap();
 
-        assert_eq!(report.files.len(), 2);
+        assert_eq!(report.files.len(), 1);
         assert!(report.files[0].path.starts_with(first.path()));
-        assert!(report.files[1].path.starts_with(second.path()));
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0].is_file_count_budget());
+        assert!(report.failures[0].path.starts_with(second.path()));
     }
 
     #[test]

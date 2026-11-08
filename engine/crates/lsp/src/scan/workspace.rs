@@ -446,21 +446,32 @@ impl Backend {
                 Ok(files) => files,
                 Err(error) => {
                     tracing::error!(error = %error, "parent workspace discovery failed");
-                    self.client.log_message(MessageType::ERROR, format!("error: parent discovery failed: {error}")).await;
+                    self.client
+                        .log_message(
+                            MessageType::ERROR,
+                            format!("error: parent discovery failed: {error}"),
+                        )
+                        .await;
                     return false;
                 }
             }
         };
         // Check localization before mutating scan state or accepting a quiet
         // fingerprint. A capped parent walk must never become a complete scan.
-        let loc_signature = match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
-            Ok(signature) => signature,
-            Err(error) => {
-                tracing::error!(error = %error, "localisation discovery failed");
-                self.client.log_message(MessageType::ERROR, format!("error: localisation discovery failed: {error}")).await;
-                return false;
-            }
-        };
+        let loc_signature =
+            match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
+                Ok(signature) => signature,
+                Err(error) => {
+                    tracing::error!(error = %error, "localisation discovery failed");
+                    self.client
+                        .log_message(
+                            MessageType::ERROR,
+                            format!("error: localisation discovery failed: {error}"),
+                        )
+                        .await;
+                    return false;
+                }
+            };
         let files_to_validate: Vec<std::path::PathBuf> =
             primary_files.into_iter().map(|f| f.path).collect();
         let primary_len = files_to_validate.len();
@@ -2726,7 +2737,7 @@ mod tests {
         )
         .await
         .expect("missing-root workspace validation timed out");
-        assert!(scan);
+        assert!(!scan);
         let msg = tokio::time::timeout(std::time::Duration::from_secs(2), found_rx)
             .await
             .expect("missing-root log message timed out")

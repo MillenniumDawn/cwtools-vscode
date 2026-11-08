@@ -87,11 +87,12 @@ pub(super) fn run(args: LocArgs) {
         divert,
     );
     let langs = (!loc_language.is_empty()).then_some(loc_language.as_slice());
-    let service = cwtools_driver::load_loc_service(&[&directory], langs, &ignore_files, &ignore_dirs)
-        .unwrap_or_else(|error| {
-            eprintln!("error: localisation discovery incomplete: {error}");
-            std::process::exit(EXIT_DISCOVERY_FAILED);
-        });
+    let service =
+        cwtools_driver::load_loc_service(&[&directory], langs, &ignore_files, &ignore_dirs)
+            .unwrap_or_else(|error| {
+                eprintln!("error: localisation discovery incomplete: {error}");
+                std::process::exit(EXIT_DISCOVERY_FAILED);
+            });
     exit_if_empty(
         service.files().len(),
         allow_empty,

@@ -67,7 +67,11 @@ pub(super) fn vanilla(game: String, vanilla: PathBuf, rules: PathBuf, output: Pa
     // Loc keys + file paths + variable names ride along so a cache hit
     // also skips the loc walk and file-index walk over the install.
     let aux = cwtools_driver::build_vanilla_cache_aux(&vanilla, &index).unwrap_or_else(|e| {
-        eprintln!("Error discovering vanilla auxiliary data {}: {}", vanilla.display(), e);
+        eprintln!(
+            "Error discovering vanilla auxiliary data {}: {}",
+            vanilla.display(),
+            e
+        );
         std::process::exit(EXIT_DISCOVERY_FAILED);
     });
     // Combined fingerprint = game version + ruleset shape, so a cache

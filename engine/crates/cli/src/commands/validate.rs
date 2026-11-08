@@ -276,7 +276,10 @@ pub(super) fn run(args: ValidateArgs) {
 
     // A walk that failed on the first pass has nothing to watch: fall through
     // to the usual exit code. Errors in the report do not end a watch.
-    if !discovery_failed && !discovery_incomplete && let Some(poller) = poller {
+    if !discovery_failed
+        && !discovery_incomplete
+        && let Some(poller) = poller
+    {
         drop(session);
         watch::follow(poller, diags, || {
             let rerun = analyze(&job, false);
@@ -292,7 +295,12 @@ pub(super) fn run(args: ValidateArgs) {
     if discovery_incomplete {
         eprintln!("error: validation is incomplete because some inputs could not be scanned");
     }
-    let code = validation_exit_code(failing, discovery_failed, discovery_incomplete, write_failed);
+    let code = validation_exit_code(
+        failing,
+        discovery_failed,
+        discovery_incomplete,
+        write_failed,
+    );
     if code != 0 {
         std::process::exit(code);
     }
@@ -307,7 +315,11 @@ fn prepare_script_source(
     match session.read_source_text(source) {
         Ok(text) => sources.set_text(key, Some(&text)),
         Err(error) => {
-            eprintln!("warn: could not read report source {}: {}", source.path.display(), error);
+            eprintln!(
+                "warn: could not read report source {}: {}",
+                source.path.display(),
+                error
+            );
             sources.set_text(key, None);
         }
     }
@@ -319,7 +331,11 @@ fn validation_exit_code(
     discovery_incomplete: bool,
     write_failed: bool,
 ) -> i32 {
-    exit_code(failing, discovery_failed || discovery_incomplete, write_failed)
+    exit_code(
+        failing,
+        discovery_failed || discovery_incomplete,
+        write_failed,
+    )
 }
 
 #[cfg(test)]
@@ -355,7 +371,11 @@ mod tests {
                 case_sensitive_files: false,
                 on_rules_diagnostic: None,
             });
-            let source = session.parsed_files().iter().find(|f| f.path == path).unwrap();
+            let source = session
+                .parsed_files()
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap();
             if grow_before_validation {
                 std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
             }

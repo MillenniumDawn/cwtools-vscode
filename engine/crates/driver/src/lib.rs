@@ -151,9 +151,14 @@ fn load_or_parse(
     } else if let Some(size) = snapshot_size {
         let metadata = std::fs::metadata(path)?;
         if metadata.len() != size {
-            return Err(FileError::Io(std::io::Error::other("source changed during scan")));
+            return Err(FileError::Io(std::io::Error::other(
+                "source changed during scan",
+            )));
         }
-        Some((size, workspace_cache::source_cache_key_from_metadata(path, &metadata)))
+        Some((
+            size,
+            workspace_cache::source_cache_key_from_metadata(path, &metadata),
+        ))
     } else {
         None
     };
@@ -796,7 +801,9 @@ impl Session {
             match vanilla_index {
                 Ok(vanilla_index) => {
                     let aux = build_vanilla_cache_aux_with_shadow(
-                        vanilla_dir, &vanilla_index, &vanilla_shadow,
+                        vanilla_dir,
+                        &vanilla_index,
+                        &vanilla_shadow,
                     );
                     match &aux {
                         Ok(_) => has_vanilla_data = true,
@@ -806,8 +813,13 @@ impl Session {
                         }
                     }
                     if let Some((path, fingerprint)) = &cache_write_target {
-                        match write_vanilla_cache_checked(&vanilla_index, &game_id, fingerprint, path, aux)
-                        {
+                        match write_vanilla_cache_checked(
+                            &vanilla_index,
+                            &game_id,
+                            fingerprint,
+                            path,
+                            aux,
+                        ) {
                             Ok(n) => eprintln!(
                                 "  Cached {} base-game instances to {} ({})",
                                 n,
@@ -905,10 +917,15 @@ impl Session {
             && let Some(v) = &vanilla
         {
             let vanilla_paths: Vec<_> = match localisation_paths(
-                std::slice::from_ref(v), &[], &[], DiscoveryPolicy::Vanilla,
+                std::slice::from_ref(v),
+                &[],
+                &[],
+                DiscoveryPolicy::Vanilla,
             ) {
-                Ok(paths) => paths.into_iter()
-                    .filter(|path| !vanilla_shadow.hides_file_under(v, path)).collect(),
+                Ok(paths) => paths
+                    .into_iter()
+                    .filter(|path| !vanilla_shadow.hides_file_under(v, path))
+                    .collect(),
                 Err(error) => {
                     eprintln!("error: base-game localisation discovery incomplete: {error}");
                     vanilla_discovery_failed = true;
@@ -1086,9 +1103,15 @@ impl SessionWithFiles {
         let text = String::from_utf8(bytes).map_err(|error| {
             FileError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         })?;
-        if source.fingerprint.content_hash.is_some_and(|hash| workspace_cache::content_hash(&text) != hash) {
+        if source
+            .fingerprint
+            .content_hash
+            .is_some_and(|hash| workspace_cache::content_hash(&text) != hash)
+        {
             self.validation_incomplete.store(true, Ordering::Relaxed);
-            return Err(FileError::Io(std::io::Error::other("source changed after indexing")));
+            return Err(FileError::Io(std::io::Error::other(
+                "source changed after indexing",
+            )));
         }
         Ok(text)
     }
@@ -1230,7 +1253,9 @@ impl SessionWithFiles {
 fn read_source_snapshot_bytes(file: &SourceFile) -> Result<Vec<u8>, FileError> {
     use std::io::Read as _;
     if workspace_cache::source_cache_key(&file.path) != file.fingerprint.metadata {
-        return Err(FileError::Io(std::io::Error::other("source changed after indexing")));
+        return Err(FileError::Io(std::io::Error::other(
+            "source changed after indexing",
+        )));
     }
     let mut bytes = Vec::new();
     std::fs::File::open(&file.path)?
@@ -1239,15 +1264,24 @@ fn read_source_snapshot_bytes(file: &SourceFile) -> Result<Vec<u8>, FileError> {
     if bytes.len() as u64 != file.fingerprint.source_size
         || workspace_cache::source_cache_key(&file.path) != file.fingerprint.metadata
     {
-        return Err(FileError::Io(std::io::Error::other("source changed after indexing")));
+        return Err(FileError::Io(std::io::Error::other(
+            "source changed after indexing",
+        )));
     }
     Ok(bytes)
 }
 
 fn read_source_snapshot(file: &SourceFile) -> Result<String, FileError> {
-    let (text, _) = cwtools_file_manager::file_manager::decode_bytes(read_source_snapshot_bytes(file)?);
-    if file.fingerprint.content_hash.is_some_and(|hash| workspace_cache::content_hash(&text) != hash) {
-        return Err(FileError::Io(std::io::Error::other("source changed after indexing")));
+    let (text, _) =
+        cwtools_file_manager::file_manager::decode_bytes(read_source_snapshot_bytes(file)?);
+    if file
+        .fingerprint
+        .content_hash
+        .is_some_and(|hash| workspace_cache::content_hash(&text) != hash)
+    {
+        return Err(FileError::Io(std::io::Error::other(
+            "source changed after indexing",
+        )));
     }
     Ok(text)
 }
@@ -1268,7 +1302,11 @@ fn load_inline_scripts(files: &[SourceFile], table: &StringTable) -> (InlineScri
             }
             Err(error) => {
                 incomplete = true;
-                eprintln!("warn: skipping inline script {}: {}", file.path.display(), error);
+                eprintln!(
+                    "warn: skipping inline script {}: {}",
+                    file.path.display(),
+                    error
+                );
             }
         }
     }
@@ -1301,7 +1339,9 @@ fn checked_discovery(report: DiscoveryReport) -> Result<DiscoveryReport, FileErr
             return Err(FileError::FileCountBudget(failure.path.clone()));
         }
         return Err(FileError::Io(std::io::Error::other(format!(
-            "discovery skipped {}: {}", failure.path.display(), failure.error
+            "discovery skipped {}: {}",
+            failure.path.display(),
+            failure.error
         ))));
     }
     Ok(report)
@@ -1314,13 +1354,21 @@ fn localisation_paths_with_budget(
     policy: DiscoveryPolicy,
     budget: ScanBudget,
 ) -> Result<Vec<PathBuf>, FileError> {
-    let mut config = FileManagerConfig { scan_budget: budget, ..Default::default() };
+    let mut config = FileManagerConfig {
+        scan_budget: budget,
+        ..Default::default()
+    };
     if policy == DiscoveryPolicy::Workspace {
         config.exclude_patterns.extend(ignore_files.iter().cloned());
-        config.exclude_dir_patterns.extend(ignore_dirs.iter().cloned());
+        config
+            .exclude_dir_patterns
+            .extend(ignore_dirs.iter().cloned());
     }
     let report = checked_discovery(discover_workspace(WorkspaceDiscoveryRequest {
-        roots: roots.to_vec(), kinds: vec![FileKind::Localisation], config, policy,
+        roots: roots.to_vec(),
+        kinds: vec![FileKind::Localisation],
+        config,
+        policy,
     })?)?;
     Ok(report.files.into_iter().map(|file| file.path).collect())
 }
@@ -1331,7 +1379,13 @@ fn localisation_paths(
     ignore_dirs: &[String],
     policy: DiscoveryPolicy,
 ) -> Result<Vec<PathBuf>, FileError> {
-    localisation_paths_with_budget(roots, ignore_files, ignore_dirs, policy, ScanBudget::default())
+    localisation_paths_with_budget(
+        roots,
+        ignore_files,
+        ignore_dirs,
+        policy,
+        ScanBudget::default(),
+    )
 }
 
 pub fn load_loc_service(
@@ -1341,7 +1395,12 @@ pub fn load_loc_service(
     ignore_dirs: &[String],
 ) -> Result<LocService, FileError> {
     let roots: Vec<PathBuf> = dirs.iter().map(|dir| (*dir).to_path_buf()).collect();
-    let paths = localisation_paths(&roots, ignore_files, ignore_dirs, DiscoveryPolicy::Workspace)?;
+    let paths = localisation_paths(
+        &roots,
+        ignore_files,
+        ignore_dirs,
+        DiscoveryPolicy::Workspace,
+    )?;
     Ok(LocService::from_paths(paths, ScanBudget::default(), langs))
 }
 
@@ -1504,20 +1563,23 @@ pub fn build_file_index_with_vanilla_shadow(
         parent_roots,
         workspace_root,
         &[],
-        |root| {
-            match discover_file_index_paths(
-                root,
-                workspace_ignore_files,
-                workspace_ignore_dirs,
-                DiscoveryPolicy::Workspace,
-            ) {
-                Ok(paths) => paths,
-                Err(error) => { parent_error.get_or_insert(error); Vec::new() }
+        |root| match discover_file_index_paths(
+            root,
+            workspace_ignore_files,
+            workspace_ignore_dirs,
+            DiscoveryPolicy::Workspace,
+        ) {
+            Ok(paths) => paths,
+            Err(error) => {
+                parent_error.get_or_insert(error);
+                Vec::new()
             }
         },
         String::as_str,
     );
-    if let Some(error) = parent_error { return Err(error); }
+    if let Some(error) = parent_error {
+        return Err(error);
+    }
     index.add_paths(parent_paths);
     match vanilla {
         VanillaFiles::Cached(Cow::Owned(paths)) => index.add_paths(
@@ -1551,18 +1613,27 @@ fn discover_file_index_paths_with_budget(
     budget: ScanBudget,
 ) -> Result<Vec<String>, FileError> {
     let mut config = FileManagerConfig {
-        include_dirs: vec![".".to_string()], scan_budget: budget, ..Default::default()
+        include_dirs: vec![".".to_string()],
+        scan_budget: budget,
+        ..Default::default()
     };
     if policy == DiscoveryPolicy::Workspace {
         config.exclude_patterns.extend(ignore_files.iter().cloned());
-        config.exclude_dir_patterns.extend(ignore_dirs.iter().cloned());
+        config
+            .exclude_dir_patterns
+            .extend(ignore_dirs.iter().cloned());
     }
     let report = checked_discovery(discover_workspace(WorkspaceDiscoveryRequest {
         roots: vec![root.to_path_buf()],
         kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
-        config, policy,
+        config,
+        policy,
     })?)?;
-    Ok(report.files.into_iter().map(|file| file.root_relative_path).collect())
+    Ok(report
+        .files
+        .into_iter()
+        .map(|file| file.root_relative_path)
+        .collect())
 }
 
 fn discover_file_index_paths(
@@ -1571,7 +1642,13 @@ fn discover_file_index_paths(
     ignore_dirs: &[String],
     policy: DiscoveryPolicy,
 ) -> Result<Vec<String>, FileError> {
-    discover_file_index_paths_with_budget(root, ignore_files, ignore_dirs, policy, ScanBudget::default())
+    discover_file_index_paths_with_budget(
+        root,
+        ignore_files,
+        ignore_dirs,
+        policy,
+        ScanBudget::default(),
+    )
 }
 
 pub fn build_vanilla_cache_aux(
@@ -1618,9 +1695,15 @@ fn build_vanilla_cache_aux_with_budget(
     let mut file_index = cwtools_index::FileIndex::new();
     // Preserve disk spelling so a case-sensitive run can check vanilla references.
     file_index.set_case_sensitive(true);
-    let file_paths = discover_file_index_paths_with_budget(vanilla_dir, &[], &[], DiscoveryPolicy::Vanilla, budget)?
-        .into_iter()
-        .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)));
+    let file_paths = discover_file_index_paths_with_budget(
+        vanilla_dir,
+        &[],
+        &[],
+        DiscoveryPolicy::Vanilla,
+        budget,
+    )?
+    .into_iter()
+    .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)));
     file_index.add_paths(file_paths);
     Ok(cwtools_index::vanilla_cache::VanillaCacheAux {
         loc_keys,
@@ -1851,12 +1934,20 @@ struct ParentDiscoveryStatus {
 
 impl ParentDiscoveryStatus {
     fn new(budget: ScanBudget) -> Self {
-        Self { incomplete: false, remaining: budget.files_remaining(), budget }
+        Self {
+            incomplete: false,
+            remaining: budget.files_remaining(),
+            budget,
+        }
     }
 
     fn next_budget(&self) -> ScanBudget {
         ScanBudget {
-            max_files: if self.budget.max_files == 0 { 0 } else { self.remaining.max(1) },
+            max_files: if self.budget.max_files == 0 {
+                0
+            } else {
+                self.remaining.max(1)
+            },
             ..self.budget
         }
     }
@@ -1870,12 +1961,16 @@ impl ParentDiscoveryStatus {
 }
 
 impl Default for ParentDiscoveryStatus {
-    fn default() -> Self { Self::new(ScanBudget::default()) }
+    fn default() -> Self {
+        Self::new(ScanBudget::default())
+    }
 }
 
 fn parent_discovery_result<T>(files: Vec<T>, incomplete: bool) -> Result<Vec<T>, FileError> {
     if incomplete {
-        Err(FileError::Io(std::io::Error::other("parent discovery incomplete")))
+        Err(FileError::Io(std::io::Error::other(
+            "parent discovery incomplete",
+        )))
     } else {
         Ok(files)
     }
@@ -1907,7 +2002,11 @@ fn discover_parent_script_files_inner(
                 .extend(ignore_dirs.iter().cloned());
             discover_workspace_files_with_failures(config)
                 .map(|(files, failures, examined)| {
-                    if status.record(examined, !failures.is_empty()) { files } else { Vec::new() }
+                    if status.record(examined, !failures.is_empty()) {
+                        files
+                    } else {
+                        Vec::new()
+                    }
                 })
                 .unwrap_or_else(|error| {
                     status.incomplete = true;
@@ -1931,7 +2030,12 @@ pub fn discover_parent_localisation_files(
     ignore_dirs: &[String],
 ) -> Result<Vec<DiscoveredPath>, FileError> {
     discover_parent_localisation_files_with_budget(
-        parent_roots, primary_root, primary_files, ignore_files, ignore_dirs, ScanBudget::default(),
+        parent_roots,
+        primary_root,
+        primary_files,
+        ignore_files,
+        ignore_dirs,
+        ScanBudget::default(),
     )
 }
 
@@ -1972,34 +2076,39 @@ fn discover_parent_localisation_files_inner(
         primary_root,
         &primary,
         |root| {
-            let mut config = FileManagerConfig { scan_budget: status.next_budget(), ..Default::default() };
+            let mut config = FileManagerConfig {
+                scan_budget: status.next_budget(),
+                ..Default::default()
+            };
             config.exclude_patterns.extend(ignore_files.iter().cloned());
-            config.exclude_dir_patterns.extend(ignore_dirs.iter().cloned());
+            config
+                .exclude_dir_patterns
+                .extend(ignore_dirs.iter().cloned());
             match discover_workspace(WorkspaceDiscoveryRequest {
                 roots: vec![root.to_path_buf()],
                 kinds: vec![FileKind::Localisation],
                 config,
                 policy: DiscoveryPolicy::Workspace,
             }) {
-            Ok(report) => {
-                if !status.record(report.examined, !report.failures.is_empty()) {
-                    return Vec::new();
+                Ok(report) => {
+                    if !status.record(report.examined, !report.failures.is_empty()) {
+                        return Vec::new();
+                    }
+                    report
+                        .files
+                        .into_iter()
+                        .filter(|file| file.kind == FileKind::Localisation)
+                        .collect()
                 }
-                report
-                    .files
-                    .into_iter()
-                    .filter(|file| file.kind == FileKind::Localisation)
-                    .collect()
+                Err(error) => {
+                    status.incomplete = true;
+                    eprintln!(
+                        "warn: parent mod localisation discovery failed for {}: {error}",
+                        root.display()
+                    );
+                    Vec::new()
+                }
             }
-            Err(error) => {
-                status.incomplete = true;
-                eprintln!(
-                    "warn: parent mod localisation discovery failed for {}: {error}",
-                    root.display()
-                );
-                Vec::new()
-            }
-        }
         },
         |file| file.root_relative_path.as_str(),
     )
@@ -2100,27 +2209,40 @@ pub fn discover_workspace(
             // A one-file probe detects an omitted eligible file when the shared
             // countdown is already zero; zero in ScanBudget means unlimited.
             script_config.scan_budget.max_files = if unlimited { 0 } else { remaining.max(1) };
-            let (files, failures, examined) = discover_workspace_files_with_failures(script_config)?;
+            let (files, failures, examined) =
+                discover_workspace_files_with_failures(script_config)?;
             if !unlimited && remaining == 0 && examined > 0 {
                 report.failures.push(
-                    cwtools_file_manager::file_manager::DiscoveryFailure::file_count_budget(root.clone()),
+                    cwtools_file_manager::file_manager::DiscoveryFailure::file_count_budget(
+                        root.clone(),
+                    ),
                 );
                 return Ok(report);
             }
             remaining = remaining.saturating_sub(examined);
             report.examined = report.examined.saturating_add(examined);
             report.failures.extend(failures);
-            report.files.extend(files.into_iter().map(|file| DiscoveredPath {
-                path: file.path, root_relative_path: file.logical_path, kind: FileKind::Script,
-            }));
-            if report.failures.iter().any(|failure| failure.is_file_count_budget()) {
+            report
+                .files
+                .extend(files.into_iter().map(|file| DiscoveredPath {
+                    path: file.path,
+                    root_relative_path: file.logical_path,
+                    kind: FileKind::Script,
+                }));
+            if report
+                .failures
+                .iter()
+                .any(|failure| failure.is_file_count_budget())
+            {
                 return Ok(report);
             }
         }
     }
 
     let other_kinds: Vec<FileKind> = kinds
-        .into_iter().filter(|kind| *kind != FileKind::Script).collect();
+        .into_iter()
+        .filter(|kind| *kind != FileKind::Script)
+        .collect();
     if !other_kinds.is_empty() {
         for root in &roots {
             let mut other_config = config.clone();
@@ -2133,7 +2255,9 @@ pub fn discover_workspace(
             };
             if !unlimited && remaining == 0 && discovered.examined > 0 {
                 report.failures.push(
-                    cwtools_file_manager::file_manager::DiscoveryFailure::file_count_budget(root.clone()),
+                    cwtools_file_manager::file_manager::DiscoveryFailure::file_count_budget(
+                        root.clone(),
+                    ),
                 );
                 return Ok(report);
             }
@@ -2141,7 +2265,11 @@ pub fn discover_workspace(
             report.examined = report.examined.saturating_add(discovered.examined);
             report.files.extend(discovered.files);
             report.failures.extend(discovered.failures);
-            if report.failures.iter().any(|failure| failure.is_file_count_budget()) {
+            if report
+                .failures
+                .iter()
+                .any(|failure| failure.is_file_count_budget())
+            {
                 return Ok(report);
             }
         }
@@ -2289,8 +2417,8 @@ mod tests {
             None,
             None,
         )
-            .unwrap()
-            .expect("uncapped load");
+        .unwrap()
+        .expect("uncapped load");
 
         std::fs::write(&path, "a = 200\n").unwrap();
         assert_ne!(
@@ -2323,7 +2451,8 @@ mod tests {
             &table,
             Some(&cache),
             &config,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(parsed.len(), 1, "a zero cap must not refuse the file");
         assert_eq!(
             parsed[0].root_children.len(),
@@ -2371,7 +2500,10 @@ mod tests {
     fn vanilla_auxiliary_discovery_rejects_partial_file_and_loc_walks() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("vanilla");
-        let budget = ScanBudget { max_files: 1, ..ScanBudget::default() };
+        let budget = ScanBudget {
+            max_files: 1,
+            ..ScanBudget::default()
+        };
         std::fs::create_dir_all(root.join("gfx")).unwrap();
         std::fs::write(root.join("gfx/a.dds"), "").unwrap();
         std::fs::write(root.join("gfx/b.dds"), "").unwrap();
@@ -2385,13 +2517,21 @@ mod tests {
 
         std::fs::remove_file(root.join("gfx/b.dds")).unwrap();
         std::fs::write(root.join("gfx/README.txt"), "ignored").unwrap();
-        assert!(build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_ok());
+        assert!(
+            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_ok()
+        );
         std::fs::remove_file(root.join("gfx/a.dds")).unwrap();
         std::fs::create_dir_all(root.join("localisation")).unwrap();
         for name in ["a_l_english.yml", "b_l_english.yml"] {
-            std::fs::write(root.join("localisation").join(name), "l_english:\n key:0 \"hi\"\n").unwrap();
+            std::fs::write(
+                root.join("localisation").join(name),
+                "l_english:\n key:0 \"hi\"\n",
+            )
+            .unwrap();
         }
-        assert!(build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_err());
+        assert!(
+            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_err()
+        );
     }
 
     #[test]
@@ -2408,15 +2548,29 @@ mod tests {
         for name in ["a_l_english.yml", "b_l_english.yml"] {
             std::fs::write(parent.join("localisation").join(name), "l_english:\n").unwrap();
         }
-        let budget = ScanBudget { max_files: 1, ..ScanBudget::default() };
+        let budget = ScanBudget {
+            max_files: 1,
+            ..ScanBudget::default()
+        };
         let mut status = ParentDiscoveryStatus::new(budget);
         let scripts = discover_parent_script_files_inner(
-            std::slice::from_ref(&parent), &primary, &[], None, &[], &[], &mut status,
+            std::slice::from_ref(&parent),
+            &primary,
+            &[],
+            None,
+            &[],
+            &[],
+            &mut status,
         );
         assert!(parent_discovery_result(scripts, status.incomplete).is_err());
         let mut status = ParentDiscoveryStatus::new(budget);
         let locs = discover_parent_localisation_files_inner(
-            std::slice::from_ref(&parent), &primary, &[], &[], &[], &mut status,
+            std::slice::from_ref(&parent),
+            &primary,
+            &[],
+            &[],
+            &[],
+            &mut status,
         );
         assert!(parent_discovery_result(locs, status.incomplete).is_err());
 
@@ -2424,14 +2578,35 @@ mod tests {
         std::fs::remove_file(parent.join("localisation/b_l_english.yml")).unwrap();
         let mut status = ParentDiscoveryStatus::new(budget);
         let scripts = discover_parent_script_files_inner(
-            std::slice::from_ref(&parent), &primary, &[], None, &[], &[], &mut status,
+            std::slice::from_ref(&parent),
+            &primary,
+            &[],
+            None,
+            &[],
+            &[],
+            &mut status,
         );
-        assert_eq!(parent_discovery_result(scripts, status.incomplete).unwrap().len(), 1);
+        assert_eq!(
+            parent_discovery_result(scripts, status.incomplete)
+                .unwrap()
+                .len(),
+            1
+        );
         let mut status = ParentDiscoveryStatus::new(budget);
         let locs = discover_parent_localisation_files_inner(
-            std::slice::from_ref(&parent), &primary, &[], &[], &[], &mut status,
+            std::slice::from_ref(&parent),
+            &primary,
+            &[],
+            &[],
+            &[],
+            &mut status,
         );
-        assert_eq!(parent_discovery_result(locs, status.incomplete).unwrap().len(), 1);
+        assert_eq!(
+            parent_discovery_result(locs, status.incomplete)
+                .unwrap()
+                .len(),
+            1
+        );
 
         let second = tmp.path().join("second_parent");
         std::fs::create_dir_all(second.join("common")).unwrap();
@@ -2441,12 +2616,23 @@ mod tests {
         let parents = [parent, second];
         let mut status = ParentDiscoveryStatus::new(budget);
         let scripts = discover_parent_script_files_inner(
-            &parents, &primary, &[], None, &[], &[], &mut status,
+            &parents,
+            &primary,
+            &[],
+            None,
+            &[],
+            &[],
+            &mut status,
         );
         assert!(parent_discovery_result(scripts, status.incomplete).is_err());
         let mut status = ParentDiscoveryStatus::new(budget);
         let locs = discover_parent_localisation_files_inner(
-            &parents, &primary, &[], &[], &[], &mut status,
+            &parents,
+            &primary,
+            &[],
+            &[],
+            &[],
+            &mut status,
         );
         assert!(parent_discovery_result(locs, status.incomplete).is_err());
     }
@@ -2462,24 +2648,38 @@ mod tests {
         let config = FileManagerConfig {
             root: roots[0].clone(),
             include_dirs: vec!["common".into()],
-            scan_budget: ScanBudget { max_files: 1, ..ScanBudget::default() },
+            scan_budget: ScanBudget {
+                max_files: 1,
+                ..ScanBudget::default()
+            },
             ..Default::default()
         };
-        let run = || discover_workspace(WorkspaceDiscoveryRequest {
-            roots: roots.to_vec(),
-            kinds: vec![FileKind::Script],
-            config: config.clone(),
-            policy: DiscoveryPolicy::Workspace,
-        }).unwrap();
+        let run = || {
+            discover_workspace(WorkspaceDiscoveryRequest {
+                roots: roots.to_vec(),
+                kinds: vec![FileKind::Script],
+                config: config.clone(),
+                policy: DiscoveryPolicy::Workspace,
+            })
+            .unwrap()
+        };
         let report = run();
         assert_eq!(report.files.len(), 1);
-        assert!(report.failures.iter().any(|failure| failure.is_file_count_budget()));
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|failure| failure.is_file_count_budget())
+        );
 
         std::fs::remove_file(roots[1].join("common/one.txt")).unwrap();
         std::fs::write(roots[1].join("common/README.txt"), "ignored").unwrap();
         let report = run();
         assert_eq!(report.files.len(), 1);
-        assert!(report.failures.is_empty(), "an excluded file after the exact cap is not exhaustion");
+        assert!(
+            report.failures.is_empty(),
+            "an excluded file after the exact cap is not exhaustion"
+        );
 
         std::fs::create_dir_all(roots[1].join("gfx")).unwrap();
         std::fs::write(roots[1].join("gfx/icon.dds"), "").unwrap();
@@ -2488,9 +2688,15 @@ mod tests {
             kinds: vec![FileKind::Script, FileKind::Resource],
             config,
             policy: DiscoveryPolicy::Workspace,
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(mixed.files.len(), 1);
-        assert!(mixed.failures.iter().any(|failure| failure.is_file_count_budget()));
+        assert!(
+            mixed
+                .failures
+                .iter()
+                .any(|failure| failure.is_file_count_budget())
+        );
     }
 
     #[test]
@@ -2522,12 +2728,8 @@ mod tests {
                 bytes: &bytes,
                 incomplete: &incomplete,
             };
-            let parsed = parse_discovered_files(
-                files.clone(),
-                &table,
-                use_cache.then_some(&cache),
-                &budget,
-            );
+            let parsed =
+                parse_discovered_files(files.clone(), &table, use_cache.then_some(&cache), &budget);
             (parsed.len(), incomplete.load(Ordering::Relaxed))
         };
         assert_eq!(
@@ -2556,16 +2758,25 @@ mod tests {
         let cache_dir = tmp.path().join("cache");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let files: Vec<_> = ["a.txt", "b.txt"].into_iter().map(|name| {
-            let path = root.join(name);
-            std::fs::write(&path, "x = 1\n").unwrap();
-            DiscoveredFile { path, logical_path: name.into() }
-        }).collect();
+        let files: Vec<_> = ["a.txt", "b.txt"]
+            .into_iter()
+            .map(|name| {
+                let path = root.join(name);
+                std::fs::write(&path, "x = 1\n").unwrap();
+                DiscoveredFile {
+                    path,
+                    logical_path: name.into(),
+                }
+            })
+            .collect();
         let table = StringTable::new();
         let cache = open_parse_cache(&cache_dir, "hoi4", &root).unwrap();
         let config = |max_bytes| FileManagerConfig {
             root: root.clone(),
-            scan_budget: ScanBudget { max_bytes, ..ScanBudget::default() },
+            scan_budget: ScanBudget {
+                max_bytes,
+                ..ScanBudget::default()
+            },
             ..Default::default()
         };
         assert!(parse_discovered_files_for_index(files.clone(), &table, None, &config(6)).is_err());
@@ -2577,7 +2788,10 @@ mod tests {
         );
         cache.wrote.store(false, Ordering::Relaxed);
         assert!(parse_discovered_files_for_index(files, &table, Some(&cache), &config(6)).is_err());
-        assert!(!cache.wrote.load(Ordering::Relaxed), "the accepted source came from cache");
+        assert!(
+            !cache.wrote.load(Ordering::Relaxed),
+            "the accepted source came from cache"
+        );
     }
 
     #[test]
@@ -2594,18 +2808,38 @@ mod tests {
             bytes: &bytes,
             incomplete: &incomplete,
         };
-        let loaded = load_or_parse(&path, &table, None, ParseCacheUse::Full, Some(&budget), None)
-            .unwrap().unwrap();
+        let loaded = load_or_parse(
+            &path,
+            &table,
+            None,
+            ParseCacheUse::Full,
+            Some(&budget),
+            None,
+        )
+        .unwrap()
+        .unwrap();
         let file = SourceFile {
             path: path.clone(),
             logical_path: "common/inline_scripts/test.txt".into(),
             fingerprint: loaded.fingerprint,
         };
         std::fs::write(&path, "x".repeat(64 * 1024)).unwrap();
-        assert!(load_or_parse(&path, &table, None, ParseCacheUse::Full, None,
-            Some(file.fingerprint.source_size)).is_err());
+        assert!(
+            load_or_parse(
+                &path,
+                &table,
+                None,
+                ParseCacheUse::Full,
+                None,
+                Some(file.fingerprint.source_size)
+            )
+            .is_err()
+        );
         let (_, inline_incomplete) = load_inline_scripts(&[file], &table);
-        assert!(inline_incomplete, "a changed inline script makes the run incomplete");
+        assert!(
+            inline_incomplete,
+            "a changed inline script makes the run incomplete"
+        );
     }
 
     /// The filename must survive both halves of the fingerprint verbatim where
@@ -2780,7 +3014,8 @@ mod tests {
         assert_eq!(scoped.files().len(), 1);
         assert_eq!(scoped.files()[0].lang, Some(Lang::English));
         std::fs::write(loc.join("names.csv"), "key;english;french\nfoo;Foo;Bar\n").unwrap();
-        let scoped_with_csv = load_loc_service(&[tmp.path()], Some(&[Lang::English]), &[], &[]).unwrap();
+        let scoped_with_csv =
+            load_loc_service(&[tmp.path()], Some(&[Lang::English]), &[], &[]).unwrap();
         assert!(scoped_with_csv.files().iter().any(|f| f.is_csv));
     }
 

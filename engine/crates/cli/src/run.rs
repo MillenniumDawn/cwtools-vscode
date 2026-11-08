@@ -309,7 +309,11 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
     };
     match index {
         Ok(index) => {
-            let aux = match cwtools_driver::build_vanilla_cache_aux_with_shadow(vanilla_dir, &index, &shadow) {
+            let aux = match cwtools_driver::build_vanilla_cache_aux_with_shadow(
+                vanilla_dir,
+                &index,
+                &shadow,
+            ) {
                 Ok(aux) => aux,
                 Err(error) => {
                     eprintln!("  warn: could not discover base-game auxiliary data: {error}");
@@ -328,13 +332,21 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
                     false
                 }
                 Err(e) => {
-                    eprintln!("  warn: could not write rebuilt cache {}: {}", cache_path.display(), e);
+                    eprintln!(
+                        "  warn: could not write rebuilt cache {}: {}",
+                        cache_path.display(),
+                        e
+                    );
                     true
                 }
             }
         }
         Err(e) => {
-            eprintln!("  warn: could not rebuild vanilla cache from {}: {}", vanilla_dir.display(), e);
+            eprintln!(
+                "  warn: could not rebuild vanilla cache from {}: {}",
+                vanilla_dir.display(),
+                e
+            );
             true
         }
     }

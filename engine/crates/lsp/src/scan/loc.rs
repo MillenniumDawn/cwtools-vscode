@@ -74,10 +74,12 @@ fn localisation_paths(
     policy: cwtools_driver::DiscoveryPolicy,
     budget: ScanBudget,
 ) -> Result<Vec<std::path::PathBuf>, FileError> {
-    Ok(localisation_files(roots, ignore_files, ignore_dirs, policy, budget)?
-        .into_iter()
-        .map(|file| file.path)
-        .collect())
+    Ok(
+        localisation_files(roots, ignore_files, ignore_dirs, policy, budget)?
+            .into_iter()
+            .map(|file| file.path)
+            .collect(),
+    )
 }
 
 /// Parent-mod loc files the workspace does not shadow (#786), in load order.
@@ -98,17 +100,19 @@ fn parent_localisation_paths(
         cwtools_driver::DiscoveryPolicy::Workspace,
         budget,
     )?;
-    Ok(cwtools_driver::discover_parent_localisation_files_with_budget(
-        parent_roots,
-        root_path,
-        &primary,
-        ignore_files,
-        ignore_dirs,
-        budget,
-    )?
-    .into_iter()
-    .map(|file| file.path)
-    .collect())
+    Ok(
+        cwtools_driver::discover_parent_localisation_files_with_budget(
+            parent_roots,
+            root_path,
+            &primary,
+            ignore_files,
+            ignore_dirs,
+            budget,
+        )?
+        .into_iter()
+        .map(|file| file.path)
+        .collect(),
+    )
 }
 
 pub(crate) type ParentLocKey = (Vec<std::path::PathBuf>, Option<Vec<Lang>>, Lang, bool, u64);
@@ -406,10 +410,8 @@ impl Backend {
                 cwtools_file_manager::file_manager::ScanBudget::default(),
                 parsed_languages,
             );
-            let mut idx = cwtools_localization::LocIndex::build_scoped(
-                &service,
-                loc_languages.as_deref(),
-            );
+            let mut idx =
+                cwtools_localization::LocIndex::build_scoped(&service, loc_languages.as_deref());
             for layer in parent.iter().chain(&vanilla) {
                 idx.merge_from(&layer.index, loc_languages.as_deref());
             }
@@ -561,7 +563,9 @@ mod tests {
     use crate::testing::test_backend;
 
     fn write_loc(root: &std::path::Path, name: &str, key: &str) -> std::path::PathBuf {
-        let path = root.join("localisation").join(format!("{name}_l_english.yml"));
+        let path = root
+            .join("localisation")
+            .join(format!("{name}_l_english.yml"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, format!("l_english:\n {key}:0 \"Hello\"\n")).unwrap();
         path
@@ -730,7 +734,10 @@ mod tests {
             assert_eq!(current_vanilla.0, previous_vanilla.0);
             assert!(Arc::ptr_eq(&current_vanilla.1, &previous_vanilla.1));
             assert_eq!(*backend.state.published_loc_uris.lock(), previous_uris);
-            assert_eq!(backend.state.vanilla_state.lock().loc_keys, Some(cached_keys));
+            assert_eq!(
+                backend.state.vanilla_state.lock().loc_keys,
+                Some(cached_keys)
+            );
             let key: Arc<str> = "workspace_key".into();
             assert!(backend.state.loc_text.read().get(&key).is_some());
             assert!(backend.state.loc_locations.read().contains_key(&key));

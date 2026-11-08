@@ -178,7 +178,11 @@ pub(super) fn run(args: FixArgs) {
 
     // Same guards as `validate`: a failed walk, an empty ruleset, or an
     // empty file set must not read as "nothing needed fixing".
-    if fix_incomplete(session.discovery_failed, session.is_incomplete(), rebuild_incomplete) {
+    if fix_incomplete(
+        session.discovery_failed,
+        session.is_incomplete(),
+        rebuild_incomplete,
+    ) {
         eprintln!("error: cannot plan fixes from incomplete inputs");
         std::process::exit(EXIT_DISCOVERY_FAILED);
     }
@@ -213,7 +217,11 @@ pub(super) fn run(args: FixArgs) {
             }
         }
     }
-    if fix_incomplete(session.discovery_failed, session.is_incomplete(), rebuild_incomplete) {
+    if fix_incomplete(
+        session.discovery_failed,
+        session.is_incomplete(),
+        rebuild_incomplete,
+    ) {
         eprintln!("error: cannot apply or preview fixes after incomplete validation");
         std::process::exit(EXIT_DISCOVERY_FAILED);
     }
@@ -252,7 +260,9 @@ pub(super) fn run(args: FixArgs) {
     for (file, planned) in by_file {
         let file_display = file.display().to_string();
         let text = match indexed_sources.get(file.as_path()) {
-            Some(source) => session.read_source_utf8(source).map_err(|error| error.to_string()),
+            Some(source) => session
+                .read_source_utf8(source)
+                .map_err(|error| error.to_string()),
             None => std::fs::read_to_string(&file).map_err(|error| error.to_string()),
         };
         let text = match text {
@@ -312,7 +322,11 @@ pub(super) fn run(args: FixArgs) {
     }
 }
 
-fn fix_incomplete(discovery_failed: bool, validation_incomplete: bool, rebuild_incomplete: bool) -> bool {
+fn fix_incomplete(
+    discovery_failed: bool,
+    validation_incomplete: bool,
+    rebuild_incomplete: bool,
+) -> bool {
     discovery_failed || validation_incomplete || rebuild_incomplete
 }
 
@@ -415,9 +429,17 @@ mod tests {
                 assert!(!session.is_incomplete());
                 std::fs::write(&path, changed).unwrap();
             }
-            let source = session.parsed_files().iter().find(|source| source.path == path).unwrap();
+            let source = session
+                .parsed_files()
+                .iter()
+                .find(|source| source.path == path)
+                .unwrap();
             assert!(session.read_source_utf8(source).is_err());
-            assert!(fix_incomplete(session.discovery_failed, session.is_incomplete(), false));
+            assert!(fix_incomplete(
+                session.discovery_failed,
+                session.is_incomplete(),
+                false
+            ));
             assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
         }
     }
@@ -436,11 +458,21 @@ mod tests {
             game: Game::Hoi4,
             rules: RulesInput::File(rules),
             directory: root,
-            parent_roots: vec![], vanilla: None, vanilla_cache: None, vanilla_cache_auto: None,
-            ignore_files: &[], ignore_dirs: &[], loc_languages: None,
-            case_sensitive_files: false, on_rules_diagnostic: None,
+            parent_roots: vec![],
+            vanilla: None,
+            vanilla_cache: None,
+            vanilla_cache_auto: None,
+            ignore_files: &[],
+            ignore_dirs: &[],
+            loc_languages: None,
+            case_sensitive_files: false,
+            on_rules_diagnostic: None,
         });
-        let source = session.parsed_files().iter().find(|source| source.path == path).unwrap();
+        let source = session
+            .parsed_files()
+            .iter()
+            .find(|source| source.path == path)
+            .unwrap();
         assert!(session.read_source_utf8(source).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"x = \xFF\n");
     }
