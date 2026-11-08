@@ -1748,7 +1748,11 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            assert!(!backend.load_rules_config_with_budget(&initial, budget).await);
+            assert!(
+                !backend
+                    .load_rules_config_with_budget(&initial, budget)
+                    .await
+            );
             assert!(Arc::ptr_eq(
                 &previous,
                 backend.state.rules.read().ruleset.as_ref().unwrap()
@@ -1757,13 +1761,25 @@ mod tests {
 
         // Missing input reports a retryable I/O failure and preserves the
         // previously loaded nonempty rules instead of installing partial data.
-        std::fs::write(&rule, "types = { type[custom] = { path = common/custom } }\n").unwrap();
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = common/custom } }\n",
+        )
+        .unwrap();
         assert!(backend.load_rules_config(&initial).await);
         let missing = temp.path().join("missing");
         backend.state.config.write().rules_dir = Some(missing.clone());
         assert!(!backend.load_rules_config(&missing).await);
         assert!(
-            !backend.state.rules.read().ruleset.as_ref().unwrap().types.is_empty(),
+            !backend
+                .state
+                .rules
+                .read()
+                .ruleset
+                .as_ref()
+                .unwrap()
+                .types
+                .is_empty(),
             "an acquisition failure must retain the last good rules"
         );
     }
