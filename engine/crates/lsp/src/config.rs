@@ -1150,7 +1150,8 @@ impl Backend {
             || ignore_changed
             || localisation_changed
             || hover_all_changed
-            || workspace_wide_changed;
+            || workspace_wide_changed
+            || codes_changed;
         {
             let mut cfg = self.state.config.write();
             if let Some(files) = files {
@@ -1203,7 +1204,7 @@ impl Backend {
         if ignore_changed {
             *self.state.loc_discovery_cache.lock() = None;
         }
-        if rescan || codes_changed {
+        if rescan {
             self.state
                 .settings_generation
                 .fetch_add(1, Ordering::SeqCst);
@@ -1221,9 +1222,6 @@ impl Backend {
             if !self.validate_entire_workspace(false).await {
                 self.spawn_deferred_revalidation("didChangeConfiguration");
             }
-        } else if codes_changed && self.state.index_ready.load(Ordering::Relaxed) {
-            self.revalidate_all_open_docs(crate::ValidateTrigger::ConfigChange)
-                .await;
         }
     }
 

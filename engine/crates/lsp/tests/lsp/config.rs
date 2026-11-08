@@ -29,55 +29,34 @@ fn config_server() -> TestServer {
 
 #[test]
 fn test_config_no_op_skips_revalidate_then_real_change_runs() {
-    // Identical didChangeConfiguration payloads must not trigger a revalidate on
-    // the second send; a genuinely changed ignoredErrorCodes must trigger
-    // exactly one `(configChange)` pass over the single open document.
-    //
-    // One open game file means `revalidate_all_open_docs` has exactly one doc to
-    // validate — one `(configChange)` log per real pass.
+    // A changed code list must refresh closed files as well as open documents.
+    // An identical payload still does no work.
     let mut server = config_server();
     let quiet = Duration::from_millis(700);
-    let budget = Duration::from_secs(5);
+    let budget = Duration::from_secs(10);
+    let before = server.profiling_log().matches("workspace_scan_start").count();
 
-    // Counts are cumulative over the non-draining profiling buffer, so each
-    // window asserts the running total of `(configChange)` validations.
-
-    // First send changes the (empty) live codes → one configChange pass.
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW999"] }));
     server.drain_after_first(quiet, budget);
-    let log1 = server.profiling_log();
-    assert_eq!(
-        count_validate_log(&log1, "configChange"),
-        1,
-        "first (changed) config should revalidate the open doc once"
-    );
-    // The open doc's AST is current (opened, never edited), so the revalidate
-    // must reuse the stored AST via the prebuilt path — no fresh parse.
-    assert!(
-        log1.contains("(configChange)") && log1.contains("(prebuilt, no reparse)"),
-        "an unedited open doc should revalidate from its stored AST, not re-parse: {log1}"
-    );
+    let after_first = server.profiling_log().matches("workspace_scan_start").count();
+    assert_eq!(after_first, before + 1);
 
-    // Identical payload → no-op guard skips the revalidate (total stays 1).
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW999"] }));
     server.drain_until_quiet(quiet, budget);
-    let log2 = server.profiling_log();
     assert_eq!(
-        count_validate_log(&log2, "configChange"),
-        1,
-        "an identical config re-send must not revalidate"
+        server.profiling_log().matches("workspace_scan_start").count(),
+        after_first,
+        "an identical config re-send must not rescan"
     );
 
-    // A real change → one more configChange pass (total 2).
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW998"] }));
     server.drain_after_first(quiet, budget);
-    let log3 = server.profiling_log();
-    server.stop();
     assert_eq!(
-        count_validate_log(&log3, "configChange"),
-        2,
-        "a genuinely changed config should revalidate once"
+        server.profiling_log().matches("workspace_scan_start").count(),
+        after_first + 1,
+        "a genuinely changed code list must rescan"
     );
+    server.stop();
 }
 
 #[test]
@@ -182,6 +161,38 @@ fn test_config_partial_payload_keeps_ignore_lists() {
         baseline_scans + 1,
         "the identical full payload must not run another full scan"
     );
+}
+
+#[test]
+fn test_ignored_code_changes_refresh_closed_file_diagnostics() {
+    let loc_rel = "localisation/code_filter_l_english.yml";
+    let mut server = storm_start(
+        storm_builder()
+            .file("common/decisions/scan.txt", STORM_FILE)
+            .file(loc_rel, bom("l_english:\n broken:0 \"unterminated\n")),
+    );
+    let uri = server.uri(loc_rel);
+    server.reindex_until_scan_starts();
+    server.read_until_within(Duration::from_secs(10), "initial closed diagnostic", |v| {
+        v["method"] == "textDocument/publishDiagnostics"
+            && v["params"]["uri"] == uri
+            && publish_has_code(v, "CW268")
+    });
+
+    change_config(&mut server, json!({ "ignoredErrorCodes": ["CW268"] }));
+    server.read_until_within(Duration::from_secs(10), "suppressed closed diagnostic", |v| {
+        v["method"] == "textDocument/publishDiagnostics"
+            && v["params"]["uri"] == uri
+            && !publish_has_code(v, "CW268")
+    });
+
+    change_config(&mut server, json!({ "ignoredErrorCodes": [] }));
+    server.read_until_within(Duration::from_secs(10), "restored closed diagnostic", |v| {
+        v["method"] == "textDocument/publishDiagnostics"
+            && v["params"]["uri"] == uri
+            && publish_has_code(v, "CW268")
+    });
+    server.stop();
 }
 
 #[test]
