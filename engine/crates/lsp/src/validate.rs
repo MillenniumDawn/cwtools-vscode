@@ -6131,7 +6131,10 @@ mod ignored_tests {
                 published |= params.uri.as_str() == uri && params.version == Some(2);
             }
         }
-        assert!(published, "the current name must select the document for a sweep");
+        assert!(
+            published,
+            "the current name must select the document for a sweep"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
