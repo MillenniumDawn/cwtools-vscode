@@ -6,6 +6,7 @@
 
 #### Engine
 
+* Initialize empty language-named localization files with a BOM and language header when creating missing keys, including folded actions. (#1255)
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
 * Fail `cwtools parse <dir>` when a rules directory contains error-severity diagnostics, preserving its summary and errors. Loader warnings still exit successfully. (#1248)
