@@ -1331,8 +1331,12 @@ impl Backend {
     }
 
     async fn cache_vanilla_command(&self, token: Option<ProgressToken>) -> Result<Option<Value>> {
-        self.cache_vanilla_command_with(token, |backend| backend.merge_pending_vanilla_index(), None)
-            .await
+        self.cache_vanilla_command_with(
+            token,
+            |backend| backend.merge_pending_vanilla_index(),
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn cache_vanilla_command_with<F>(
@@ -1342,7 +1346,10 @@ impl Backend {
         loader: Option<crate::scan::VanillaLoader>,
     ) -> Result<Option<Value>>
     where
-        F: FnOnce(&Backend) -> std::result::Result<(), cwtools_file_manager::file_manager::FileError>
+        F: FnOnce(
+                &Backend,
+            )
+                -> std::result::Result<(), cwtools_file_manager::file_manager::FileError>
             + Send,
     {
         let progress =
@@ -1359,10 +1366,14 @@ impl Backend {
         // exits: the normal one below, and the client cancelling the command mid-index (#204).
         let guard = crate::scan::ScanGuard::for_command(self);
         let ensured = match loader {
-            Some(loader) => self.ensure_vanilla_index_with_loader(
-                Some(&progress), true, false, Some(loader),
-            ).await,
-            None => self.ensure_vanilla_index(Some(&progress), true, false).await,
+            Some(loader) => {
+                self.ensure_vanilla_index_with_loader(Some(&progress), true, false, Some(loader))
+                    .await
+            }
+            None => {
+                self.ensure_vanilla_index(Some(&progress), true, false)
+                    .await
+            }
         };
         let result = match ensured {
             Ok(()) => tokio::task::block_in_place(|| merge_vanilla(self)),
@@ -1635,18 +1646,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         backend.state.config.write().vanilla_dir = Some(tmp.path().join("missing"));
         *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
-        backend.state.loading_bar_active.store(true, Ordering::SeqCst);
+        backend
+            .state
+            .loading_bar_active
+            .store(true, Ordering::SeqCst);
         let path = std::path::PathBuf::from("budget-exceeded");
         let outcome = backend
-            .cache_vanilla_command_with(None, |_| {
-                Err(cwtools_file_manager::file_manager::FileError::FileCountBudget(path))
-            }, None)
+            .cache_vanilla_command_with(
+                None,
+                |_| Err(cwtools_file_manager::file_manager::FileError::FileCountBudget(path)),
+                None,
+            )
             .await
             .unwrap();
         let Some(Value::String(message)) = outcome else {
             panic!("rebuild must return a status message");
         };
-        assert!(message.starts_with("Vanilla cache rebuild failed:"), "{message}");
+        assert!(
+            message.starts_with("Vanilla cache rebuild failed:"),
+            "{message}"
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
     }
@@ -1668,9 +1687,14 @@ mod tests {
         }
         backend.set_ruleset(RuleSet::new());
         *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
-        let failed = backend.cache_vanilla_command_with(
-            None, |backend| backend.merge_pending_vanilla_index(), Some(crate::scan::test_capped_vanilla_loader),
-        ).await.unwrap();
+        let failed = backend
+            .cache_vanilla_command_with(
+                None,
+                |backend| backend.merge_pending_vanilla_index(),
+                Some(crate::scan::test_capped_vanilla_loader),
+            )
+            .await
+            .unwrap();
         assert!(matches!(failed, Some(Value::String(message))
             if message.starts_with("Vanilla cache rebuild failed:")));
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
@@ -1679,10 +1703,18 @@ mod tests {
         assert!(!backend.state.info_service.read().type_index.complete);
         assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
         std::fs::remove_file(resources.join("two.dds")).unwrap();
-        let recovered = backend.cache_vanilla_command_with(
-            None, |backend| backend.merge_pending_vanilla_index(), Some(crate::scan::test_capped_vanilla_loader),
-        ).await.unwrap();
-        assert_eq!(recovered, Some(Value::String("Vanilla cache rebuilt.".into())));
+        let recovered = backend
+            .cache_vanilla_command_with(
+                None,
+                |backend| backend.merge_pending_vanilla_index(),
+                Some(crate::scan::test_capped_vanilla_loader),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered,
+            Some(Value::String("Vanilla cache rebuilt.".into()))
+        );
         assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
     }
 
@@ -2298,7 +2330,11 @@ mod tests {
                 stage_started.recv().unwrap();
                 ack_stage.send(()).unwrap();
                 backend_ref.stage_vanilla_payload(vanilla_data(
-                    path_ref, "new_instance", "new_var", "new_loc", "new_gui",
+                    path_ref,
+                    "new_instance",
+                    "new_var",
+                    "new_loc",
+                    "new_gui",
                 ));
                 backend_ref.merge_pending_vanilla_index().unwrap();
             });
@@ -2306,9 +2342,13 @@ mod tests {
                 start_stage.send(()).unwrap();
                 // Wait only until the stage thread starts, never for its merge while
                 // this thread owns the publication fence.
-                stage_acknowledged.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-                assert!(backend.state.vanilla_state.try_lock().is_none(),
-                    "the publication fence must cover auxiliary cleanup");
+                stage_acknowledged
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                assert!(
+                    backend.state.vanilla_state.try_lock().is_none(),
+                    "the publication fence must cover auxiliary cleanup"
+                );
             });
         });
         let index = backend.state.info_service.read();

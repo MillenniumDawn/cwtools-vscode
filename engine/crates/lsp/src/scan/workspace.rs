@@ -328,7 +328,10 @@ impl Backend {
         *self.state.last_scan_fingerprint.lock() = None;
     }
 
-    async fn report_file_index_failure<F: std::future::Future<Output = ()>>(&self, notification: F) {
+    async fn report_file_index_failure<F: std::future::Future<Output = ()>>(
+        &self,
+        notification: F,
+    ) {
         self.invalidate_vanilla_scan();
         notification.await;
     }
@@ -374,9 +377,14 @@ impl Backend {
         progress: Option<&CommandProgress>,
         publish_throttle: WorkspacePublishThrottle,
     ) -> bool {
-        self.validate_entire_workspace_inner_with(quiet, progress, publish_throttle, |backend| {
-            backend.merge_pending_vanilla_index_versioned()
-        }, None).await
+        self.validate_entire_workspace_inner_with(
+            quiet,
+            progress,
+            publish_throttle,
+            |backend| backend.merge_pending_vanilla_index_versioned(),
+            None,
+        )
+        .await
     }
 
     async fn validate_entire_workspace_inner_with<F>(
@@ -926,9 +934,10 @@ impl Backend {
         self.enter_phase(&mut phase, progress, quiet, Phase::Vanilla, 0)
             .await;
         let vanilla_result = match loader {
-            Some(loader) => self.ensure_vanilla_index_with_loader(
-                progress, false, quiet, Some(loader),
-            ).await,
+            Some(loader) => {
+                self.ensure_vanilla_index_with_loader(progress, false, quiet, Some(loader))
+                    .await
+            }
             None => self.ensure_vanilla_index(progress, false, quiet).await,
         };
         if let Err(error) = vanilla_result {
@@ -936,7 +945,8 @@ impl Backend {
             self.report_file_index_failure(self.client.log_message(
                 MessageType::ERROR,
                 format!("error: base-game indexing failed: {error}"),
-            )).await;
+            ))
+            .await;
             return false;
         }
         if cancel.is_cancelled() {
@@ -1722,15 +1732,22 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn file_index_failure_invalidates_before_a_blocked_notification() {
         let (backend, _tmp) = setup_workspace(None);
-        assert_eq!(*backend.state.last_scan_fingerprint.lock(), Some(SENTINEL_FP));
+        assert_eq!(
+            *backend.state.last_scan_fingerprint.lock(),
+            Some(SENTINEL_FP)
+        );
         let notification = async {
             assert!(backend.state.last_scan_fingerprint.lock().is_none());
             std::future::pending::<()>().await;
         };
-        assert!(tokio::time::timeout(
-            std::time::Duration::from_millis(20),
-            backend.report_file_index_failure(notification),
-        ).await.is_err());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                backend.report_file_index_failure(notification),
+            )
+            .await
+            .is_err()
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
     }
 
@@ -1755,19 +1772,25 @@ mod tests {
         *backend.state.hold_gate.lock() = Some(gate.clone());
         let scan_backend = clone_backend(&backend);
         let scan = tokio::spawn(async move {
-            scan_backend.validate_entire_workspace_tracked(false, None).await
+            scan_backend
+                .validate_entire_workspace_tracked(false, None)
+                .await
         });
         wait_arrived(&gate, HoldPoint::ScanAfterVanilla).await;
-        let command = backend.cache_vanilla_command_with(
-            None,
-            |backend| backend.merge_pending_vanilla_index(),
-            Some(crate::scan::test_capped_vanilla_loader),
-        ).await;
+        let command = backend
+            .cache_vanilla_command_with(
+                None,
+                |backend| backend.merge_pending_vanilla_index(),
+                Some(crate::scan::test_capped_vanilla_loader),
+            )
+            .await;
         let fingerprint_during_failure = *backend.state.last_scan_fingerprint.lock();
         gate.release();
         let outcome = scan.await.expect("scan panicked");
-        assert!(matches!(command.unwrap(), Some(serde_json::Value::String(message))
-            if message.starts_with("Vanilla cache rebuild failed:")));
+        assert!(
+            matches!(command.unwrap(), Some(serde_json::Value::String(message))
+            if message.starts_with("Vanilla cache rebuild failed:"))
+        );
         assert!(fingerprint_during_failure.is_none());
         assert_eq!(outcome, ScanOutcome::Cancelled);
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
@@ -1778,11 +1801,17 @@ mod tests {
         // Force a cold retry through the same loader rather than an older disk cache.
         std::fs::remove_dir_all(workspace.path().join("cache")).unwrap();
         std::fs::remove_file(resources.join("two.dds")).unwrap();
-        assert!(backend.validate_entire_workspace_inner_with(
-            true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-            |backend| backend.merge_pending_vanilla_index_versioned(),
-            Some(crate::scan::test_capped_vanilla_loader),
-        ).await);
+        assert!(
+            backend
+                .validate_entire_workspace_inner_with(
+                    true,
+                    None,
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                    |backend| backend.merge_pending_vanilla_index_versioned(),
+                    Some(crate::scan::test_capped_vanilla_loader),
+                )
+                .await
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_some());
         assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
         assert!(backend.state.info_service.read().type_index.complete);
@@ -1804,24 +1833,48 @@ mod tests {
             config.vanilla_dir = Some(vanilla.path().to_path_buf());
             config.cache_dir = Some(workspace.path().join("cache"));
         }
-        assert!(!backend.validate_entire_workspace_inner_with(
-            false, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-            |backend| backend.merge_pending_vanilla_index_versioned(), Some(crate::scan::test_capped_vanilla_loader),
-        ).await, "cold loader failure must fail the scan");
+        assert!(
+            !backend
+                .validate_entire_workspace_inner_with(
+                    false,
+                    None,
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                    |backend| backend.merge_pending_vanilla_index_versioned(),
+                    Some(crate::scan::test_capped_vanilla_loader),
+                )
+                .await,
+            "cold loader failure must fail the scan"
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         assert!(backend.state.vanilla_state.lock().index.is_none());
         assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
         assert!(!backend.state.info_service.read().type_index.complete);
-        assert!(!backend.validate_entire_workspace_inner_with(
-            true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-            |backend| backend.merge_pending_vanilla_index_versioned(), Some(crate::scan::test_capped_vanilla_loader),
-        ).await, "the same cap still fails while both resources exist");
+        assert!(
+            !backend
+                .validate_entire_workspace_inner_with(
+                    true,
+                    None,
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                    |backend| backend.merge_pending_vanilla_index_versioned(),
+                    Some(crate::scan::test_capped_vanilla_loader),
+                )
+                .await,
+            "the same cap still fails while both resources exist"
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         std::fs::remove_file(resources.join("two.dds")).unwrap();
-        assert!(backend.validate_entire_workspace_inner_with(
-            true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-            |backend| backend.merge_pending_vanilla_index_versioned(), Some(crate::scan::test_capped_vanilla_loader),
-        ).await, "quiet scan must retry the cold loader");
+        assert!(
+            backend
+                .validate_entire_workspace_inner_with(
+                    true,
+                    None,
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                    |backend| backend.merge_pending_vanilla_index_versioned(),
+                    Some(crate::scan::test_capped_vanilla_loader),
+                )
+                .await,
+            "quiet scan must retry the cold loader"
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_some());
         let info = backend.state.info_service.read();
         assert!(info.type_index.complete);
@@ -1830,23 +1883,27 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_index_budget_failure_retries_quiet_scan_after_resources_removed() {
-        use cwtools_file_manager::file_manager::{FileError, FileKind, FileManagerConfig, ScanBudget};
+        use cwtools_file_manager::file_manager::{
+            FileError, FileKind, FileManagerConfig, ScanBudget,
+        };
         use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
 
         let (backend, tmp) = setup_workspace(None);
         backend.state.config.write().workspace_roots = vec![tmp.path().to_path_buf()];
-        let stage = || backend.stage_vanilla_payload(VanillaCacheData {
-            per_type: HashMap::new(),
-            aux: VanillaCacheAux {
-                loc_keys: Vec::new(),
-                file_paths: vec!["gfx/vanilla_kept.dds".into()],
-                var_names: Vec::new(),
-                complex_enum_values: Vec::new(),
-                value_set_values: Vec::new(),
-                scripted_loc_names: Vec::new(),
-                scripted_gui_names: Vec::new(),
-            },
-        });
+        let stage = || {
+            backend.stage_vanilla_payload(VanillaCacheData {
+                per_type: HashMap::new(),
+                aux: VanillaCacheAux {
+                    loc_keys: Vec::new(),
+                    file_paths: vec!["gfx/vanilla_kept.dds".into()],
+                    var_names: Vec::new(),
+                    complex_enum_values: Vec::new(),
+                    value_set_values: Vec::new(),
+                    scripted_loc_names: Vec::new(),
+                    scripted_gui_names: Vec::new(),
+                },
+            })
+        };
         stage();
         assert!(backend.validate_entire_workspace(false).await);
         let prior = *backend.state.last_scan_fingerprint.lock();
@@ -1864,43 +1921,82 @@ mod tests {
                 |root, parents, ignore_files, ignore_dirs, vanilla_paths, shadow| {
                     let config = FileManagerConfig {
                         include_dirs: vec![".".into()],
-                        scan_budget: ScanBudget { max_files: 4, ..ScanBudget::default() },
+                        scan_budget: ScanBudget {
+                            max_files: 4,
+                            ..ScanBudget::default()
+                        },
                         ..Default::default()
                     };
-                    let report = cwtools_driver::discover_workspace(cwtools_driver::WorkspaceDiscoveryRequest {
-                        roots: vec![root.to_path_buf()],
-                        kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
-                        config,
-                        policy: cwtools_driver::DiscoveryPolicy::Workspace,
-                    })?;
-                    if let Some(failure) = report.failures.iter().find(|f| f.is_file_count_budget()) {
+                    let report = cwtools_driver::discover_workspace(
+                        cwtools_driver::WorkspaceDiscoveryRequest {
+                            roots: vec![root.to_path_buf()],
+                            kinds: vec![
+                                FileKind::Script,
+                                FileKind::Localisation,
+                                FileKind::Resource,
+                            ],
+                            config,
+                            policy: cwtools_driver::DiscoveryPolicy::Workspace,
+                        },
+                    )?;
+                    if let Some(failure) = report.failures.iter().find(|f| f.is_file_count_budget())
+                    {
                         return Err(FileError::FileCountBudget(failure.path.clone()));
                     }
                     cwtools_driver::build_file_index_with_vanilla_shadow(
-                        root, parents, ignore_files, ignore_dirs,
+                        root,
+                        parents,
+                        ignore_files,
+                        ignore_dirs,
                         cwtools_driver::VanillaFiles::Cached(Cow::Borrowed(vanilla_paths)),
-                        false, shadow,
+                        false,
+                        shadow,
                     )
                 },
             )
         }
-        let failed = backend.validate_entire_workspace_inner_with(
-            false, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE, capped_merge, None,
-        ).await;
+        let failed = backend
+            .validate_entire_workspace_inner_with(
+                false,
+                None,
+                DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                capped_merge,
+                None,
+            )
+            .await;
         assert!(!failed, "an incomplete auxiliary walk must fail the scan");
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         assert!(!backend.state.info_service.read().type_index.complete);
-        assert!(backend.state.vanilla_state.lock().index.is_some(), "retain the staged payload");
+        assert!(
+            backend.state.vanilla_state.lock().index.is_some(),
+            "retain the staged payload"
+        );
 
         // The same cap still fails on a quiet retry until the resource files are removed.
-        assert!(!backend.validate_entire_workspace_inner_with(
-            true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE, capped_merge, None,
-        ).await);
+        assert!(
+            !backend
+                .validate_entire_workspace_inner_with(
+                    true,
+                    None,
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                    capped_merge,
+                    None,
+                )
+                .await
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         std::fs::remove_dir_all(resources).unwrap();
-        assert!(backend.validate_entire_workspace_inner_with(
-            true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE, capped_merge, None,
-        ).await);
+        assert!(
+            backend
+                .validate_entire_workspace_inner_with(
+                    true,
+                    None,
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                    capped_merge,
+                    None,
+                )
+                .await
+        );
         let info = backend.state.info_service.read();
         assert!(info.type_index.complete, "quiet scan must retry the merge");
         assert!(info.type_index.file_index.contains("gfx/vanilla_kept.dds"));

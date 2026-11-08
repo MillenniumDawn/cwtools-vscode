@@ -95,7 +95,10 @@ pub(crate) fn test_capped_vanilla_loader(
     use cwtools_file_manager::file_manager::{FileKind, FileManagerConfig, ScanBudget};
     let config = FileManagerConfig {
         include_dirs: vec![".".into()],
-        scan_budget: ScanBudget { max_files: 1, ..ScanBudget::default() },
+        scan_budget: ScanBudget {
+            max_files: 1,
+            ..ScanBudget::default()
+        },
         ..Default::default()
     };
     let report = cwtools_driver::discover_workspace(cwtools_driver::WorkspaceDiscoveryRequest {
@@ -104,7 +107,11 @@ pub(crate) fn test_capped_vanilla_loader(
         config,
         policy: cwtools_driver::DiscoveryPolicy::Vanilla,
     })?;
-    if let Some(failure) = report.failures.iter().find(|failure| failure.is_file_count_budget()) {
+    if let Some(failure) = report
+        .failures
+        .iter()
+        .find(|failure| failure.is_file_count_budget())
+    {
         return Err(FileError::FileCountBudget(failure.path.clone()));
     }
     index_vanilla_dir_with_shadow(dir, ruleset, table, parse_cache_dir, game, shadow)
@@ -281,7 +288,8 @@ impl Backend {
             Option<&cwtools_file_manager::file_manager::LayerShadow>,
         ) -> Result<cwtools_info::FileIndex, FileError>,
     {
-        self.merge_pending_vanilla_index_with_revision(build_file_index).map(|_| ())
+        self.merge_pending_vanilla_index_with_revision(build_file_index)
+            .map(|_| ())
     }
 
     pub(super) fn merge_pending_vanilla_index_with_revision<F>(
@@ -299,7 +307,14 @@ impl Backend {
         ) -> Result<cwtools_info::FileIndex, FileError>,
     {
         let settings_generation = self.state.settings_generation.load(Ordering::SeqCst);
-        let (var_names, scripted_loc_names, scripted_gui_names, file_paths, attempt_revision, publication_revision) = {
+        let (
+            var_names,
+            scripted_loc_names,
+            scripted_gui_names,
+            file_paths,
+            attempt_revision,
+            publication_revision,
+        ) = {
             // Snapshot the auxiliary payload without taking its index. An older
             // walk must not consume or publish it after a newer stage or settings change.
             let mut vanilla = self.state.vanilla_state.lock();
@@ -313,7 +328,14 @@ impl Backend {
                 vanilla.publication_revision,
             )
         };
-        let (vanilla_dir, workspace_roots, parent_roots, ignore_files, ignore_dirs, replacement_shadow) = {
+        let (
+            vanilla_dir,
+            workspace_roots,
+            parent_roots,
+            ignore_files,
+            ignore_dirs,
+            replacement_shadow,
+        ) = {
             let config = self.state.config.read();
             (
                 config.vanilla_dir.clone(),
@@ -329,46 +351,52 @@ impl Backend {
         // Build the fallible auxiliary index before consuming or publishing the staged
         // payload. A failed walk must leave it available for a later scan to retry.
         let config = workspace_roots.first().cloned().map(|workspace_root| {
-            (workspace_root, parent_roots.clone(), ignore_files.clone(), ignore_dirs.clone())
+            (
+                workspace_root,
+                parent_roots.clone(),
+                ignore_files.clone(),
+                ignore_dirs.clone(),
+            )
         });
-        let file_index = if let (
-            Some((workspace_root, parent_roots, ignore_files, ignore_dirs)),
-            Some(paths),
-        ) = (config, file_paths.as_ref())
-        {
-            match build_file_index(
-                &workspace_root,
-                &parent_roots,
-                &ignore_files,
-                &ignore_dirs,
-                paths,
-                replacement_shadow.as_ref(),
-            ) {
-                Ok(index) => Some(index),
-                Err(error) => {
-                    // A staged payload gets a fresh Arc, even if its paths are equal.
-                    // Keep this lock through invalidation so a newer stage cannot be
-                    // installed between the identity check and the state update.
-                    let vanilla = self.state.vanilla_state.lock();
-                    let same_payload = vanilla.file_paths.as_ref().is_some_and(|current| {
-                        Arc::ptr_eq(current, paths)
-                    });
-                    let same_settings = self.state.settings_generation.load(Ordering::SeqCst)
-                        == settings_generation;
-                    let same_publication = vanilla.publication_revision == publication_revision;
-                    if same_payload && same_settings && same_publication {
-                        let mut vanilla = vanilla;
-                        vanilla.publication_revision = vanilla.publication_revision.wrapping_add(1);
-                        let mut info = self.state.info_service.write();
-                        Arc::make_mut(&mut info.type_index).complete = false;
-                        self.state.vanilla_merged.store(false, Ordering::SeqCst);
+        let file_index =
+            if let (Some((workspace_root, parent_roots, ignore_files, ignore_dirs)), Some(paths)) =
+                (config, file_paths.as_ref())
+            {
+                match build_file_index(
+                    &workspace_root,
+                    &parent_roots,
+                    &ignore_files,
+                    &ignore_dirs,
+                    paths,
+                    replacement_shadow.as_ref(),
+                ) {
+                    Ok(index) => Some(index),
+                    Err(error) => {
+                        // A staged payload gets a fresh Arc, even if its paths are equal.
+                        // Keep this lock through invalidation so a newer stage cannot be
+                        // installed between the identity check and the state update.
+                        let vanilla = self.state.vanilla_state.lock();
+                        let same_payload = vanilla
+                            .file_paths
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(current, paths));
+                        let same_settings = self.state.settings_generation.load(Ordering::SeqCst)
+                            == settings_generation;
+                        let same_publication = vanilla.publication_revision == publication_revision;
+                        if same_payload && same_settings && same_publication {
+                            let mut vanilla = vanilla;
+                            vanilla.publication_revision =
+                                vanilla.publication_revision.wrapping_add(1);
+                            let mut info = self.state.info_service.write();
+                            Arc::make_mut(&mut info.type_index).complete = false;
+                            self.state.vanilla_merged.store(false, Ordering::SeqCst);
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         // Match validation's info -> config order. Taking config first and then
         // waiting for info can deadlock behind a queued config writer.
         let mut vanilla = self.state.vanilla_state.lock();
@@ -487,7 +515,8 @@ impl Backend {
         force_rebuild: bool,
         quiet: bool,
     ) -> Result<(), FileError> {
-        self.ensure_vanilla_index_with_loader(progress, force_rebuild, quiet, None).await
+        self.ensure_vanilla_index_with_loader(progress, force_rebuild, quiet, None)
+            .await
     }
 
     pub(crate) async fn ensure_vanilla_index_with_loader(
@@ -627,16 +656,36 @@ impl Backend {
         let cache_game = game.clone();
         let shadow = replacement_shadow.clone();
         let join_result = tokio::task::spawn_blocking(move || {
-            let shadow = if has_vanilla_replacements { shadow.as_ref() } else { None };
+            let shadow = if has_vanilla_replacements {
+                shadow.as_ref()
+            } else {
+                None
+            };
             if let Some(loader) = loader {
-                loader(&index_dir, &ruleset, &table, parse_cache_dir.as_deref(), &cache_game, shadow)
+                loader(
+                    &index_dir,
+                    &ruleset,
+                    &table,
+                    parse_cache_dir.as_deref(),
+                    &cache_game,
+                    shadow,
+                )
             } else if let Some(shadow) = shadow {
                 index_vanilla_dir_with_shadow(
-                    &index_dir, &ruleset, &table, parse_cache_dir.as_deref(), &cache_game, Some(shadow),
+                    &index_dir,
+                    &ruleset,
+                    &table,
+                    parse_cache_dir.as_deref(),
+                    &cache_game,
+                    Some(shadow),
                 )
             } else {
                 index_vanilla_dir(
-                    &index_dir, &ruleset, &table, parse_cache_dir.as_deref(), &cache_game,
+                    &index_dir,
+                    &ruleset,
+                    &table,
+                    parse_cache_dir.as_deref(),
+                    &cache_game,
                 )
             }
         })
@@ -816,7 +865,10 @@ mod tests {
         }
         backend.set_ruleset(RuleSet::new());
 
-        backend.ensure_vanilla_index(None, false, true).await.unwrap();
+        backend
+            .ensure_vanilla_index(None, false, true)
+            .await
+            .unwrap();
 
         let shadow = cwtools_driver::vanilla_replacement_shadow(&primary, &[]);
         let fingerprint = cwtools_driver::replacement_aware_vanilla_fingerprint(
@@ -847,7 +899,10 @@ mod tests {
 
         std::fs::remove_file(vanilla_root.join(nested_path)).unwrap();
         reset_pending_vanilla(&backend);
-        backend.ensure_vanilla_index(None, false, true).await.unwrap();
+        backend
+            .ensure_vanilla_index(None, false, true)
+            .await
+            .unwrap();
         assert!(
             backend
                 .state
@@ -865,7 +920,10 @@ mod tests {
         )
         .unwrap();
         reset_pending_vanilla(&backend);
-        backend.ensure_vanilla_index(None, false, true).await.unwrap();
+        backend
+            .ensure_vanilla_index(None, false, true)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read_dir(&cache_dir)
                 .unwrap()
@@ -1053,14 +1111,29 @@ mod tests {
         data.aux.file_paths = vec!["gfx/retained.dds".into()];
         backend.stage_vanilla_payload(data);
         backend.merge_pending_vanilla_index().unwrap();
-        let paths = backend.state.vanilla_state.lock().file_paths.clone().unwrap();
+        let paths = backend
+            .state
+            .vanilla_state
+            .lock()
+            .file_paths
+            .clone()
+            .unwrap();
         let result = backend.merge_pending_vanilla_index_with(|_, _, _, _, _, _| {
             // Publish the same retained payload without staging a fresh Arc.
             backend.merge_pending_vanilla_index().unwrap();
             Err(FileError::FileCountBudget(tmp.path().to_path_buf()))
         });
         assert!(matches!(result, Err(FileError::FileCountBudget(_))));
-        assert!(Arc::ptr_eq(&paths, backend.state.vanilla_state.lock().file_paths.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            &paths,
+            backend
+                .state
+                .vanilla_state
+                .lock()
+                .file_paths
+                .as_ref()
+                .unwrap()
+        ));
         assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
         let info = backend.state.info_service.read();
         assert!(info.type_index.complete);
@@ -1081,7 +1154,12 @@ mod tests {
             backend.merge_pending_vanilla_index().unwrap();
             Ok(cwtools_info::FileIndex::new())
         });
-        assert!(result.unwrap_err().to_string().contains("merge attempt changed during file indexing; retry"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("merge attempt changed during file indexing; retry")
+        );
         assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
         let info = backend.state.info_service.read();
         assert!(info.type_index.complete);
@@ -1105,7 +1183,12 @@ mod tests {
             assert!(matches!(newer, Err(FileError::FileCountBudget(_))));
             Ok(cwtools_info::FileIndex::new())
         });
-        assert!(result.unwrap_err().to_string().contains("merge attempt changed during file indexing; retry"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("merge attempt changed during file indexing; retry")
+        );
         assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
         assert!(!backend.state.info_service.read().type_index.complete);
         backend.merge_pending_vanilla_index().unwrap();
@@ -1130,15 +1213,22 @@ mod tests {
         let payload = |filename: &str, name: &str| {
             let mut data = vanilla_data(vec![name]);
             data.aux.file_paths = vec![format!("gfx/{name}.dds")];
-            data.per_type.insert("test_type".into(), vec![(
-                Arc::from(vanilla_root.join(filename).to_string_lossy().as_ref()),
-                TypeInstance {
-                    name: name.to_string(),
-                    location: SourceLocation { line: 0, col: 0, end: (0, 1) },
-                    primary_loc_key: None,
-                    required_loc_keys: Vec::new(),
-                },
-            )]);
+            data.per_type.insert(
+                "test_type".into(),
+                vec![(
+                    Arc::from(vanilla_root.join(filename).to_string_lossy().as_ref()),
+                    TypeInstance {
+                        name: name.to_string(),
+                        location: SourceLocation {
+                            line: 0,
+                            col: 0,
+                            end: (0, 1),
+                        },
+                        primary_loc_key: None,
+                        required_loc_keys: Vec::new(),
+                    },
+                )],
+            );
             data
         };
         backend.stage_vanilla_payload(payload("old.txt", "old"));
@@ -1169,18 +1259,42 @@ mod tests {
             backend.stage_vanilla_payload(vanilla_data(vec!["pending_var"]));
             let result = backend.merge_pending_vanilla_index_with(|_, _, _, _, _, _| {
                 if increment_generation {
-                    backend.state.settings_generation.fetch_add(1, Ordering::SeqCst);
+                    backend
+                        .state
+                        .settings_generation
+                        .fetch_add(1, Ordering::SeqCst);
                 } else {
                     // A config write can precede its generation bump.
-                    backend.state.config.write().ignore_file_patterns.push("*.tmp".into());
+                    backend
+                        .state
+                        .config
+                        .write()
+                        .ignore_file_patterns
+                        .push("*.tmp".into());
                 }
                 Ok(cwtools_info::FileIndex::new())
             });
             assert!(result.is_err(), "changed settings must request a retry");
             assert!(backend.state.vanilla_state.lock().index.is_some());
-            assert!(!backend.state.info_service.read().type_index.var_index.contains("pending_var"));
+            assert!(
+                !backend
+                    .state
+                    .info_service
+                    .read()
+                    .type_index
+                    .var_index
+                    .contains("pending_var")
+            );
             backend.merge_pending_vanilla_index().unwrap();
-            assert!(backend.state.info_service.read().type_index.var_index.contains("pending_var"));
+            assert!(
+                backend
+                    .state
+                    .info_service
+                    .read()
+                    .type_index
+                    .var_index
+                    .contains("pending_var")
+            );
             assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
         }
     }
@@ -1200,7 +1314,9 @@ mod tests {
                     Ok(cwtools_info::FileIndex::new())
                 })
             });
-            let walk_completed = walk_finished.recv_timeout(std::time::Duration::from_secs(2)).is_ok();
+            let walk_completed = walk_finished
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .is_ok();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
             let mut blocked_on_info = false;
             while walk_completed && std::time::Instant::now() < deadline {
@@ -1216,7 +1332,10 @@ mod tests {
             let result = merge.join().unwrap();
             assert!(walk_completed, "file-index walk did not finish");
             assert!(blocked_on_info, "merge must reach its publication fence");
-            assert!(config_available, "a waiting merge must not hold config read");
+            assert!(
+                config_available,
+                "a waiting merge must not hold config read"
+            );
             assert!(result.is_ok());
         });
     }
@@ -1244,19 +1363,35 @@ mod tests {
             });
             backend.stage_vanilla_payload_transaction(first, Some("first_shape"), || {
                 start_second.send(()).unwrap();
-                second_acknowledged.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-                assert!(backend.state.vanilla_state.try_lock().is_none(),
-                    "staging must retain its payload fence until shape and values are set");
+                second_acknowledged
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                assert!(
+                    backend.state.vanilla_state.try_lock().is_none(),
+                    "staging must retain its payload fence until shape and values are set"
+                );
             });
         });
         let vanilla = backend.state.vanilla_state.lock();
         assert_eq!(vanilla.rules_shape.as_deref(), Some("second_shape"));
-        assert_eq!(vanilla.file_paths.as_ref().unwrap().as_slice(), &["gfx/second.dds"]);
+        assert_eq!(
+            vanilla.file_paths.as_ref().unwrap().as_slice(),
+            &["gfx/second.dds"]
+        );
         assert_eq!(vanilla.var_names.as_ref().unwrap().as_slice(), &["second"]);
         drop(vanilla);
         let info = backend.state.info_service.read();
-        assert!(info.type_index.complex_enum_values.contains("stats", "second"));
-        assert!(!info.type_index.complex_enum_values.contains("stats", "first"));
+        assert!(
+            info.type_index
+                .complex_enum_values
+                .contains("stats", "second")
+        );
+        assert!(
+            !info
+                .type_index
+                .complex_enum_values
+                .contains("stats", "first")
+        );
         assert!(info.type_index.value_set_values.contains("flags", "second"));
         assert!(!info.type_index.value_set_values.contains("flags", "first"));
     }
@@ -1311,7 +1446,12 @@ mod tests {
                 merge.join().unwrap()
             });
             if let Err(error) = outcome {
-                assert!(error.to_string().contains("changed during file indexing; retry"), "{error}");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("changed during file indexing; retry"),
+                    "{error}"
+                );
             }
             std::thread::yield_now();
 
@@ -1331,7 +1471,15 @@ mod tests {
             let info = backend.state.info_service.read();
             assert!(info.type_index.var_index.contains("beta_var"));
             drop(info);
-            assert!(backend.state.vanilla_state.lock().merged_uris.iter().any(|uri| uri.contains("b.txt")));
+            assert!(
+                backend
+                    .state
+                    .vanilla_state
+                    .lock()
+                    .merged_uris
+                    .iter()
+                    .any(|uri| uri.contains("b.txt"))
+            );
         }
     }
 
@@ -1993,7 +2141,10 @@ replace_path = "gfx/replaced"
     }
 
     async fn scan_base_game(backend: &Backend) {
-        backend.ensure_vanilla_index(None, false, true).await.unwrap();
+        backend
+            .ensure_vanilla_index(None, false, true)
+            .await
+            .unwrap();
         backend.merge_pending_vanilla_index().unwrap();
     }
 
@@ -2018,7 +2169,10 @@ replace_path = "gfx/replaced"
         assert_eq!(stats_members(&backend), ["VALUE_ALPHA"]);
 
         backend.set_ruleset(stats_rules("alpha"));
-        backend.ensure_vanilla_index(None, false, true).await.unwrap();
+        backend
+            .ensure_vanilla_index(None, false, true)
+            .await
+            .unwrap();
         assert!(
             backend.state.vanilla_state.lock().index.is_none(),
             "a reload that keeps the shape must keep the merged base game"
@@ -2044,7 +2198,10 @@ replace_path = "gfx/replaced"
         backend.stage_vanilla_payload(vanilla_data(vec!["supplied_var"]));
 
         backend.set_ruleset(stats_rules("alpha"));
-        backend.ensure_vanilla_index(None, false, true).await.unwrap();
+        backend
+            .ensure_vanilla_index(None, false, true)
+            .await
+            .unwrap();
 
         assert!(
             stats_members(&backend).is_empty(),
