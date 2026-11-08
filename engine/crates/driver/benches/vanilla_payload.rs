@@ -112,7 +112,7 @@ fn consume_old_clone(
         VanillaFiles::Cached(Cow::Owned(file_paths)),
         case_sensitive,
         None,
-    );
+    ).unwrap();
     black_box(file_index.len());
 }
 
@@ -137,7 +137,7 @@ fn consume_new_borrow(
         VanillaFiles::Cached(Cow::Borrowed(&payload.file_paths)),
         case_sensitive,
         None,
-    );
+    ).unwrap();
     black_box(file_index.len());
 }
 

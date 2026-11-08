@@ -49,6 +49,7 @@
 #### Engine
 
 * Stop reading closed files to place workspace symbol and go-to-definition results. Their ranges now use the indexed column directly, which differs from the old result only for a symbol that follows astral-plane characters (such as emoji) on the same line under UTF-16 positions. Open documents still convert exactly. (#1323)
+* Share discovery and CLI script read budgets across a scan and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)
 * Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)

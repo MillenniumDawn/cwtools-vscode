@@ -427,13 +427,13 @@ impl Backend {
                         ),
                     )
                     .await;
-                Vec::new()
+                return false;
             }
         };
         let parent_files = if parent_roots.is_empty() {
             Vec::new()
         } else {
-            tokio::task::block_in_place(|| {
+            match tokio::task::block_in_place(|| {
                 cwtools_driver::discover_parent_script_files(
                     &parent_roots,
                     &root_path,
@@ -442,7 +442,24 @@ impl Backend {
                     &extra_file_globs,
                     &extra_dir_globs,
                 )
-            })
+            }) {
+                Ok(files) => files,
+                Err(error) => {
+                    tracing::error!(error = %error, "parent workspace discovery failed");
+                    self.client.log_message(MessageType::ERROR, format!("error: parent discovery failed: {error}")).await;
+                    return false;
+                }
+            }
+        };
+        // Check localization before mutating scan state or accepting a quiet
+        // fingerprint. A capped parent walk must never become a complete scan.
+        let loc_signature = match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
+            Ok(signature) => signature,
+            Err(error) => {
+                tracing::error!(error = %error, "localisation discovery failed");
+                self.client.log_message(MessageType::ERROR, format!("error: localisation discovery failed: {error}")).await;
+                return false;
+            }
         };
         let files_to_validate: Vec<std::path::PathBuf> =
             primary_files.into_iter().map(|f| f.path).collect();
@@ -880,12 +897,11 @@ impl Backend {
 
         self.enter_phase(&mut phase, progress, quiet, Phase::Localisation, 0)
             .await;
-        let loc_signature = tokio::task::block_in_place(|| self.compute_loc_signature(&root_path));
         let loc_unchanged = *self.state.last_loc_signature.lock() == Some(loc_signature);
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
-        } else {
-            self.rebuild_and_publish_loc(&root_path).await;
+        } else if !self.rebuild_and_publish_loc(&root_path).await {
+            return false;
         }
         if cancel.is_cancelled() {
             return false;
@@ -1626,6 +1642,26 @@ mod tests {
             Some(SENTINEL_FP),
             "last_scan_fingerprint must be unchanged on cancel"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_primary_or_parent_discovery_preserves_scan_state() {
+        for missing_parent in [false, true] {
+            let (backend, tmp) = setup_workspace(None);
+            let missing = tmp.path().join("missing");
+            {
+                let mut config = backend.state.config.write();
+                if missing_parent {
+                    config.parent_roots = vec![missing];
+                } else {
+                    let uri = Url::from_file_path(missing).unwrap();
+                    config.workspace_uri = Some(uri.as_str().into());
+                    config.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri.as_str()));
+                }
+            }
+            assert!(!backend.validate_entire_workspace(false).await);
+            assert_stores_unchanged(&backend);
+        }
     }
 
     async fn wait_arrived(gate: &HoldGate, point: HoldPoint) {

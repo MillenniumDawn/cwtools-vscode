@@ -76,7 +76,7 @@ pub(super) fn index_vanilla_dir_with_shadow(
     let aux = match replacement_shadow {
         Some(shadow) => cwtools_driver::build_vanilla_cache_aux_with_shadow(dir, &index, shadow),
         None => cwtools_driver::build_vanilla_cache_aux(dir, &index),
-    };
+    }?;
     let per_type = index.into_map().into_iter().collect();
     Ok((per_type, aux))
 }
@@ -323,7 +323,7 @@ impl Backend {
             Some(p) => p,
             None => return,
         };
-        let file_index = cwtools_driver::build_file_index_with_vanilla_shadow(
+        let file_index = match cwtools_driver::build_file_index_with_vanilla_shadow(
             &workspace_root,
             &parent_roots,
             &ignore_files,
@@ -331,7 +331,16 @@ impl Backend {
             cwtools_driver::VanillaFiles::Cached(Cow::Borrowed(&vanilla_paths)),
             false,
             replacement_shadow.as_ref(),
-        );
+        ) {
+            Ok(index) => index,
+            Err(error) => {
+                tracing::warn!("file index discovery incomplete: {error}");
+                let mut info = self.state.info_service.write();
+                Arc::make_mut(&mut info.type_index).complete = false;
+                self.state.vanilla_merged.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
         {
             let mut info_guard = self.state.info_service.write();
             Arc::make_mut(&mut info_guard.type_index).file_index = file_index;

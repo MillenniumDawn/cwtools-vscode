@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use tower_lsp::lsp_types::*;
 
+use cwtools_file_manager::file_manager::{
+    DiscoveredPath, DiscoveryReport, FileError, FileManagerConfig, ScanBudget,
+};
 use cwtools_localization::Lang;
 
 use crate::lines::DocLines;
@@ -10,35 +13,71 @@ use crate::paths::{loc_display_text, path_to_uri};
 use crate::validate::{loc_diag_to_validation_error, validation_error_to_diagnostic};
 use crate::{Backend, LocLocations, LocText};
 
+use super::vanilla::VanillaLocKey;
 use super::{VanillaLoc, stat_signature_for};
+
+/// Discovery may return files alongside a walk failure. None of that partial
+/// result is safe to use for a signature, cached layer or published index.
+fn complete_localisation_files(report: DiscoveryReport) -> Result<Vec<DiscoveredPath>, FileError> {
+    if let Some(failure) = report
+        .failures
+        .iter()
+        .find(|failure| failure.is_file_count_budget())
+    {
+        return Err(FileError::FileCountBudget(failure.path.clone()));
+    }
+    if let Some(failure) = report.failures.first() {
+        return Err(FileError::Io(std::io::Error::other(format!(
+            "localisation discovery failed at {}: {}",
+            failure.path.display(),
+            failure.error,
+        ))));
+    }
+    Ok(report
+        .files
+        .into_iter()
+        .filter(|file| file.kind == cwtools_file_manager::FileKind::Localisation)
+        .collect())
+}
+
+fn localisation_files(
+    roots: &[std::path::PathBuf],
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    policy: cwtools_driver::DiscoveryPolicy,
+    budget: ScanBudget,
+) -> Result<Vec<DiscoveredPath>, FileError> {
+    let mut config = FileManagerConfig {
+        scan_budget: budget,
+        ..Default::default()
+    };
+    if policy == cwtools_driver::DiscoveryPolicy::Workspace {
+        config.exclude_patterns.extend(ignore_files.iter().cloned());
+        config
+            .exclude_dir_patterns
+            .extend(ignore_dirs.iter().cloned());
+    }
+    complete_localisation_files(cwtools_driver::discover_workspace(
+        cwtools_driver::WorkspaceDiscoveryRequest {
+            roots: roots.to_vec(),
+            kinds: vec![cwtools_file_manager::FileKind::Localisation],
+            config,
+            policy,
+        },
+    )?)
+}
 
 fn localisation_paths(
     roots: &[std::path::PathBuf],
     ignore_files: &[String],
     ignore_dirs: &[String],
     policy: cwtools_driver::DiscoveryPolicy,
-) -> Vec<std::path::PathBuf> {
-    match cwtools_driver::discover_localisation_files(roots, ignore_files, ignore_dirs, policy) {
-        Ok(discovery) => {
-            for failure in discovery.failures {
-                tracing::warn!(
-                    path = %failure.path.display(),
-                    error = %failure.error,
-                    "localisation discovery skipped path"
-                );
-            }
-            discovery
-                .files
-                .into_iter()
-                .filter(|file| file.kind == cwtools_file_manager::FileKind::Localisation)
-                .map(|file| file.path)
-                .collect()
-        }
-        Err(error) => {
-            tracing::warn!(error = %error, "localisation discovery failed");
-            Vec::new()
-        }
-    }
+    budget: ScanBudget,
+) -> Result<Vec<std::path::PathBuf>, FileError> {
+    Ok(localisation_files(roots, ignore_files, ignore_dirs, policy, budget)?
+        .into_iter()
+        .map(|file| file.path)
+        .collect())
 }
 
 /// Parent-mod loc files the workspace does not shadow (#786), in load order.
@@ -47,31 +86,34 @@ fn parent_localisation_paths(
     root_path: &std::path::Path,
     ignore_files: &[String],
     ignore_dirs: &[String],
-) -> Vec<std::path::PathBuf> {
+    budget: ScanBudget,
+) -> Result<Vec<std::path::PathBuf>, FileError> {
     if parent_roots.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let primary = cwtools_driver::discover_localisation_files(
+    let primary = localisation_files(
         &[root_path.to_path_buf()],
         ignore_files,
         ignore_dirs,
         cwtools_driver::DiscoveryPolicy::Workspace,
-    )
-    .map(|discovery| discovery.files)
-    .unwrap_or_default();
-    cwtools_driver::discover_parent_localisation_files(
+        budget,
+    )?;
+    Ok(cwtools_driver::discover_parent_localisation_files_with_budget(
         parent_roots,
         root_path,
         &primary,
         ignore_files,
         ignore_dirs,
-    )
+        budget,
+    )?
     .into_iter()
     .map(|file| file.path)
-    .collect()
+    .collect())
 }
 
 pub(crate) type ParentLocKey = (Vec<std::path::PathBuf>, Option<Vec<Lang>>, Lang, bool, u64);
+
+type LocCache<K> = Option<(K, Arc<VanillaLoc>)>;
 
 /// `all_sites` keeps every definition of a key in `locations` (the workspace,
 /// whose find-references lists them); off, one site per key (the base game,
@@ -111,7 +153,10 @@ pub(crate) fn collect_loc_display(
 }
 
 impl Backend {
-    pub(crate) fn compute_loc_signature(&self, root_path: &std::path::Path) -> u64 {
+    pub(crate) fn compute_loc_signature(
+        &self,
+        root_path: &std::path::Path,
+    ) -> Result<u64, FileError> {
         let (parent_roots, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
@@ -125,25 +170,30 @@ impl Backend {
             &ignore_files,
             &ignore_dirs,
             cwtools_driver::DiscoveryPolicy::Workspace,
-        );
+            ScanBudget::default(),
+        )?;
         files.extend(parent_localisation_paths(
             &parent_roots,
             root_path,
             &ignore_files,
             &ignore_dirs,
-        ));
-        stat_signature_for(&files)
+            ScanBudget::default(),
+        )?);
+        Ok(stat_signature_for(&files))
     }
 
     /// The parent mods' loc, layered under the workspace and over the base
-    /// game (#786). Kept until a parent loc file changes.
+    /// game (#786). Kept until a parent loc file changes. Cache updates are
+    /// staged by the caller until all localisation discovery succeeds.
     fn parent_loc(
         &self,
         root_path: &std::path::Path,
         loc_languages: Option<&[Lang]>,
         primary_lang: Lang,
         hover_all: bool,
-    ) -> Option<Arc<VanillaLoc>> {
+        cached: &mut LocCache<ParentLocKey>,
+        budget: ScanBudget,
+    ) -> Result<Option<Arc<VanillaLoc>>, FileError> {
         let (parent_roots, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
@@ -152,11 +202,16 @@ impl Backend {
                 config.ignore_dir_patterns.clone(),
             )
         };
-        let paths =
-            parent_localisation_paths(&parent_roots, root_path, &ignore_files, &ignore_dirs);
+        let paths = parent_localisation_paths(
+            &parent_roots,
+            root_path,
+            &ignore_files,
+            &ignore_dirs,
+            budget,
+        )?;
         if paths.is_empty() {
-            *self.state.parent_loc.lock() = None;
-            return None;
+            *cached = None;
+            return Ok(None);
         }
         let key = (
             parent_roots,
@@ -165,10 +220,10 @@ impl Backend {
             hover_all,
             stat_signature_for(&paths),
         );
-        if let Some((cached_key, loc)) = self.state.parent_loc.lock().as_ref()
+        if let Some((cached_key, loc)) = cached.as_ref()
             && *cached_key == key
         {
-            return Some(Arc::clone(loc));
+            return Ok(Some(Arc::clone(loc)));
         }
         let service = cwtools_localization::LocService::from_paths(
             paths,
@@ -181,8 +236,8 @@ impl Backend {
             service.files().len(),
             built.index.union().len(),
         );
-        *self.state.parent_loc.lock() = Some((key, Arc::clone(&built)));
-        Some(built)
+        *cached = Some((key, Arc::clone(&built)));
+        Ok(Some(built))
     }
 
     /// The base-game install's loc maps, built on first use and kept for the session: vanilla
@@ -193,7 +248,9 @@ impl Backend {
         loc_languages: Option<&[Lang]>,
         primary_lang: Lang,
         hover_all: bool,
-    ) -> Option<Arc<VanillaLoc>> {
+        cached: &mut LocCache<VanillaLocKey>,
+        budget: ScanBudget,
+    ) -> Result<Option<Arc<VanillaLoc>>, FileError> {
         let (dir, replacement_shadow) = {
             let config = self.state.config.read();
             let dir = config.vanilla_dir.clone();
@@ -203,8 +260,8 @@ impl Backend {
             (dir, shadow)
         };
         let Some(dir) = dir else {
-            *self.state.vanilla_loc.lock() = None;
-            return None;
+            *cached = None;
+            return Ok(None);
         };
         let key = (
             dir,
@@ -215,17 +272,18 @@ impl Backend {
             primary_lang,
             hover_all,
         );
-        if let Some((cached_key, loc)) = self.state.vanilla_loc.lock().as_ref()
+        if let Some((cached_key, loc)) = cached.as_ref()
             && *cached_key == key
         {
-            return Some(Arc::clone(loc));
+            return Ok(Some(Arc::clone(loc)));
         }
         let vanilla_paths = localisation_paths(
             std::slice::from_ref(&key.0),
             &[],
             &[],
             cwtools_driver::DiscoveryPolicy::Vanilla,
-        )
+            budget,
+        )?
         .into_iter()
         .filter(|path| {
             !replacement_shadow
@@ -240,7 +298,8 @@ impl Backend {
         );
         if service.files().is_empty() {
             tracing::warn!(dir = %key.0.display(), "base-game dir holds no localisation files");
-            return None;
+            *cached = None;
+            return Ok(None);
         }
         let built = Arc::new(VanillaLoc::build(&service, primary_lang, hover_all));
         tracing::info!(
@@ -249,12 +308,21 @@ impl Backend {
             built.index.union().len(),
             built.text.len(),
         );
-        *self.state.vanilla_loc.lock() = Some((key, Arc::clone(&built)));
-        Some(built)
+        *cached = Some((key, Arc::clone(&built)));
+        Ok(Some(built))
     }
 
     #[tracing::instrument(skip_all)]
-    pub(crate) async fn rebuild_and_publish_loc(&self, root_path: &std::path::Path) {
+    pub(crate) async fn rebuild_and_publish_loc(&self, root_path: &std::path::Path) -> bool {
+        self.rebuild_and_publish_loc_with_budget(root_path, ScanBudget::default())
+            .await
+    }
+
+    async fn rebuild_and_publish_loc_with_budget(
+        &self,
+        root_path: &std::path::Path,
+        budget: ScanBudget,
+    ) -> bool {
         let (loc_languages, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
@@ -293,103 +361,133 @@ impl Backend {
             .into_iter()
             .map(|(path, _)| path)
             .collect();
-        let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) =
-            tokio::task::block_in_place(|| {
-                // The base game is read once per session and reused; only the workspace
-                // is walked again (#89).
-                let parent = self.parent_loc(root_path, parsed_languages, primary_lang, hover_all);
-                let vanilla = self.vanilla_loc(parsed_languages, primary_lang, hover_all);
-                let cached_vanilla_loc = {
-                    let mut cached = self.state.vanilla_state.lock();
-                    if vanilla.is_some() {
-                        cached.loc_keys.take()
-                    } else {
-                        cached.loc_keys.clone()
-                    }
-                };
-                let service = cwtools_localization::LocService::from_paths(
-                    localisation_paths(
-                        &[root_path.to_path_buf()],
-                        &ignore_files,
-                        &ignore_dirs,
-                        cwtools_driver::DiscoveryPolicy::Workspace,
-                    )
+        let rebuilt = tokio::task::block_in_place(|| {
+            // The base game is read once per session and reused; only the workspace
+            // is walked again (#89).
+            let workspace_paths = localisation_paths(
+                &[root_path.to_path_buf()],
+                &ignore_files,
+                &ignore_dirs,
+                cwtools_driver::DiscoveryPolicy::Workspace,
+                budget,
+            )?;
+            // Stage both layer caches: failure in a later layer must not
+            // replace an earlier cache or consume the cached vanilla keys.
+            let mut parent_cache = self.state.parent_loc.lock().clone();
+            let mut vanilla_cache = self.state.vanilla_loc.lock().clone();
+            let parent = self.parent_loc(
+                root_path,
+                parsed_languages,
+                primary_lang,
+                hover_all,
+                &mut parent_cache,
+                budget,
+            )?;
+            let vanilla = self.vanilla_loc(
+                parsed_languages,
+                primary_lang,
+                hover_all,
+                &mut vanilla_cache,
+                budget,
+            )?;
+            let cached_vanilla_loc = {
+                let mut cached = self.state.vanilla_state.lock();
+                if vanilla.is_some() {
+                    cached.loc_keys.take()
+                } else {
+                    cached.loc_keys.clone()
+                }
+            };
+            let service = cwtools_localization::LocService::from_paths(
+                workspace_paths
                     .into_iter()
                     .filter(|path| !baseline_files.contains(path))
                     .collect(),
-                    cwtools_file_manager::file_manager::ScanBudget::default(),
-                    parsed_languages,
-                );
-                let mut idx = cwtools_localization::LocIndex::build_scoped(
-                    &service,
-                    loc_languages.as_deref(),
-                );
-                for layer in parent.iter().chain(&vanilla) {
-                    idx.merge_from(&layer.index, loc_languages.as_deref());
-                }
-                if let Some(cached) = cached_vanilla_loc {
-                    let typed: Vec<(cwtools_localization::Lang, Vec<String>)> = cached
-                        .into_iter()
-                        .filter_map(|(name, ks)| {
-                            cwtools_localization::Lang::from_name(&name).map(|l| (l, ks))
-                        })
-                        .collect();
-                    idx.merge_cached_keys(typed, loc_languages.as_deref());
-                }
-                let mut by_file: HashMap<String, Vec<Diagnostic>> = HashMap::new();
-                for d in cwtools_localization::validate_loc_project_with_union(
-                    &service,
-                    loc_languages.as_deref(),
-                    idx.union(),
-                    &extra_valid_refs,
-                ) {
-                    let ve = loc_diag_to_validation_error(&d);
-                    by_file
-                        .entry(d.file.clone())
-                        .or_default()
-                        .push(validation_error_to_diagnostic(&ve, &DocLines::none()));
-                }
-                let mut lt = LocText::default();
-                let mut ll = LocLocations::default();
-                for file in service.files() {
-                    by_file.entry(file.path.clone()).or_default();
-                }
-                collect_loc_display(
-                    &service,
-                    &idx,
-                    primary_lang,
-                    hover_all,
-                    true,
-                    &mut lt,
-                    &mut ll,
-                );
-                let source_hashes = by_file
-                    .iter()
-                    .filter_map(|(file, diagnostics)| {
-                        let has_fix = diagnostics
-                            .iter()
-                            .any(|d| !crate::code_action::fixable_span_edits(d).is_empty());
-                        if !has_fix {
-                            return None;
-                        }
-                        let (text, _) = cwtools_file_manager::file_manager::read_text_capped(
-                            std::path::Path::new(file),
-                            crate::access::MAX_URI_READ_BYTES,
-                        )
-                        .ok()?;
-                        Some((file.clone(), cwtools_cache::workspace::content_hash(&text)))
+                cwtools_file_manager::file_manager::ScanBudget::default(),
+                parsed_languages,
+            );
+            let mut idx = cwtools_localization::LocIndex::build_scoped(
+                &service,
+                loc_languages.as_deref(),
+            );
+            for layer in parent.iter().chain(&vanilla) {
+                idx.merge_from(&layer.index, loc_languages.as_deref());
+            }
+            if let Some(cached) = cached_vanilla_loc {
+                let typed: Vec<(cwtools_localization::Lang, Vec<String>)> = cached
+                    .into_iter()
+                    .filter_map(|(name, ks)| {
+                        cwtools_localization::Lang::from_name(&name).map(|l| (l, ks))
                     })
-                    .collect::<HashMap<_, _>>();
-                for layer in parent.iter().chain(&vanilla) {
-                    for (key, lang, text) in layer.text.entries() {
-                        lt.insert_fallback(key, lang, text);
+                    .collect();
+                idx.merge_cached_keys(typed, loc_languages.as_deref());
+            }
+            let mut by_file: HashMap<String, Vec<Diagnostic>> = HashMap::new();
+            for d in cwtools_localization::validate_loc_project_with_union(
+                &service,
+                loc_languages.as_deref(),
+                idx.union(),
+                &extra_valid_refs,
+            ) {
+                let ve = loc_diag_to_validation_error(&d);
+                by_file
+                    .entry(d.file.clone())
+                    .or_default()
+                    .push(validation_error_to_diagnostic(&ve, &DocLines::none()));
+            }
+            let mut lt = LocText::default();
+            let mut ll = LocLocations::default();
+            for file in service.files() {
+                by_file.entry(file.path.clone()).or_default();
+            }
+            collect_loc_display(
+                &service,
+                &idx,
+                primary_lang,
+                hover_all,
+                true,
+                &mut lt,
+                &mut ll,
+            );
+            let source_hashes = by_file
+                .iter()
+                .filter_map(|(file, diagnostics)| {
+                    let has_fix = diagnostics
+                        .iter()
+                        .any(|d| !crate::code_action::fixable_span_edits(d).is_empty());
+                    if !has_fix {
+                        return None;
                     }
-                    for (key, (uri, line0)) in layer.locations.iter() {
-                        ll.insert_fallback(key, uri, line0);
-                    }
+                    let (text, _) = cwtools_file_manager::file_manager::read_text_capped(
+                        std::path::Path::new(file),
+                        crate::access::MAX_URI_READ_BYTES,
+                    )
+                    .ok()?;
+                    Some((file.clone(), cwtools_cache::workspace::content_hash(&text)))
+                })
+                .collect::<HashMap<_, _>>();
+            for layer in parent.iter().chain(&vanilla) {
+                for (key, lang, text) in layer.text.entries() {
+                    lt.insert_fallback(key, lang, text);
                 }
-                (idx, by_file, lt, ll, source_hashes)
-            });
+                for (key, (uri, line0)) in layer.locations.iter() {
+                    ll.insert_fallback(key, uri, line0);
+                }
+            }
+            *self.state.parent_loc.lock() = parent_cache;
+            *self.state.vanilla_loc.lock() = vanilla_cache;
+            Ok::<_, FileError>((idx, by_file, lt, ll, source_hashes))
+        });
+        let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) = match rebuilt {
+            Ok(rebuilt) => rebuilt,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "localisation discovery failed; keeping previous indexes and diagnostics"
+                );
+                return false;
+            }
+        };
         let loc_key_index = tokio::task::block_in_place(|| {
             Arc::new(crate::completion::LocKeyIndex::build(
                 loc_index.union().iter().map(AsRef::as_ref),
@@ -447,6 +545,7 @@ impl Backend {
             }
         }
         cwtools_profiling::log_rss("loc_rebuild_done");
+        true
     }
 }
 
@@ -460,6 +559,221 @@ mod tests {
     use cwtools_localization::{Lang, LocIndex, LocService};
 
     use crate::testing::test_backend;
+
+    fn write_loc(root: &std::path::Path, name: &str, key: &str) -> std::path::PathBuf {
+        let path = root.join("localisation").join(format!("{name}_l_english.yml"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("l_english:\n {key}:0 \"Hello\"\n")).unwrap();
+        path
+    }
+
+    #[test]
+    fn localisation_discovery_rejects_partial_reports_and_accepts_empty_results() {
+        use cwtools_file_manager::file_manager::DiscoveryFailure;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = write_loc(root.path(), "first", "first_key");
+        let report = DiscoveryReport {
+            files: vec![DiscoveredPath {
+                path: path.clone(),
+                root_relative_path: "localisation/first_l_english.yml".into(),
+                kind: cwtools_file_manager::FileKind::Localisation,
+            }],
+            failures: vec![DiscoveryFailure {
+                path: path.clone(),
+                error: "walk failed".into(),
+            }],
+            examined: 1,
+        };
+        let error = complete_localisation_files(report).unwrap_err();
+        assert!(error.to_string().contains("walk failed"));
+        assert!(error.to_string().contains(&path.display().to_string()));
+        assert!(
+            complete_localisation_files(DiscoveryReport::default())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn localisation_count_budget_rejects_partial_paths_but_allows_the_exact_limit() {
+        let root = tempfile::tempdir().unwrap();
+        write_loc(root.path(), "first", "first_key");
+        write_loc(root.path(), "second", "second_key");
+        let discover = |max_files| {
+            localisation_paths(
+                &[root.path().to_path_buf()],
+                &[],
+                &[],
+                cwtools_driver::DiscoveryPolicy::Workspace,
+                ScanBudget {
+                    max_files,
+                    ..Default::default()
+                },
+            )
+        };
+        assert!(matches!(discover(1), Err(FileError::FileCountBudget(_))));
+        assert_eq!(discover(2).unwrap().len(), 2);
+        assert_eq!(discover(0).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parent_localisation_rejects_incomplete_primary_and_parent_discovery() {
+        let primary = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        write_loc(primary.path(), "first", "first_key");
+        write_loc(primary.path(), "second", "second_key");
+        write_loc(parent.path(), "parent", "parent_key");
+        let result = parent_localisation_paths(
+            &[parent.path().to_path_buf()],
+            primary.path(),
+            &[],
+            &[],
+            ScanBudget {
+                max_files: 1,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(result, Err(FileError::FileCountBudget(_))));
+        assert!(
+            parent_localisation_paths(
+                &[parent.path().join("missing")],
+                primary.path(),
+                &[],
+                &[],
+                ScanBudget::default(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn loc_signature_distinguishes_failed_discovery_from_empty_workspace() {
+        let backend = test_backend();
+        let root = tempfile::tempdir().unwrap();
+        assert!(backend.compute_loc_signature(root.path()).is_ok());
+        assert!(
+            backend
+                .compute_loc_signature(&root.path().join("missing"))
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_loc_rebuild_preserves_indexes_diagnostics_and_layer_caches() {
+        for failed_layer in ["workspace", "parent", "vanilla"] {
+            let backend = test_backend();
+            let workspace = tempfile::tempdir().unwrap();
+            let parent = tempfile::tempdir().unwrap();
+            let vanilla = tempfile::tempdir().unwrap();
+            let replacement_vanilla = tempfile::tempdir().unwrap();
+            write_loc(workspace.path(), "workspace", "workspace_key");
+            write_loc(parent.path(), "parent", "parent_key");
+            write_loc(vanilla.path(), "vanilla", "vanilla_key");
+            {
+                let mut config = backend.state.config.write();
+                config.workspace_roots = vec![workspace.path().to_path_buf()];
+                config.parent_roots = vec![parent.path().to_path_buf()];
+                config.vanilla_dir = Some(vanilla.path().to_path_buf());
+            }
+            assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
+            let previous_index = backend.state.loc_index.read().clone().unwrap();
+            let previous_completions = backend.state.loc_key_index.read().clone().unwrap();
+            let previous_parent = backend.state.parent_loc.lock().clone().unwrap();
+            let previous_vanilla = backend.state.vanilla_loc.lock().clone().unwrap();
+            let previous_uris = backend.state.published_loc_uris.lock().clone();
+            let cached_keys = vec![("english".into(), vec!["cached_key".into()])];
+            backend.state.vanilla_state.lock().loc_keys = Some(cached_keys.clone());
+
+            // A later vanilla failure must discard the newly built parent layer too.
+            write_loc(workspace.path(), "workspace", "replacement_workspace_key");
+            write_loc(parent.path(), "parent", "replacement_parent_key");
+            match failed_layer {
+                "workspace" => {
+                    write_loc(workspace.path(), "extra", "extra_key");
+                }
+                "parent" => {
+                    write_loc(parent.path(), "extra", "extra_key");
+                }
+                "vanilla" => {
+                    write_loc(replacement_vanilla.path(), "first", "first_key");
+                    write_loc(replacement_vanilla.path(), "second", "second_key");
+                    backend.state.config.write().vanilla_dir =
+                        Some(replacement_vanilla.path().to_path_buf());
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !backend
+                    .rebuild_and_publish_loc_with_budget(
+                        workspace.path(),
+                        ScanBudget {
+                            max_files: 1,
+                            ..Default::default()
+                        },
+                    )
+                    .await,
+                "{failed_layer} discovery should fail"
+            );
+            assert!(Arc::ptr_eq(
+                backend.state.loc_index.read().as_ref().unwrap(),
+                &previous_index,
+            ));
+            assert!(Arc::ptr_eq(
+                backend.state.loc_key_index.read().as_ref().unwrap(),
+                &previous_completions,
+            ));
+            let current_parent = backend.state.parent_loc.lock().clone().unwrap();
+            assert_eq!(current_parent.0, previous_parent.0);
+            assert!(Arc::ptr_eq(&current_parent.1, &previous_parent.1));
+            let current_vanilla = backend.state.vanilla_loc.lock().clone().unwrap();
+            assert_eq!(current_vanilla.0, previous_vanilla.0);
+            assert!(Arc::ptr_eq(&current_vanilla.1, &previous_vanilla.1));
+            assert_eq!(*backend.state.published_loc_uris.lock(), previous_uris);
+            assert_eq!(backend.state.vanilla_state.lock().loc_keys, Some(cached_keys));
+            let key: Arc<str> = "workspace_key".into();
+            assert!(backend.state.loc_text.read().get(&key).is_some());
+            assert!(backend.state.loc_locations.read().contains_key(&key));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn successful_empty_loc_rebuild_clears_previous_state() {
+        let backend = test_backend();
+        let workspace = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let vanilla = tempfile::tempdir().unwrap();
+        let path = write_loc(workspace.path(), "workspace", "workspace_key");
+        write_loc(parent.path(), "parent", "parent_key");
+        write_loc(vanilla.path(), "vanilla", "vanilla_key");
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![workspace.path().to_path_buf()];
+            config.parent_roots = vec![parent.path().to_path_buf()];
+            config.vanilla_dir = Some(vanilla.path().to_path_buf());
+        }
+        assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
+        std::fs::remove_file(path).unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.parent_roots.clear();
+            config.vanilla_dir = Some(workspace.path().to_path_buf());
+        }
+        assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
+        assert!(
+            backend
+                .state
+                .loc_index
+                .read()
+                .as_ref()
+                .unwrap()
+                .union()
+                .is_empty()
+        );
+        assert!(backend.state.parent_loc.lock().is_none());
+        assert!(backend.state.vanilla_loc.lock().is_none());
+        assert!(backend.state.published_loc_uris.lock().is_empty());
+    }
 
     #[test]
     fn collect_loc_display_respects_primary_and_hover_all() {
@@ -559,7 +873,7 @@ mod tests {
         });
         backend.merge_pending_vanilla_index();
 
-        backend.rebuild_and_publish_loc(workspace.path()).await;
+        assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
 
         let index = backend.state.loc_index.read();
         assert!(
@@ -605,7 +919,7 @@ mod tests {
             config.refresh_roots();
         }
 
-        backend.rebuild_and_publish_loc(primary.path()).await;
+        assert!(backend.rebuild_and_publish_loc(primary.path()).await);
 
         let index = backend.state.loc_index.read();
         let keys = index

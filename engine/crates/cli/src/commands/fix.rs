@@ -4,7 +4,7 @@ use cwtools_driver::{RulesInput, Session, SessionConfig, VanillaCacheAuto};
 use cwtools_game::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 
 use crate::cli::FixArgs;
@@ -151,7 +151,7 @@ pub(super) fn run(args: FixArgs) {
         cwtools_driver::default_cache_dir(),
     );
 
-    if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
+    let rebuild_incomplete = if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
         (&vanilla_cache, &cached_fingerprint, &vanilla)
     {
         // Same stale-cache warn-and-rebuild as `validate`, so both commands
@@ -167,8 +167,10 @@ pub(super) fn run(args: FixArgs) {
             vanilla_dir,
             game_id,
             !no_vanilla_cache,
-        );
-    }
+        )
+    } else {
+        false
+    };
 
     if let Some(notice) = vanilla_notice(game_id, session.type_index().complete) {
         note(format!("  note: {notice}"));
@@ -176,7 +178,8 @@ pub(super) fn run(args: FixArgs) {
 
     // Same guards as `validate`: a failed walk, an empty ruleset, or an
     // empty file set must not read as "nothing needed fixing".
-    if session.discovery_failed {
+    if fix_incomplete(session.discovery_failed, session.is_incomplete(), rebuild_incomplete) {
+        eprintln!("error: cannot plan fixes from incomplete inputs");
         std::process::exit(EXIT_DISCOVERY_FAILED);
     }
     exit_if_empty(
@@ -210,6 +213,11 @@ pub(super) fn run(args: FixArgs) {
             }
         }
     }
+    if fix_incomplete(session.discovery_failed, session.is_incomplete(), rebuild_incomplete) {
+        eprintln!("error: cannot apply or preview fixes after incomplete validation");
+        std::process::exit(EXIT_DISCOVERY_FAILED);
+    }
+
     // Loc diagnostics: only mod-path files (mirror `validate`'s filter).
     let dir_prefix = {
         let s = directory.to_string_lossy();
@@ -233,17 +241,33 @@ pub(super) fn run(args: FixArgs) {
         }
     }
 
+    let indexed_sources: HashMap<_, _> = session
+        .parsed_files()
+        .iter()
+        .map(|source| (source.path.as_path(), source))
+        .collect();
     let mut files_changed = 0usize;
     let mut edits_applied = 0usize;
     let mut write_failed = false;
     for (file, planned) in by_file {
         let file_display = file.display().to_string();
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            eprintln!("warn: could not read {file_display}; skipping its fixes");
-            if apply {
-                write_failed = true;
+        let text = match indexed_sources.get(file.as_path()) {
+            Some(source) => session.read_source_utf8(source).map_err(|error| error.to_string()),
+            None => std::fs::read_to_string(&file).map_err(|error| error.to_string()),
+        };
+        let text = match text {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("warn: could not read {file_display}; skipping its fixes: {error}");
+                if session.is_incomplete() {
+                    eprintln!("error: cannot apply or preview fixes after a source changed");
+                    std::process::exit(EXIT_DISCOVERY_FAILED);
+                }
+                if apply {
+                    write_failed = true;
+                }
+                continue;
             }
-            continue;
         };
         let (kept, skipped) = cwtools_parser::fix::plan_file_edits(&text, planned);
         for code in &skipped {
@@ -286,6 +310,10 @@ pub(super) fn run(args: FixArgs) {
     if write_failed {
         std::process::exit(EXIT_USAGE);
     }
+}
+
+fn fix_incomplete(discovery_failed: bool, validation_incomplete: bool, rebuild_incomplete: bool) -> bool {
+    discovery_failed || validation_incomplete || rebuild_incomplete
 }
 
 /// A unified-diff-style preview of applying `edits` to `old` under `path`. One
@@ -343,6 +371,78 @@ mod tests {
             },
             replacement: repl.to_string(),
         }
+    }
+
+    #[test]
+    fn fix_rejects_incomplete_discovery_rebuild_or_validation() {
+        assert!(!fix_incomplete(false, false, false));
+        assert!(fix_incomplete(true, false, false));
+        assert!(fix_incomplete(false, true, false));
+        assert!(fix_incomplete(false, false, true));
+    }
+
+    #[test]
+    fn late_changed_source_blocks_fix_planning() {
+        for grow_before_validation in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("mod");
+            let scripts = root.join("common/ideas");
+            std::fs::create_dir_all(&scripts).unwrap();
+            let path = scripts.join("test.txt");
+            std::fs::write(&path, "x = 1\n").unwrap();
+            let rules = tmp.path().join("rules.cwt");
+            std::fs::write(&rules, "").unwrap();
+            let session = Session::load(SessionConfig {
+                game: Game::Hoi4,
+                rules: RulesInput::File(rules),
+                directory: root,
+                parent_roots: vec![],
+                vanilla: None,
+                vanilla_cache: None,
+                vanilla_cache_auto: None,
+                ignore_files: &[],
+                ignore_dirs: &[],
+                loc_languages: None,
+                case_sensitive_files: false,
+                on_rules_diagnostic: None,
+            });
+            let changed = "changed = 2\n";
+            if grow_before_validation {
+                std::fs::write(&path, changed).unwrap();
+            }
+            let _ = session.validate_all();
+            if !grow_before_validation {
+                assert!(!session.is_incomplete());
+                std::fs::write(&path, changed).unwrap();
+            }
+            let source = session.parsed_files().iter().find(|source| source.path == path).unwrap();
+            assert!(session.read_source_utf8(source).is_err());
+            assert!(fix_incomplete(session.discovery_failed, session.is_incomplete(), false));
+            assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
+        }
+    }
+
+    #[test]
+    fn fix_snapshot_keeps_utf8_only_input_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("mod");
+        let scripts = root.join("common/ideas");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let path = scripts.join("non_utf8.txt");
+        std::fs::write(&path, b"x = \xFF\n").unwrap();
+        let rules = tmp.path().join("rules.cwt");
+        std::fs::write(&rules, "").unwrap();
+        let session = Session::load(SessionConfig {
+            game: Game::Hoi4,
+            rules: RulesInput::File(rules),
+            directory: root,
+            parent_roots: vec![], vanilla: None, vanilla_cache: None, vanilla_cache_auto: None,
+            ignore_files: &[], ignore_dirs: &[], loc_languages: None,
+            case_sensitive_files: false, on_rules_diagnostic: None,
+        });
+        let source = session.parsed_files().iter().find(|source| source.path == path).unwrap();
+        assert!(session.read_source_utf8(source).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"x = \xFF\n");
     }
 
     // Step 5: multi-edit-per-file ordering. Two non-overlapping edits on one file
