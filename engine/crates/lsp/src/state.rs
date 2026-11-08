@@ -1486,7 +1486,6 @@ pub(crate) enum ValidateTrigger {
     DidClose,
     Watched,
     DidChange,
-    ConfigChange,
     Reindex,
 }
 
@@ -1498,7 +1497,6 @@ impl ValidateTrigger {
             ValidateTrigger::DidClose => "didClose",
             ValidateTrigger::Watched => "watched",
             ValidateTrigger::DidChange => "didChange",
-            ValidateTrigger::ConfigChange => "configChange",
             ValidateTrigger::Reindex => "reindex",
         }
     }

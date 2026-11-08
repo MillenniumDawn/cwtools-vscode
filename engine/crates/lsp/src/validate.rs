@@ -5033,7 +5033,7 @@ mod ignored_tests {
             cfg.ignore_file_patterns = vec!["ignored.txt".into()];
         }
         backend
-            .revalidate_all_open_docs(crate::state::ValidateTrigger::ConfigChange)
+            .revalidate_all_open_docs(crate::state::ValidateTrigger::Reindex)
             .await;
         assert!(
             !backend

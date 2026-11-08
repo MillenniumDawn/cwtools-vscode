@@ -34,17 +34,26 @@ fn test_config_no_op_skips_revalidate_then_real_change_runs() {
     let mut server = config_server();
     let quiet = Duration::from_millis(700);
     let budget = Duration::from_secs(10);
-    let before = server.profiling_log().matches("workspace_scan_start").count();
+    let before = server
+        .profiling_log()
+        .matches("workspace_scan_start")
+        .count();
 
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW999"] }));
     server.drain_after_first(quiet, budget);
-    let after_first = server.profiling_log().matches("workspace_scan_start").count();
+    let after_first = server
+        .profiling_log()
+        .matches("workspace_scan_start")
+        .count();
     assert_eq!(after_first, before + 1);
 
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW999"] }));
     server.drain_until_quiet(quiet, budget);
     assert_eq!(
-        server.profiling_log().matches("workspace_scan_start").count(),
+        server
+            .profiling_log()
+            .matches("workspace_scan_start")
+            .count(),
         after_first,
         "an identical config re-send must not rescan"
     );
@@ -52,7 +61,10 @@ fn test_config_no_op_skips_revalidate_then_real_change_runs() {
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW998"] }));
     server.drain_after_first(quiet, budget);
     assert_eq!(
-        server.profiling_log().matches("workspace_scan_start").count(),
+        server
+            .profiling_log()
+            .matches("workspace_scan_start")
+            .count(),
         after_first + 1,
         "a genuinely changed code list must rescan"
     );
@@ -180,11 +192,15 @@ fn test_ignored_code_changes_refresh_closed_file_diagnostics() {
     });
 
     change_config(&mut server, json!({ "ignoredErrorCodes": ["CW268"] }));
-    server.read_until_within(Duration::from_secs(10), "suppressed closed diagnostic", |v| {
-        v["method"] == "textDocument/publishDiagnostics"
-            && v["params"]["uri"] == uri
-            && !publish_has_code(v, "CW268")
-    });
+    server.read_until_within(
+        Duration::from_secs(10),
+        "suppressed closed diagnostic",
+        |v| {
+            v["method"] == "textDocument/publishDiagnostics"
+                && v["params"]["uri"] == uri
+                && !publish_has_code(v, "CW268")
+        },
+    );
 
     change_config(&mut server, json!({ "ignoredErrorCodes": [] }));
     server.read_until_within(Duration::from_secs(10), "restored closed diagnostic", |v| {
