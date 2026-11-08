@@ -2,6 +2,7 @@
 
 #### Extension
 
+* End pending rules-update progress when the server stops or fails to start, and prevent an old scan completion from reloading a stopped or restarted server. (#1270)
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
 
 #### Engine
