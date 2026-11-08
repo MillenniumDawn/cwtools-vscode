@@ -770,6 +770,11 @@ impl Backend {
             None
         };
 
+        let disk_loc_keys = disk_loc_text.as_ref().map(|text| {
+            let path = crate::paths::uri_to_path_str(&uri);
+            tokio::task::block_in_place(|| crate::validate::loc_keys_of(text, &path))
+        });
+
         let (exports_before, names_before) = {
             let info = self.state.info_service.read();
             (
@@ -799,7 +804,7 @@ impl Backend {
             DiskState::Absent
         };
 
-        let (exports_after, names_after, generation) = {
+        let (exports_after, names_after, generation, changed_loc_keys) = {
             let mut doc_tokens = self.state.doc_tokens.write();
             let documents = self.state.documents.lock();
             if documents.contains_key(&uri) {
@@ -845,7 +850,23 @@ impl Backend {
                 }
             }
             doc_tokens.remove(&uri);
-            self.loc_live_overlay_mut().remove(&uri);
+            // A watched save may have been consumed while this document was
+            // open. Replace its live keys with the actual disk keys before a
+            // later didOpen can install another live overlay.
+            let mut live = self.loc_live_overlay_mut();
+            let mut watched = self.loc_watched_overlay_mut();
+            let old_live = live.remove(&uri);
+            let old_watched = watched.remove(&uri);
+            let previous = old_live.or(old_watched).unwrap_or_default();
+            let changed_loc_keys = if let Some(keys) = disk_loc_keys {
+                let changed = previous.symmetric_difference(&keys).cloned().collect();
+                watched.insert(uri.clone(), keys);
+                changed
+            } else {
+                previous
+            };
+            drop(watched);
+            drop(live);
             self.state.completion_generation.lock().remove(&uri);
             {
                 let mut fresh = self.state.fresh_ast_cache.lock();
@@ -859,6 +880,7 @@ impl Backend {
                 info.export_fingerprint(&uri),
                 export_name_tokens(&info, &uri),
                 self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1,
+                changed_loc_keys,
             )
         };
 
@@ -907,6 +929,10 @@ impl Backend {
                     .await;
                 }
             }
+        }
+
+        if !changed_loc_keys.is_empty() {
+            self.refresh_after_watched_loc_changes(&changed_loc_keys).await;
         }
 
         let mut changed_names: NameTokens = names_before
