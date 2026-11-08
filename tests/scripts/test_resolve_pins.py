@@ -194,7 +194,44 @@ def test_main_writes_outputs_and_succeeds(
     assert exit_code == 0
     assert output_path.read_text(encoding="utf-8") == (
         f"md_rev={FULL_SHA_A}\nrules_rev={FULL_SHA_B}\n"
+        f"stellaris_corpus_rev={FULL_SHA_B}\nstellaris_rules_rev={FULL_SHA_B}\n"
     )
+
+
+def test_stellaris_pins_use_their_own_repositories(resolve_pins: ModuleType) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def gh_api(repo: str, pin: str) -> str:
+        calls.append((repo, pin))
+        return FULL_SHA_A if repo == resolve_pins.STELLARIS_CORPUS_REPO else FULL_SHA_B
+
+    text = resolve_pins.STELLARIS_BASELINE.read_text(encoding="utf-8")
+    corpus_pin = resolve_pins.parse_pin(text, "corpus")
+    rules_pin = resolve_pins.parse_pin(text, "rules")
+    assert corpus_pin is not None and rules_pin is not None
+    assert resolve_pins.resolve_stellaris_pins(
+        text, resolve_pins.STELLARIS_BASELINE, gh_api
+    ) == (FULL_SHA_A, FULL_SHA_B)
+    assert calls == [
+        (resolve_pins.STELLARIS_CORPUS_REPO, corpus_pin),
+        (resolve_pins.STELLARIS_RULES_REPO, rules_pin),
+    ]
+
+
+def test_stellaris_rejects_dirty_and_unresolved_pins(resolve_pins: ModuleType) -> None:
+    text = resolve_pins.STELLARIS_BASELINE.read_text(encoding="utf-8")
+    pin = resolve_pins.parse_pin(text, "corpus")
+    assert pin is not None
+    with pytest.raises(resolve_pins.PinError):
+        resolve_pins.resolve_stellaris_pins(
+            text.replace(f"@ {pin}\n", f"@ {pin} (dirty)\n"),
+            resolve_pins.STELLARIS_BASELINE,
+            lambda _repo, _pin: FULL_SHA_A,
+        )
+    with pytest.raises(resolve_pins.PinError):
+        resolve_pins.resolve_stellaris_pins(
+            text, resolve_pins.STELLARIS_BASELINE, lambda _repo, _pin: "not-a-sha"
+        )
 
 
 def test_main_fails_without_a_clean_pin(

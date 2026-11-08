@@ -21,6 +21,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 MD_BASELINE = SCRIPT_DIR / "md-baseline.csv"
 VANILLA_BASELINE = SCRIPT_DIR / "vanilla-baseline.csv"
+STELLARIS_BASELINE = SCRIPT_DIR / "stellaris-baseline.csv"
+STELLARIS_CORPUS_REPO = "hmlendea/stellaris-ui-prescripted-countries"
+STELLARIS_RULES_REPO = "cwtools/cwtools-stellaris-config"
 
 # Anchored on end-of-line so a `(dirty)` suffix does not match. A baseline
 # blessed against a modified checkout pins nothing CI can reproduce, and
@@ -112,6 +115,19 @@ def resolve_vanilla_pins(
     return pins
 
 
+def resolve_stellaris_pins(
+    baseline_text: str,
+    baseline_path: Path,
+    gh_api: Callable[[str, str], str],
+) -> tuple[str, str]:
+    pins = validate_pins(baseline_text, baseline_path, ("corpus", "rules"))
+    corpus = gh_api(STELLARIS_CORPUS_REPO, pins["corpus"])
+    rules = gh_api(STELLARIS_RULES_REPO, pins["rules"])
+    check_sha("Stellaris corpus", corpus)
+    check_sha("Stellaris rules", rules)
+    return corpus, rules
+
+
 def gh_api_commit_sha(repo: str, pin: str) -> str:
     """Resolve `pin` to a commit SHA in `repo` via the `gh` CLI."""
     result = subprocess.run(
@@ -145,6 +161,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
 
     baseline_text = MD_BASELINE.read_text(encoding="utf-8")
     vanilla_text = VANILLA_BASELINE.read_text(encoding="utf-8")
+    stellaris_text = STELLARIS_BASELINE.read_text(encoding="utf-8")
 
     try:
         vanilla_pins = resolve_vanilla_pins(
@@ -152,6 +169,9 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
         md_sha, rules_sha, lines = resolve_pins(
             baseline_text, MD_BASELINE, md_repo, rules_repo, gh_api_commit_sha
+        )
+        stellaris_corpus, stellaris_rules = resolve_stellaris_pins(
+            stellaris_text, STELLARIS_BASELINE, gh_api_commit_sha
         )
     except PinError as error:
         print(f"::error::{error.annotation}")
@@ -172,6 +192,8 @@ def main(env: Mapping[str, str] | None = None) -> int:
     with Path(github_output).open("a", encoding="utf-8") as output:
         output.write(f"md_rev={md_sha}\n")
         output.write(f"rules_rev={rules_sha}\n")
+        output.write(f"stellaris_corpus_rev={stellaris_corpus}\n")
+        output.write(f"stellaris_rules_rev={stellaris_rules}\n")
 
     return 0
 

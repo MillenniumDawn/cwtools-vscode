@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. (#1224)
+
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
