@@ -373,7 +373,9 @@ def read_changelog() -> str:
     return (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
-def validate_release_metadata(tag: str, manifest_version: object, changelog: str) -> None:
+def validate_release_metadata(
+    tag: str, manifest_version: object, changelog: str
+) -> None:
     """Reject inconsistent release inputs before any publisher starts."""
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise RuntimeError(f"invalid release tag {tag!r}; expected vMAJOR.MINOR.PATCH")

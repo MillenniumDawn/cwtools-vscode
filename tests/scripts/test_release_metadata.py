@@ -27,9 +27,10 @@ def test_rejects_invalid_metadata(tag: str, manifest: object, changelog: str) ->
 
 
 def test_preflight_precedes_release_output_and_downstream_jobs() -> None:
-    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml").read_text(
-        encoding="utf-8"
+    workflow_path = (
+        Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
     )
+    workflow = workflow_path.read_text(encoding="utf-8")
     tag_check = (
         'RELEASE_TAG="$GITHUB_REF_NAME" python3 scripts/build/build.py '
         "validate-release-metadata"
