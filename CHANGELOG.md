@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Validate release tags against the manifest and release notes before any publishing jobs start. (#1249)
+
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)

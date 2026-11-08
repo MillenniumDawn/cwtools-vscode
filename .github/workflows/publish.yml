@@ -50,6 +50,7 @@ jobs:
         id: check
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            RELEASE_TAG="$GITHUB_REF_NAME" python3 scripts/build/build.py validate-release-metadata
             echo "A v* tag was pushed by hand; publishing it as a release."
             {
               echo "release=true"
@@ -75,6 +76,7 @@ jobs:
           if [ "$version" = "$top" ] \
             && ! git rev-parse -q \
               --verify "refs/tags/v$version" >/dev/null; then
+            RELEASE_TAG="v$version" python3 scripts/build/build.py validate-release-metadata
             echo "This push cuts release v$version."
             {
               echo "release=true"
