@@ -132,6 +132,16 @@ fn test_get_setup_report_describes_the_running_setup() {
     );
     assert_eq!(first["game"]["language"], "hoi4", "{first}");
     assert_eq!(first["server"]["version"], env!("CARGO_PKG_VERSION"));
+    let output = std::process::Command::new(assert_cmd::cargo::cargo_bin("cwtools-server"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let version = String::from_utf8(output.stdout).unwrap();
+    match first["server"]["buildCommit"].as_str() {
+        Some(commit) => assert!(version.contains(commit)),
+        None => assert!(version.contains("source commit unavailable")),
+    }
     assert_eq!(first["state"]["indexReady"], true, "{first}");
     assert_eq!(first["rules"]["dir"], rules_dir, "{first}");
     assert_eq!(first["rules"]["loaded"], true, "{first}");
