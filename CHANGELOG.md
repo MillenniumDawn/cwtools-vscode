@@ -2,7 +2,7 @@
 
 #### Tooling
 
-* Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. (#1224)
+* Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
 
 #### Extension
 
