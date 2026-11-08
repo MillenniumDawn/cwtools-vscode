@@ -7346,16 +7346,36 @@ user = { uses = <thing> }
             backend.state.config.read().background_reindex_idle_seconds,
             30
         );
-        backend
-            .did_change_configuration_impl(DidChangeConfigurationParams {
-                settings: serde_json::json!({"ignoredErrorCodes": ["CW100"]}),
-            })
-            .await;
+        // A code change now triggers a workspace scan, which can send
+        // multiple notifications before returning. Drain the bounded client
+        // socket concurrently so the test cannot stall the scan.
+        let change = backend.did_change_configuration_impl(DidChangeConfigurationParams {
+            settings: serde_json::json!({"ignoredErrorCodes": ["CW100"]}),
+        });
+        tokio::pin!(change);
+        let mut versions = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                tokio::select! {
+                    _ = &mut change => break,
+                    Some(message) = socket.next() => {
+                        if message.method() == "textDocument/publishDiagnostics" {
+                            let params: PublishDiagnosticsParams =
+                                serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                            versions.push(params.version);
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the config-triggered scan must finish");
+        versions.extend(drain_publication_versions(&mut socket));
         assert_eq!(
             backend.state.settings_generation.load(Ordering::SeqCst),
             generation + 1
         );
-        assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
+        assert_eq!(versions, [Some(1)]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
