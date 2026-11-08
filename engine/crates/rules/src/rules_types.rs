@@ -13,6 +13,12 @@ pub struct SubtypeRuleKeyGroup {
     pub node_rule_groups: Vec<Vec<SubtypeRuleKeyGroup>>,
 }
 
+/// Effect names mapped to the value-set namespace they collect.
+type ValueSetEffects = rustc_hash::FxHashMap<String, String>;
+
+/// Effect names mapped to their collected field and value-set namespace pairs.
+type ValueSetEffectFields = rustc_hash::FxHashMap<String, Vec<(String, String)>>;
+
 /// The enum of `$PARAM$` names that the engine fills from scripted effect and
 /// trigger files when a config uses it without defining it.
 pub const SCRIPTED_EFFECT_PARAMS: &str = "scripted_effect_params";
@@ -773,12 +779,7 @@ impl RuleSet {
 
     /// Derive the value-set collection rules from aliases. This can be used before
     /// reindexing, when the cached lookup maps are not yet available.
-    pub fn value_set_effect_definitions(
-        &self,
-    ) -> (
-        rustc_hash::FxHashMap<String, String>,
-        rustc_hash::FxHashMap<String, Vec<(String, String)>>,
-    ) {
+    pub fn value_set_effect_definitions(&self) -> (ValueSetEffects, ValueSetEffectFields) {
         fn first_value_set_ns(rule: &RuleType) -> Option<&str> {
             fn of_field(f: &NewField) -> Option<&str> {
                 match f {
