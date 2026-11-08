@@ -45,8 +45,8 @@ mod testing;
 mod transport;
 mod validate;
 
-pub(crate) use cursor::{RuleCursorInfo, hint_from_rule_right};
 pub use build_identity::server_version;
+pub(crate) use cursor::{RuleCursorInfo, hint_from_rule_right};
 pub(crate) use server::{LoadingBar, UpdateFileList};
 pub(crate) use state::{
     AstSource, Backend, CompletionCacheEntry, DeferredRulesMessage, DocumentState,
