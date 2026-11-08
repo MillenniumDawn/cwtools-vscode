@@ -431,6 +431,22 @@ suite("rulesSetup", () => {
 		assert.deepStrictEqual(warnings(), []);
 	});
 
+	test("does not adopt a new server lifecycle while fetching rules", async () => {
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+		let originalIsCurrent = true;
+		let scan = Promise.resolve<InitialScanOutcome>({
+			kind: "ready",
+			isCurrent: () => originalIsCurrent,
+		});
+		const pending = sync(() => scan);
+		originalIsCurrent = false;
+		scan = Promise.resolve({ kind: "ready", isCurrent: () => true });
+
+		await settle(pending);
+		assert.deepStrictEqual(requests, []);
+	});
+
 	test("does not reload a restarted server even when the wait resolved as ready", async () => {
 		state.hasGitDirectory = true;
 		state.head = sha("e");

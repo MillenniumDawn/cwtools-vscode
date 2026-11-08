@@ -124,7 +124,7 @@ export function fetchRulesInBackground(
 		language,
 		cacheDir,
 		client,
-		initialScanDone,
+		initialScanDone(),
 		globalState,
 	)
 		.catch((err: unknown) => logError(`Rule fetch failed for ${language}`, err))
@@ -141,7 +141,7 @@ async function syncReviewedRules(
 	language: string,
 	cacheDir: string,
 	client: LanguageClient,
-	initialScanDone: () => Promise<InitialScanOutcome>,
+	initialScanDone: Promise<InitialScanOutcome>,
 	globalState: Memento,
 ): Promise<void> {
 	const rules = await reviewedRulesRepo(language, globalState);
@@ -302,7 +302,7 @@ async function syncPinnedRules(
 	language: string,
 	cacheDir: string,
 	client: LanguageClient,
-	initialScanDone: () => Promise<InitialScanOutcome>,
+	initialScanDone: Promise<InitialScanOutcome>,
 ): Promise<void> {
 	const languageRulesCache = path.join(cacheDir, language);
 	const head = await currentRulesHead(languageRulesCache);
@@ -346,7 +346,7 @@ async function syncPinnedRules(
 					);
 				}
 				// The wait is lifecycle-bound: only a still-current ready scan may reload.
-				const outcome = await initialScanDone();
+				const outcome = await initialScanDone;
 				if (outcome.kind !== "ready" || !outcome.isCurrent()) {
 					logInfo(
 						`${language} rules updated, but their server start is gone; skipping the rules reload`,
