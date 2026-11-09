@@ -64,6 +64,9 @@ function serverProvidesValidateWorkspace(client: LanguageClient): boolean {
 // handler calls it whenever the client reaches Running, when the server's
 // capabilities are known.
 export function publishCommandAvailability(client: LanguageClient): void {
+	// The server-owned palette commands exist only while the server that
+	// registered them is running.
+	void commands.executeCommand("setContext", "cwtoolsServerRunning", true);
 	void commands.executeCommand(
 		"setContext",
 		"cwtoolsGraphAvailable",
@@ -92,6 +95,7 @@ export function publishCommandAvailability(client: LanguageClient): void {
 }
 
 export function clearCommandAvailability(): void {
+	void commands.executeCommand("setContext", "cwtoolsServerRunning", false);
 	void commands.executeCommand("setContext", "cwtoolsGraphAvailable", false);
 	void commands.executeCommand("setContext", "cwtoolsGraphFromHereAvailable", false);
 	void commands.executeCommand("setContext", "cwtoolsFixAllAvailable", false);

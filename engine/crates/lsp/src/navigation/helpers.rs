@@ -7,7 +7,7 @@ use cwtools_string_table::string_table::StringTable;
 
 use crate::Backend;
 use crate::lines::DocLines;
-use crate::paths::{current_token_range_with_encoding, encoded_position_len};
+use crate::paths::{encoded_position_len, line_prefix_with_encoding};
 
 pub(crate) async fn resolve_file_ref(
     roots: &[std::path::PathBuf],
@@ -180,6 +180,11 @@ pub(crate) enum TokenCase {
 }
 
 pub(crate) fn code_token_cols_in_line(line: &str, name: &str, case: TokenCase) -> Vec<u32> {
+    // Callers run this over every line of a file. Nearly all of them lack the
+    // name, and those are rejected before the two buffers below are built.
+    if matches!(case, TokenCase::Sensitive) && !line.contains(name) {
+        return Vec::new();
+    }
     let chars: Vec<char> = line.chars().collect();
     let needle: Vec<char> = name.chars().collect();
     let mut out = Vec::new();
@@ -712,8 +717,20 @@ pub(crate) fn prepare_rename_range(
     instance_name: &str,
     encoding: &PositionEncodingKind,
 ) -> Range {
+    // The name was read with `is_ident_char`, so its start is found the same
+    // way. Completion's token scan stops at `.`, which would put the start in
+    // the middle of a dotted event id or localisation key.
     let start = text.map_or(pos, |text| {
-        current_token_range_with_encoding(text, pos.line, pos.character, encoding).start
+        let prefix = line_prefix_with_encoding(text, pos.line, pos.character, encoding);
+        let start_byte = prefix
+            .char_indices()
+            .rev()
+            .find_map(|(byte, c)| (!is_ident_char(c)).then_some(byte + c.len_utf8()))
+            .unwrap_or(0);
+        Position {
+            line: pos.line,
+            character: encoded_position_len(&prefix[..start_byte], encoding),
+        }
     });
     Range {
         start,
@@ -1216,6 +1233,24 @@ mod tests {
             ),
             Range::new(Position::new(0, 2), Position::new(0, 8))
         );
+    }
+
+    #[test]
+    fn prepare_rename_range_covers_a_dotted_name_from_any_segment() {
+        let text = "id = my_mod.12";
+        let whole = Range::new(Position::new(0, 5), Position::new(0, 14));
+        for character in [8, 12, 13, 14] {
+            assert_eq!(
+                prepare_rename_range(
+                    Some(text),
+                    Position::new(0, character),
+                    "my_mod.12",
+                    &PositionEncodingKind::UTF16,
+                ),
+                whole,
+                "cursor at {character}"
+            );
+        }
     }
 
     #[test]

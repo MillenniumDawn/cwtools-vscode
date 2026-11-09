@@ -949,12 +949,13 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let table = self.state.string_table.rebound(ast.overlay());
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
-        Some(
-            self.state
-                .info_service
-                .write()
-                .file_reference_sites_for_ast(uri, ast, &table, &ruleset, &logical_path),
-        )
+        Some(self.state.info_service.read().file_reference_sites_for_ast(
+            uri,
+            ast,
+            &table,
+            &ruleset,
+            &logical_path,
+        ))
     }
 
     pub(crate) fn refresh_open_reference_sites(&self) {
@@ -2519,6 +2520,34 @@ mod info_revision_tests {
             0,
             "the region must go with the document"
         );
+    }
+
+    /// Between an edit and its debounced validation the stored AST belongs to the
+    /// previous text. Handlers map positions with the new text, so they must get
+    /// the new tree; completion still gets the stored one, tagged stale.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ast_for_matches_the_current_text_before_validation_catches_up() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { }").await;
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 3, Arc::from("inserted = { }\nidea_a = { }"))
+            .unwrap();
+
+        let current = backend.ast_for(&uri).expect("current ast");
+        assert_eq!(current.root_children.len(), 2);
+        assert!(Arc::ptr_eq(
+            &current,
+            &backend.ast_for(&uri).expect("memoized ast")
+        ));
+
+        let stale = backend.ast_snapshot_for(&uri).expect("stored ast");
+        assert!(matches!(stale.source, crate::state::AstSource::StoredStale));
+        assert_eq!(stale.ast.root_children.len(), 1);
     }
 
     /// The hazard that made `ParsedFile` own its guard: a handler can hold an AST

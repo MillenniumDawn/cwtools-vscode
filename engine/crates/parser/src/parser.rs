@@ -304,9 +304,11 @@ impl<'a> Parser<'a> {
             return Some(self.finish_value(start, b, None));
         }
         if peek7_len >= 3 && peek7[0] == '@' && peek7[1] == '\\' && peek7[2] == '[' {
-            return self
-                .parse_metaprogramming()
-                .map(|value| self.finish_value(start, value, None));
+            // An unclosed bracket leaves the cursor on the `@`, so the text is
+            // read as an ordinary token below.
+            if let Some(value) = self.parse_metaprogramming() {
+                return Some(self.finish_value(start, value, None));
+            }
         }
 
         self.parse_number_or_string()
@@ -658,6 +660,7 @@ impl<'a> Parser<'a> {
             return None;
         }
         let start = self.byte_pos();
+        let saved = self.save();
         self.advance(); // '@'
         if self.peek() != Some('\\') {
             return None;
@@ -670,6 +673,10 @@ impl<'a> Parser<'a> {
 
         self.advance_while(|c| c != ']');
         if self.next_if(|c| c == ']').is_none() {
+            // The scan ran to the end of the input. Rewind, or everything after
+            // the bracket, closing braces included, is lost from the tree while
+            // the expression is being typed.
+            self.restore(saved);
             self.errors.push(ParseError::Pos(
                 self.pos().line,
                 self.pos().col,
@@ -1551,6 +1558,26 @@ shorthand { nested = value }
             }
             v => panic!("expected String, got {:?}", v),
         }
+    }
+
+    #[test]
+    fn unclosed_metaprogramming_bracket_keeps_the_rest_of_the_file() {
+        let table = StringTable::new();
+        let input = "a = {\n\tb = @\\[ 1 + 2\n\tc = yes\n}\nd = yes\n";
+        let result = parse_string(input, &table);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| format!("{e:?}").contains("unclosed metaprogramming bracket")),
+            "expected the unclosed-bracket error, got {:?}",
+            result.errors
+        );
+        assert_eq!(
+            result.root_children.len(),
+            2,
+            "the statement after the clause must survive an unclosed bracket"
+        );
     }
 
     #[test]

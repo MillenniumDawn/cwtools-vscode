@@ -338,19 +338,29 @@ impl Backend {
     /// hover/goto/completion still resolve mid-edit. The fresh parse is memoized by
     /// `(uri, version)` (#87), since a document has no stored AST until its first validate.
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
+        self.ast_snapshot(uri, true)
+    }
+
+    /// `allow_stale` hands back the AST of an earlier version while the debounced
+    /// validation of the current one is pending. Completion wants that: the text
+    /// being typed is usually malformed. Everything else maps positions with the
+    /// current text, so it needs the tree of that same text.
+    fn ast_snapshot(&self, uri: &str, allow_stale: bool) -> Option<AstSnapshot> {
         let (text, version) = {
             let docs = self.state.documents.lock();
             let doc = docs.get(uri)?;
             if let Some(ast) = &doc.ast {
-                let source = if doc.ast_version == Some(doc.version) {
-                    AstSource::StoredCurrent
-                } else {
-                    AstSource::StoredStale
-                };
-                return Some(AstSnapshot {
-                    ast: ast.clone(),
-                    source,
-                });
+                let current = doc.ast_version == Some(doc.version);
+                if current || allow_stale {
+                    return Some(AstSnapshot {
+                        ast: ast.clone(),
+                        source: if current {
+                            AstSource::StoredCurrent
+                        } else {
+                            AstSource::StoredStale
+                        },
+                    });
+                }
             }
             (doc.text.clone(), doc.version)
         };
@@ -383,8 +393,12 @@ impl Backend {
         })
     }
 
+    /// The AST of the document's current text: the stored one when validation has
+    /// caught up, otherwise a parse memoized per `(uri, version)`. A stale tree
+    /// under new positions resolves the wrong element, and semantic tokens built
+    /// from one are cached against the new text until the next edit.
     pub(crate) fn ast_for(&self, uri: &str) -> Option<Arc<ParsedFile>> {
-        self.ast_snapshot_for(uri).map(|snapshot| snapshot.ast)
+        self.ast_snapshot(uri, false).map(|snapshot| snapshot.ast)
     }
 
     pub(crate) fn element_at_cursor(

@@ -1424,22 +1424,31 @@ impl Backend {
             let diagnostics = match current_ast {
                 Some(ast) => {
                     let lines = DocLines::new(&text, encoding.clone());
-                    let diags = match ruleset_snap.as_ref() {
-                        Some(ruleset) => {
-                            self.validate_parsed_prebuilt(
-                                &uri,
-                                &ast,
-                                &modifier_keys_snap,
-                                ruleset,
-                                game,
-                                registry_snap.as_ref(),
-                                &lines,
-                                true,
-                            )
-                            .0
-                        }
-                        None => parse_errors_to_diagnostics(&ast.errors, &lines),
-                    };
+                    // A whole-file validation: keep it off the async workers. The
+                    // inline ignores and the cap match what an edit publishes, so
+                    // a rescan cannot bring back a suppressed diagnostic.
+                    let diags = tokio::task::block_in_place(|| {
+                        let mut diags = match ruleset_snap.as_ref() {
+                            Some(ruleset) => {
+                                self.validate_parsed_prebuilt(
+                                    &uri,
+                                    &ast,
+                                    &modifier_keys_snap,
+                                    ruleset,
+                                    game,
+                                    registry_snap.as_ref(),
+                                    &lines,
+                                    true,
+                                )
+                                .0
+                            }
+                            None => parse_errors_to_diagnostics(&ast.errors, &lines),
+                        };
+                        let inline_ignored = extract_inline_ignored_codes(&text);
+                        crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
+                        crate::validate::truncate_diagnostics(&mut diags, &lines);
+                        diags
+                    });
                     tracing::info!(
                         target: "cwtools::profile",
                         "[validate] ({}) {} diagnostics (prebuilt, no reparse)",

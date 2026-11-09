@@ -37,6 +37,20 @@
 #### Engine
 
 * Stop reading closed files to place workspace symbol and go-to-definition results. Their ranges now use the indexed column directly, which differs from the old result only for a symbol that follows astral-plane characters (such as emoji) on the same line under UTF-16 positions. Open documents still convert exactly. (#1323)
+* Hide palette commands that are not registered yet. With CWTools disabled, no `descriptor.mod`, a missing server binary, or a stopped server, the restart, output, base-game, baseline, graph-from-JSON, profiling, reindex, cache, rules-reload and localisation commands no longer appear and fail with "command not found".
+* Stop asking the server for file types when the focused editor is not a script file. Switching to settings, markdown or a diff no longer sends a request or logs a failure while the server is starting.
+* Log a failed language change for an opened document instead of failing activation.
+
+#### Engine
+
+* Keep inline `# cwtools-ignore` directives and the per-file diagnostic cap when open documents are revalidated after a rescan, a background reindex or a settings change. Suppressed diagnostics used to come back until the next edit of the file. That pass now also runs off the async workers.
+* Resolve hover, go-to-definition, highlights, references, rename, semantic tokens, inlay hints, colors, document links and the outline against the syntax tree of the current text. Between an edit and its debounced validation they used the previous version's tree under the new positions, and semantic tokens built that way stayed cached until the next edit. Completion still uses the last validated tree.
+* Offer the whole name when renaming a dotted event id or localisation key from any segment. The range used to start after the last dot before the cursor.
+* Keep parsing after an unclosed `@\[` expression. The scan for `]` ran to the end of the file, so every statement after it was missing from the tree while the expression was being typed. The error is still reported.
+* Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or localisation entries change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
+* Collect an open document's reference sites under a read lock. CodeLens, call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
+* Store each complex enum and value-set string once across files, and reject lines without the searched name before scanning them for highlights and rename.
+
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
 * Release the workspace scan's type index snapshot once pass 2 has validated, instead of holding it through publishing and the open-document revalidation. An index write in that window, such as an open document reindexed after the scan, no longer copies the whole index. An edit made while pass 2 is still validating still copies it, because that pass reads a stable snapshot. Diagnostics are unchanged. (#1321)
@@ -51,6 +65,10 @@
 * Watch an explicitly supplied `--vanilla` directory in `validate --watch`, deduplicated against the rules, workspace and parent roots, so an edit under the vanilla install reruns validation without another workspace change. Mod ignore-dir exclusions are not applied to the vanilla root, and an unset vanilla adds no root. (#1268)
 * Report the missing UTF-8 BOM error (CW254) once per physical localisation file. Multi-language CSV files parsed one projection per language and repeated the file-level error for every projection; language-specific entry diagnostics are unchanged. (#1263)
 * Accept a bare `yes` or `no` for an `enum[...]` field when the enum lists it. The parser reads these as booleans, which the enum check skipped, so `mode = yes` reported CW240. A value the enum does not list is still reported. (#1317)
+
+#### Tooling
+
+* Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
 
 ### 4.0.7
 
