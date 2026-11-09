@@ -1030,17 +1030,17 @@ impl Backend {
             return;
         }
         self.bump_settings_generation();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let mut rescanned = self.validate_entire_workspace(false).await;
-        while !rescanned && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            rescanned = self.validate_entire_workspace(false).await;
-        }
-        if !rescanned {
+        let outcome = self
+            .wait_for_scan(
+                std::time::Instant::now() + std::time::Duration::from_secs(60),
+                None,
+            )
+            .await;
+        if outcome != ScanOutcome::Ran {
             self.client
                 .log_message(
                     MessageType::WARNING,
-                    "workspace folders changed but a scan stayed in progress; index still points at the previous folder",
+                    "workspace folders changed but the scan did not complete; the index may be incomplete",
                 )
                 .await;
         }
@@ -1716,6 +1716,31 @@ mod tests {
             Some(Value::String("Vanilla cache rebuilt.".into()))
         );
         assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_folder_change_does_not_retry_discovery_failure() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-workspace");
+        let uri = Url::from_file_path(&missing).unwrap();
+        let change = DidChangeWorkspaceFoldersParams {
+            event: WorkspaceFoldersChangeEvent {
+                added: vec![WorkspaceFolder {
+                    uri,
+                    name: "missing".to_string(),
+                }],
+                removed: Vec::new(),
+            },
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.did_change_workspace_folders_impl(change),
+        )
+        .await
+        .expect("failed discovery must not retry as though a scan were busy");
+        assert!(!backend.state.scan_in_progress.load(Ordering::SeqCst));
+        assert!(backend.state.last_scan_summary.lock().is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
