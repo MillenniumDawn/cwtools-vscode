@@ -131,28 +131,9 @@ fn insert_stub_after_line(
     }
 }
 
-/// A file whose whole content is a BOM and/or whitespace holds no loc entries, so it is
-/// still a header-initialization target (#1255); `text.is_empty()` alone would hand a
-/// stub a bare append under no `l_x:` header. The BOM is not whitespace, so it is
-/// named explicitly.
+/// A BOM is not `is_whitespace`, so BOM-only and whitespace-only files still count as empty (#1255).
 fn is_effectively_empty(text: &str) -> bool {
     text.chars().all(|c| c == '\u{FEFF}' || c.is_whitespace())
-}
-
-/// The position at the very end of `text`, encoding-aware, so an edit can consume the
-/// whole effectively-empty body (a stray BOM must be replaced, not left after the
-/// header as a second BOM) or compose just past it. Non-trailing-newline files end on
-/// their last line; trailing-newline files end on the empty line after it.
-fn end_of_text_position(text: &str, encoding: &PositionEncodingKind) -> Position {
-    let line_count = text.lines().count() as u32;
-    if text.ends_with('\n') {
-        return Position::new(line_count, 0);
-    }
-    let last = text.lines().last().unwrap_or("");
-    Position::new(
-        line_count.saturating_sub(1),
-        source_column_to_lsp(last, last.chars().count() as u32, encoding),
-    )
 }
 
 fn insert_edit_op(
@@ -626,13 +607,9 @@ impl Backend {
             LocInsertTarget::ExistingFileAppend { uri } => {
                 let snapshot = texts.get(uri.as_str())?;
                 if is_effectively_empty(&snapshot.text) {
-                    // The header edit consumes the whole effectively-empty body
-                    // (#1255): a pre-existing BOM must not survive as a second
-                    // BOM inside the initialized content. A folded stub on a
-                    // site another candidate already headed is a zero-length
-                    // insert at the end of that body instead, so the two edits
-                    // never overlap the same range.
-                    let end = end_of_text_position(&snapshot.text, encoding);
+                    // One header edit replaces the whole body, so a stray BOM is consumed and a folded stub lands past it (#1255).
+                    let end = crate::lines::DocLines::new(&snapshot.text, encoding.clone())
+                        .document_end_position();
                     let op = if write_header {
                         range_edit_op(
                             uri.clone(),
@@ -904,9 +881,6 @@ mod tests {
         assert_eq!(insert, " my_thing:0 \"TODO\"\n");
     }
 
-    /// A file holding only a BOM and/or whitespace carries no loc entries, so it is
-    /// still a header-initialization target (#1255) and its stray body must not
-    /// survive the edit (as or after the header).
     #[test]
     fn is_effectively_empty_accepts_only_bom_and_whitespace() {
         for empty in [
@@ -927,54 +901,6 @@ mod tests {
                 "expected content: {content:?}"
             );
         }
-    }
-
-    #[test]
-    fn end_of_text_position_spans_an_empty_file() {
-        assert_eq!(
-            end_of_text_position("", &PositionEncodingKind::UTF16),
-            Position::new(0, 0)
-        );
-    }
-
-    #[test]
-    fn end_of_text_position_spans_a_bom_only_file() {
-        // The BOM occupies one UTF-16 unit, so the whole-content range ends just
-        // past it; edits anchored there compose after that range non-overlapping.
-        assert_eq!(
-            end_of_text_position("\u{FEFF}", &PositionEncodingKind::UTF16),
-            Position::new(0, 1)
-        );
-    }
-
-    #[test]
-    fn end_of_text_position_spans_a_whitespace_file_with_a_trailing_newline() {
-        assert_eq!(
-            end_of_text_position(" \n \t\n", &PositionEncodingKind::UTF16),
-            Position::new(2, 0)
-        );
-    }
-
-    #[test]
-    fn end_of_text_position_lands_at_the_last_character_without_a_trailing_newline() {
-        assert_eq!(
-            end_of_text_position("ab\n\t", &PositionEncodingKind::UTF16),
-            Position::new(1, 1)
-        );
-    }
-
-    #[test]
-    fn end_of_text_position_columns_are_encoding_aware() {
-        let text = "x\n\u{1F600}";
-        assert_eq!(
-            end_of_text_position(text, &PositionEncodingKind::UTF16),
-            Position::new(1, 2),
-            "a non-BMP char on the last line takes two UTF-16 units"
-        );
-        assert_eq!(
-            end_of_text_position(text, &PositionEncodingKind::UTF32),
-            Position::new(1, 1)
-        );
     }
 
     #[test]

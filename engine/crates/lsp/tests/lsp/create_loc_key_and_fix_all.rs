@@ -653,11 +653,6 @@ fn test_create_loc_key_code_action_batch_folds_under_one_header_on_a_shared_empt
     );
 }
 
-/// BOM-only and whitespace-only files hold no loc content, so they must get the
-/// same BOM + language-header initialization an empty file gets (#1255). A plain
-/// `is_empty()` check misses them, and its append stub would land without a
-/// header — and a naively inserted header would leave the stray BOM in place
-/// (the body's first character) or add a second one.
 #[test]
 fn test_create_loc_key_code_action_initializes_a_bom_only_loc_file() {
     let mut server = empty_loc_builder()
@@ -769,9 +764,7 @@ fn test_create_loc_key_code_action_initializes_a_whitespace_only_loc_file() {
 
 #[test]
 fn test_create_loc_key_code_action_batch_folds_under_one_header_on_a_bom_only_file() {
-    // The #1255 counterpart of the shared-empty fold test: both keys missing on
-    // an effectively empty (BOM-only) English target, whose folding comes from
-    // both candidates also sharing a not-yet-existing French file.
+    // The BOM-only counterpart of the shared-empty fold test (#1255).
     let mut server = empty_loc_builder()
         .file("localisation/things_l_english.yml", "\u{FEFF}")
         .init_opts(json!({ "localisationLanguages": ["English", "French"] }))
@@ -824,9 +817,7 @@ fn test_create_loc_key_code_action_batch_folds_under_one_header_on_a_bom_only_fi
         2,
         "the header edit and the folded stub, in one TextDocumentEdit: {en_edits:?}"
     );
-    // The edit carrying the header replaces the whole BOM-only body; the folded
-    // stub is a non-overlapping insert at the original end position, so the two
-    // edits compose deterministically (positions refer to the pre-edit text).
+    // Header edit replaces the whole body; the folded stub inserts past it.
     assert_eq!(
         en_edits[0]["range"],
         json!({ "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }),
@@ -849,8 +840,7 @@ fn test_create_loc_key_code_action_batch_folds_under_one_header_on_a_bom_only_fi
                 .contains("l_english:"),
         "the folded stub carries neither header nor BOM: {en_edits:?}"
     );
-    // Applying them in order (replace first, then the trailing insert) gives
-    // the actual file a client applying this action produces.
+    // Applying in array order gives the resulting file.
     let en_applied = format!("{header_edit}{}", en_edits[1]["newText"].as_str().unwrap());
     assert_eq!(
         en_applied.matches('\u{FEFF}').count(),
