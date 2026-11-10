@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use cwtools_index::{SourceLocation, TypeIndex, TypeInstance};
+use cwtools_index::{SourceLocation, TypeIndex, TypeInstance, collect_type_instances};
+use cwtools_parser::parser::parse_string;
 use cwtools_validation::{ErrorSeverity, Game, error_hash};
 
-use super::common::{Opts, validate};
+use super::common::{Opts, ruleset, validate, validate_with};
 
 #[test]
 fn test_validate_simple_type() {
@@ -350,6 +351,46 @@ event = {
         errs_no_idx.iter().all(|e| e.code != Some("CW500")),
         "Expected no CW500 without index, got: {:?}",
         errs_no_idx
+    );
+}
+
+#[test]
+fn boolean_name_field_is_found_by_its_script_spelling() {
+    let cwt = r#"
+event = {
+    requires_thing = <thing>
+}
+types = {
+    type[event] = { path = "game/events" }
+    type[thing] = {
+        path = "game/common/things"
+        name_field = id
+    }
+}
+"#;
+    let (table, rules) = ruleset(cwt);
+    let things = parse_string("a = { id = yes }", &table);
+    let mut idx = TypeIndex::new();
+    idx.merge(
+        "file://things.txt",
+        collect_type_instances(&rules, &things, "common/things/test.txt", &table),
+    );
+    idx.complete = true;
+
+    let errs = validate_with(
+        &table,
+        &rules,
+        "event = { requires_thing = yes }\n",
+        &Opts {
+            path: "game/events/test.txt",
+            type_index: Some(&idx),
+            ..Opts::DEFAULT
+        },
+    );
+    assert!(
+        errs.iter().all(|e| e.code != Some("CW500")),
+        "a boolean name must resolve by its script spelling, got: {:?}",
+        errs
     );
 }
 

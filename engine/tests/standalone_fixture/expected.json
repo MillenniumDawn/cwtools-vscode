@@ -18,6 +18,6 @@
     "line": 1,
     "code": "CW282",
     "severity": "Information",
-    "message": "This is the default value (true) and can be omitted"
+    "message": "This is the default value (yes) and can be omitted"
   }
 ]
