@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.8
+
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
