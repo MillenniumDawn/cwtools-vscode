@@ -415,7 +415,9 @@ fn validate_alias_usage_uncached(
             return; // clean match — accept with no errors
         }
         match &best {
-            Some(b) if b.len() <= temp.len() => {}
+            Some(b)
+                if b.len() < temp.len()
+                    || (b.len() == temp.len() && first_failure(b) >= first_failure(&temp)) => {}
             _ => best = Some(std::mem::take(&mut temp)),
         }
     }
@@ -425,6 +427,21 @@ fn validate_alias_usage_uncached(
     } else if let Some(b) = best {
         errors.extend(b);
     }
+}
+
+/// Where an overload first fails. Cardinality errors are end-of-block checks,
+/// so they rank after every leaf: an overload that only lacks a field got
+/// further than one that rejects a leaf.
+fn first_failure(errors: &[ValidationError]) -> (u32, u16) {
+    const END: (u32, u16) = (u32::MAX, u16::MAX);
+    errors
+        .iter()
+        .map(|e| match e.code {
+            Some(id) if id == error_codes::CW242_WRONG_NUMBER.id => END,
+            _ => (e.line, e.col),
+        })
+        .min()
+        .unwrap_or(END)
 }
 
 fn alias_mismatch_error(

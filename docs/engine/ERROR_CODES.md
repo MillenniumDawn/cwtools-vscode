@@ -164,7 +164,7 @@ These are the core rules-engine codes. Severity and message text are computed pe
 
 | ID | Severity | Message | Meaning | Status |
 |---|---|---|---|---|
-| <a id="cw240"></a>CW240 | Error | {} | A value didn't match its rule's field type (int/float/enum/bool/date, etc.). | Emitted |
+| <a id="cw240"></a>CW240 | Error | {} | A value didn't match its rule's field type (int/float/enum/bool/date, etc.). An enum accepts only its listed members, whatever its size. An enum with no listed members, or with an `@` constant member, accepts any value, and `complex_enum` values are not checked. | Emitted |
 | <a id="cw242"></a>CW242 | Warning | {} | A field appears too few or too many times (cardinality violation). | Emitted |
 | <a id="cw243"></a>CW243 | Error | Target "{}" has incorrect scope. Is {} but expect {} | A scope target resolves to a scope the field doesn't expect. | Emitted (escape hatch `CWTOOLS_NO_SCOPE_CHECKS=1`) |
 | <a id="cw244"></a>CW244 | Error | {} is not a target. Expected a target in scope(s) {} | A value is not a valid target in any of the expected scopes. | Emitted (escape hatch `CWTOOLS_NO_SCOPE_CHECKS=1`) |
