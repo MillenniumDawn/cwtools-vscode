@@ -101,6 +101,23 @@ foo = {
 }
 
 #[test]
+fn a_bool_value_is_quoted_as_yes_or_no_in_cw240() {
+    for value in ["yes", "no"] {
+        let source = format!("foo = {{ required_field = ok count = {value} }}");
+        let errors = validate(RULES, &source, &Opts::DEFAULT);
+        let err = errors
+            .iter()
+            .find(|e| e.code == Some("CW240"))
+            .expect("CW240 emitted");
+        assert!(
+            err.message.contains(&format!("has value '{value}'")),
+            "got: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
 fn missing_required_is_cw242() {
     // `required_field` has `## cardinality = 1..1` and is omitted.
     let codes = codes(
@@ -337,6 +354,24 @@ fn cw240_boolean_enum_suggestion_stays_a_string() {
             .iter()
             .any(|e| e.code == Some("CW240")),
         "quoted boolean enum member must revalidate cleanly"
+    );
+}
+
+#[test]
+fn enum_accepts_bare_boolean_it_lists() {
+    let errors = validate(BOOLEAN_ENUM_RULES, "foo = { mode = yes }", &Opts::DEFAULT);
+    assert!(
+        !errors.iter().any(|e| e.code == Some("CW240")),
+        "bare yes is a member of the enum, got: {errors:?}"
+    );
+}
+
+#[test]
+fn enum_rejects_bare_boolean_it_does_not_list() {
+    let errors = validate(BOOLEAN_ENUM_RULES, "foo = { mode = no }", &Opts::DEFAULT);
+    assert!(
+        errors.iter().any(|e| e.code == Some("CW240")),
+        "bare no is not a member of the enum, got: {errors:?}"
     );
 }
 

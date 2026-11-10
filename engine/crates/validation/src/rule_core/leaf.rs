@@ -475,6 +475,9 @@ pub(crate) fn field_matches_value(
         (NewField::ValueField(ValueType::Enum(enum_name)), Value::Float(f)) => {
             enum_contains(ruleset, enum_name, &f.to_string())
         }
+        (NewField::ValueField(ValueType::Enum(enum_name)), Value::Bool(b)) => {
+            enum_contains(ruleset, enum_name, if *b { "yes" } else { "no" })
+        }
 
         (NewField::ValueField(ValueType::Percent), Value::String(t))
         | (NewField::ValueField(ValueType::Percent), Value::QString(t)) => {
@@ -667,10 +670,6 @@ mod tests {
                 NewField::ValueField(ValueType::Float { min: 0.0, max: 1.0 }),
                 clause(),
             ),
-            (
-                NewField::ValueField(ValueType::Enum("e".to_string())),
-                Value::Bool(false),
-            ),
             (NewField::ValueField(ValueType::Percent), clause()),
             (NewField::ValueField(ValueType::Date), Value::Int(2000)),
             (
@@ -763,6 +762,10 @@ mod tests {
             (
                 NewField::ValueField(ValueType::Int { min: 0, max: 10 }),
                 Value::Int(10),
+            ),
+            (
+                NewField::ValueField(ValueType::Enum("e".to_string())),
+                Value::Bool(false),
             ),
             (NewField::ScalarField, clause()),
             (

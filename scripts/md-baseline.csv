@@ -5170,12 +5170,12 @@ common/unit_medals/MD_default.txt,81,Warning,CW242,"Field 'officer_xp' appears 0
 common/unit_medals/MD_default.txt,99,Warning,CW242,"Field 'officer_xp' appears 0 time(s), expected at least 1"
 common/units/MD_division_support.txt,677,Warning,CW242,"Field 'battalion_mult' appears 2 time(s), expected at most 1"
 common/units/MD_division_support.txt,741,Warning,CW242,"Field 'battalion_mult' appears 2 time(s), expected at most 1"
-common/units/MD_hq_support_companies.txt,1031,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,1126,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,688,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,742,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,831,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,929,Error,CW267,"Expected a unit_stat value, got false"
+common/units/MD_hq_support_companies.txt,1031,Error,CW267,"Expected a unit_stat value, got no"
+common/units/MD_hq_support_companies.txt,1126,Error,CW267,"Expected a unit_stat value, got no"
+common/units/MD_hq_support_companies.txt,688,Error,CW267,"Expected a unit_stat value, got no"
+common/units/MD_hq_support_companies.txt,742,Error,CW267,"Expected a unit_stat value, got no"
+common/units/MD_hq_support_companies.txt,831,Error,CW267,"Expected a unit_stat value, got no"
+common/units/MD_hq_support_companies.txt,929,Error,CW267,"Expected a unit_stat value, got no"
 common/units/critical_parts/00_critical_parts.txt,157,Error,CW263,Unexpected field 'armor_value'
 common/units/critical_parts/00_critical_parts.txt,170,Error,CW263,Unexpected field 'fuel_consumption'
 common/units/critical_parts/00_critical_parts.txt,183,Error,CW263,Unexpected field 'fuel_consumption'

@@ -272,9 +272,13 @@ pub(crate) fn leaf_value_to_string(value: &Value, table: &StringTable) -> String
         Value::String(t) | Value::QString(t) => table.get_string(t.normal).unwrap_or_default(),
         Value::Float(f) => f.to_string(),
         Value::Int(i) => i.to_string(),
-        Value::Bool(b) => b.to_string(),
+        Value::Bool(b) => bool_text(*b).to_string(),
         Value::Clause(_) => "{...}".to_string(),
     }
+}
+
+fn bool_text(b: bool) -> &'static str {
+    if b { "yes" } else { "no" }
 }
 
 pub(crate) fn with_leaf_value_str<R>(
@@ -288,6 +292,7 @@ pub(crate) fn with_leaf_value_str<R>(
             table.with_string(t.normal, |s| buf.extend_from_slice(s.as_bytes()));
             f(std::str::from_utf8(&buf).unwrap_or_default())
         }
+        Value::Bool(b) => f(bool_text(*b)),
         other => f(&leaf_value_to_string(other, table)),
     }
 }
@@ -388,6 +393,16 @@ mod tests {
                 ends_ref(s, needle),
                 "ends_with_ci({s:?}, {needle:?})"
             );
+        }
+    }
+
+    #[test]
+    fn bool_values_render_as_script_spelling() {
+        let table = StringTable::new();
+        for (value, text) in [(true, "yes"), (false, "no")] {
+            let value = Value::Bool(value);
+            assert_eq!(leaf_value_to_string(&value, &table), text);
+            assert_eq!(with_leaf_value_str(&value, &table, str::to_string), text);
         }
     }
 
