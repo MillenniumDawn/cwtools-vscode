@@ -182,7 +182,7 @@ fn test_reload_collects_base_game_scripted_params_for_new_rules() {
         .collect();
     assert_eq!(
         lines,
-        [(2, "CW240")],
+        [(2, "CW263")],
         "only the call passing BOGUS should be reported, got: {publish}"
     );
 }

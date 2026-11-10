@@ -731,6 +731,25 @@ mod tests {
     }
 
     #[test]
+    fn boolean_name_field_is_indexed_by_its_script_spelling() {
+        let table = StringTable::new();
+        let parsed = parse_string("a = { id = yes } b = { id = no }", &table);
+
+        let mut td = type_def("thing", "common/things");
+        td.name_field = Some("id".to_string());
+        let rs = ruleset_with(td);
+
+        let result = collect_type_instances(&rs, &parsed, "common/things/00_things.txt", &table);
+        assert_eq!(names(&result, "thing"), vec!["no", "yes"]);
+
+        let mut index = TypeIndex::new();
+        index.merge("file:///things.txt", result);
+        assert!(index.contains("thing", "yes"));
+        assert!(index.contains("thing", "no"));
+        assert!(!index.contains("thing", "true"));
+    }
+
+    #[test]
     fn no_key_prefix_collects_all() {
         let source = "MY_thing = { } NOPE_thing = { }";
         let table = StringTable::new();
