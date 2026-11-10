@@ -43,12 +43,12 @@
 
 #### Engine
 
-* Keep inline `# cwtools-ignore` directives and the per-file diagnostic cap when open documents are revalidated after a rescan, a background reindex or a settings change. Suppressed diagnostics used to come back until the next edit of the file. That pass now also runs off the async workers.
-* Resolve hover, go-to-definition, highlights, references, rename, semantic tokens, inlay hints, colors, document links and the outline against the syntax tree of the current text. Between an edit and its debounced validation they used the previous version's tree under the new positions, and semantic tokens built that way stayed cached until the next edit. Completion still uses the last validated tree.
+* Keep inline `# cwtools-ignore` directives when open documents are revalidated after a rescan, a background reindex or a settings change. Suppressed diagnostics used to come back until the next edit of the file. That pass now also runs off the async workers.
+* Resolve hover, go-to-definition, highlights, references, rename, semantic tokens, inlay hints, colors, document links and the outline against the syntax tree of the current text. Between an edit and its debounced validation they used the previous version's tree under the new positions, and semantic tokens built that way stayed cached until the next edit. Completion still uses the last validated tree. A request and the validation of the same document version share one parse.
 * Offer the whole name when renaming a dotted event id or localisation key from any segment. The range used to start after the last dot before the cursor.
-* Keep parsing after an unclosed `@\[` expression. The scan for `]` ran to the end of the file, so every statement after it was missing from the tree while the expression was being typed. The error is still reported.
-* Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or localisation entries change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
-* Collect an open document's reference sites under a read lock. CodeLens, call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
+* Keep parsing after an unclosed `@\[` expression. The scan for `]` ran past the end of the line, to the next `]` anywhere in the file or to its end, so the statements in between were missing from the tree while the expression was being typed. The expression now ends on its own line, and the error is still reported.
+* Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or explicit localisation fields change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
+* Collect an open document's reference sites under a read lock. Call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
 * Store each complex enum and value-set string once across files, and reject lines without the searched name before scanning them for highlights and rename.
 
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)

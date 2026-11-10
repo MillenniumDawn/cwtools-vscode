@@ -1425,8 +1425,9 @@ impl Backend {
                 Some(ast) => {
                     let lines = DocLines::new(&text, encoding.clone());
                     // A whole-file validation: keep it off the async workers. The
-                    // inline ignores and the cap match what an edit publishes, so
-                    // a rescan cannot bring back a suppressed diagnostic.
+                    // inline ignores match what an edit publishes, so a rescan
+                    // cannot bring back a suppressed diagnostic. The validation
+                    // has already capped its own output.
                     let diags = tokio::task::block_in_place(|| {
                         let mut diags = match ruleset_snap.as_ref() {
                             Some(ruleset) => {
@@ -1446,7 +1447,6 @@ impl Backend {
                         };
                         let inline_ignored = extract_inline_ignored_codes(&text);
                         crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
-                        crate::validate::truncate_diagnostics(&mut diags, &lines);
                         diags
                     });
                     tracing::info!(

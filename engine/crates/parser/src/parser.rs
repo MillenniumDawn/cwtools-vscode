@@ -671,11 +671,13 @@ impl<'a> Parser<'a> {
         }
         self.advance(); // '['
 
-        self.advance_while(|c| c != ']');
+        // The expression ends on its own line. Scanning further would take a `]`
+        // from a later statement, and rescanning to the end of the input for each
+        // unclosed bracket is quadratic.
+        self.advance_while(|c| c != ']' && c != '\n');
         if self.next_if(|c| c == ']').is_none() {
-            // The scan ran to the end of the input. Rewind, or everything after
-            // the bracket, closing braces included, is lost from the tree while
-            // the expression is being typed.
+            // Rewind, or everything after the bracket, closing braces included,
+            // is lost from the tree while the expression is being typed.
             self.restore(saved);
             self.errors.push(ParseError::Pos(
                 self.pos().line,
@@ -1577,6 +1579,22 @@ shorthand { nested = value }
             result.root_children.len(),
             2,
             "the statement after the clause must survive an unclosed bracket"
+        );
+    }
+
+    #[test]
+    fn unclosed_metaprogramming_bracket_does_not_reach_a_later_closing_bracket() {
+        let table = StringTable::new();
+        let input = "a = {\n\tx = @\\[ 1 + 2\n\ty = 2\n}\nb = { c = yes }\nz = @\\[ 3 ]\nw = 1\n";
+        let result = parse_string(input, &table);
+        assert_eq!(result.root_children.len(), 4, "a, b, z and w");
+        assert_eq!(
+            result
+                .errors
+                .iter()
+                .filter(|e| format!("{e:?}").contains("unclosed metaprogramming bracket"))
+                .count(),
+            1
         );
     }
 

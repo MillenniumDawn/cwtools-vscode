@@ -146,22 +146,14 @@ pub fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
                 })
                 .collect::<Vec<_>>();
             subs.sort();
-            // The primary localisation entry decides each instance's stored
-            // `primary_loc_key`.
+            // Only the explicit fields are read into the cache: the primary one as
+            // `primary_loc_key`, the required ones as the keys CW100 checks.
             let loc = t
                 .localisation
                 .iter()
-                .map(|l| {
-                    format!(
-                        "{}|{}|{}|{}|{}|{}|{}",
-                        l.name,
-                        l.prefix,
-                        l.suffix,
-                        l.required,
-                        l.optional,
-                        l.explicit_field.as_deref().unwrap_or(""),
-                        l.primary,
-                    )
+                .filter_map(|l| {
+                    let field = l.explicit_field.as_deref()?;
+                    Some(format!("{field}|{}|{}|{}", l.primary, l.required, l.optional))
                 })
                 .collect::<Vec<_>>();
             format!(
@@ -1358,8 +1350,8 @@ mod tests {
                 types("", "size = huge", "## primary\nname = \"$\""),
             ),
             (
-                "primary localisation",
-                types("", "size = big", "## primary\nname = \"$_name\""),
+                "primary localisation field",
+                types("", "size = big", "## primary\nname = title"),
             ),
         ] {
             assert_ne!(base, shape(&changed), "{what} must change the shape");

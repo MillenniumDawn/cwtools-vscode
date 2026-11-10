@@ -385,7 +385,17 @@ impl Backend {
         let table = self.state.string_table.with_overlay();
         tokio::task::block_in_place(|| {
             let ast = Arc::new(cwtools_parser::parser::parse_string(&text, &table));
-            *self.state.fresh_ast_cache.lock() = Some((uri.to_string(), version, Arc::clone(&ast)));
+            let mut slot = self.state.fresh_ast_cache.lock();
+            // A slow parse of an older version must not replace a newer one.
+            let superseded = slot
+                .as_ref()
+                .is_some_and(|(cached_uri, cached_version, _)| {
+                    cached_uri == uri && *cached_version > version
+                });
+            if !superseded {
+                *slot = Some((uri.to_string(), version, Arc::clone(&ast)));
+            }
+            drop(slot);
             Some(AstSnapshot {
                 ast,
                 source: AstSource::FreshParse,
