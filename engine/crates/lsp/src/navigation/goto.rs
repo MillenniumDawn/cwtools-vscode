@@ -98,14 +98,14 @@ impl Backend {
                             .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
                             .collect::<Vec<_>>()
                     };
-                    locations_at(self, defs, value, fallback).await
+                    locations_at(self, defs, value, fallback)
                 }
                 ReferenceHint::Variable { name, .. } => {
                     let defs = {
                         let svc = self.state.info_service.read();
                         svc.find_variable_definitions(name)
                     };
-                    locations_at(self, defs, name, fallback).await
+                    locations_at(self, defs, name, fallback)
                 }
                 ReferenceHint::LocRef { key } => {
                     self.loc_key_locations(&key.to_lowercase(), fallback).await
@@ -178,7 +178,7 @@ impl Backend {
                 } else {
                     instances
                 };
-                let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback).await);
+                let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback));
                 if !locations.is_empty() {
                     return Ok(Some(GotoDefinitionResponse::Array(locations)));
                 }
@@ -285,4 +285,82 @@ impl Backend {
 
 fn is_localization_key_field(key: &str) -> bool {
     key.eq_ignore_ascii_case("localization_key") || key.eq_ignore_ascii_case("localisation_key")
+}
+
+#[cfg(test)]
+mod tests {
+    use cwtools_info::SourceLocation;
+
+    use super::*;
+    use crate::access::{MAX_URI_READ_BYTES, read_authorized_text, recorded_reads_under};
+    use crate::paths::path_to_uri;
+    use crate::testing::{open_document, workspace_backend};
+
+    fn at(line: u32, col: u16) -> SourceLocation {
+        SourceLocation {
+            line,
+            col,
+            end: (line, col),
+        }
+    }
+
+    fn range(start: u32, end: u32) -> Range {
+        Range::new(Position::new(0, start), Position::new(0, end))
+    }
+
+    fn fallback() -> Url {
+        Url::parse("file:///unknown").expect("static URI")
+    }
+
+    #[test]
+    fn closed_files_get_their_ranges_without_a_read() {
+        let (backend, workspace) = workspace_backend();
+        let write = |name: &str, text: &str| {
+            let path = workspace.path().join(name);
+            std::fs::write(&path, text).expect("write fixture");
+            path_to_uri(&path)
+        };
+        let ascii = write("ascii.txt", "my_name = 1\n");
+        // Accented and CJK text is one UTF-16 unit per char, so the index
+        // column is already exact after it.
+        let bmp = write("bmp.txt", "caf\u{e9}\u{4e16} my_name = 1\n");
+        let open = path_to_uri(&workspace.path().join("open.txt"));
+        open_document(&backend, &open, "\u{1f600} my_name = 1\n");
+        let before = recorded_reads_under(workspace.path());
+
+        let pairs = vec![(ascii.clone(), at(1, 0)), (bmp, at(1, 6)), (open, at(1, 2))];
+        let locations = locations_at(&backend, pairs, "my_name", &fallback());
+
+        let ranges: Vec<Range> = locations.iter().map(|l| l.range).collect();
+        assert_eq!(ranges, vec![range(0, 7), range(6, 13), range(3, 10)]);
+        assert_eq!(
+            recorded_reads_under(workspace.path()),
+            before,
+            "go-to-definition must answer from the index, not the disk"
+        );
+
+        // A read of the closed file is recorded, so the equality above cannot
+        // hold because the instrumentation went quiet.
+        let roots = backend.state.config.read().authorized_roots.clone();
+        assert!(read_authorized_text(&ascii, &roots, MAX_URI_READ_BYTES).is_some());
+        assert_eq!(recorded_reads_under(workspace.path()), before + 1);
+    }
+
+    /// A closed file is not read, so a column after astral text is the char
+    /// column. UTF-16 counts that text twice, which makes the exact answer one
+    /// unit to the right (an open document gets it). UTF-32 counts chars.
+    #[test]
+    fn a_closed_file_keeps_the_char_column_after_astral_text() {
+        let (backend, workspace) = workspace_backend();
+        let path = workspace.path().join("closed.txt");
+        std::fs::write(&path, "\u{1f600} my_name = 1\n").expect("write fixture");
+        let uri = path_to_uri(&path);
+
+        let utf16 = locations_at(&backend, [(uri.clone(), at(1, 2))], "my_name", &fallback());
+        assert_eq!(utf16[0].range, range(2, 9));
+
+        backend.state.config.write().position_encoding = PositionEncodingKind::UTF32;
+        let utf32 = locations_at(&backend, [(uri, at(1, 2))], "my_name", &fallback());
+        assert_eq!(utf32[0].range, range(2, 9));
+    }
 }

@@ -1,19 +1,34 @@
 ### Unreleased
 
+#### Engine
+
+* Index a boolean as `yes` or `no`, the way the script spells it, instead of `true` or `false`. A type instance named by a `name_field` set to `yes` is now found by a reference spelled `yes`, which no longer raises a false CW500, and variable names and values captured from `yes` or `no` follow the same spelling. Stellaris CW227, CW229, CW109 and CW250 also read a boolean `template`, `area` or `key` as `yes` or `no`. The vanilla cache format version moves to 17, so an existing `.cwv` file is rebuilt once. (#1334)
+* Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
+
+### 4.0.8
+
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
+* Move the graph hover highlight between nodes by swapping the two neighborhoods instead of restyling every element. The dim now clears 100 ms after the pointer leaves a node, so a quick move to the next node skips the full clear. (#1324)
 
 #### Engine
 
-* Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
+* Stop reading closed files to place workspace symbol and go-to-definition results. Their ranges now use the indexed column directly, which differs from the old result only for a symbol that follows astral-plane characters (such as emoji) on the same line under UTF-16 positions. Open documents still convert exactly. (#1323)
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
+* Release the workspace scan's type index snapshot once pass 2 has validated, instead of holding it through publishing and the open-document revalidation. An index write in that window, such as an open document reindexed after the scan, no longer copies the whole index. An edit made while pass 2 is still validating still copies it, because that pass reads a stable snapshot. Diagnostics are unchanged. (#1321)
 * Fail `cwtools parse <dir>` when a rules directory contains error-severity diagnostics, preserving its summary and errors. Loader warnings still exit successfully. (#1248)
+* Check enums of every size against their listed members. Enums with six or more values accepted any non-empty value, so CW240 never fired for them, and the same cutoff let any key match an enum-keyed rule or alias pattern. Enums with no listed members or with `@` constant members still accept anything. (#1319)
+* Check a quoted value against a `scope[...]` field without its quotes, so `id = "SER"` passes like `id = SER` and no longer reports a false CW244. An unknown quoted target still reports CW244. (#1319)
+* When every overload of an alias fails with the same number of errors, report the one that fails furthest into the block instead of the first one declared. A wrong `id` is no longer blamed on the `type` enum of an unrelated overload, and a missing field counts as failing last. (#1319)
+* Cut the `|format` suffix off localization commands before parsing a Jomini chain, as plain commands already do. `[Root.GetFoo('x')|0]` and `[a.b|U]` no longer end in a bogus `|0` or `b|U` segment that could surface as a false CW226. A `|` inside parentheses or quotes is kept. (#1320)
 
 * Apply the configured min/max bounds to keyed variable_field values, reporting out-of-range numbers as CW240 instead of accepting them. Integer and floating values and numeric strings are checked against the same comparison bare values use. Dynamic values, variable references, and the int-only (CW271) and 32-bit precision (CW270) checks are unchanged. The pinned Millennium Dawn baseline gains three CW240 rows: set_war_support = -1 in common/national_focus/05_georgia.txt, add_war_support = -2 in events/05_australia_events.txt, and add_war_support = 15 in events/05_netherlands.txt. (#1241)
+* Show boolean values as `yes` or `no` in CW240, CW264, CW267 and CW282 messages instead of `true` or `false`. A boolean inline-script argument (`ENABLED = yes`) is now substituted as `yes` or `no`, so `is_x = $ENABLED$` no longer raises a false CW240 on a `bool` field. (#1318)
 * Watch an explicitly supplied `--vanilla` directory in `validate --watch`, deduplicated against the rules, workspace and parent roots, so an edit under the vanilla install reruns validation without another workspace change. Mod ignore-dir exclusions are not applied to the vanilla root, and an unset vanilla adds no root. (#1268)
 * Report the missing UTF-8 BOM error (CW254) once per physical localisation file. Multi-language CSV files parsed one projection per language and repeated the file-level error for every projection; language-specific entry diagnostics are unchanged. (#1263)
+* Accept a bare `yes` or `no` for an `enum[...]` field when the enum lists it. The parser reads these as booleans, which the enum check skipped, so `mode = yes` reported CW240. A value the enum does not list is still reported. (#1317)
 
 ### 4.0.7
 
