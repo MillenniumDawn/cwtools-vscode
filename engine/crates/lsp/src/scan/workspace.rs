@@ -1112,6 +1112,10 @@ impl Backend {
                 }
             }
         }
+        // Last reader. A held snapshot makes the next index write deep-clone the index.
+        drop(type_index_snap);
+        #[cfg(test)]
+        self.hold_from_async(crate::state::HoldPoint::Pass2SnapshotDropped);
         if let Some(inline_scripts) = fresh_inline_scripts {
             *self.state.inline_scripts.write() = inline_scripts;
         }
@@ -1733,6 +1737,80 @@ mod tests {
             drop(state.type_uses.write());
         })
         .await;
+    }
+
+    fn spawn_scan(backend: &Backend) -> tokio::task::JoinHandle<bool> {
+        let scan_backend = clone_backend(backend);
+        tokio::spawn(async move {
+            let progress = CommandProgress::for_tests(
+                scan_backend.state.clone(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            scan_backend
+                .validate_entire_workspace_inner(
+                    false,
+                    Some(&progress),
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                )
+                .await
+        })
+    }
+
+    fn index_edited_thing(backend: &Backend, tmp: &tempfile::TempDir) {
+        let uri = Url::from_file_path(tmp.path().join("common/things/edited.txt"))
+            .unwrap()
+            .to_string();
+        let parsed = cwtools_parser::parser::parse_string(
+            "thing_edited = { }\n",
+            &backend.state.string_table,
+        );
+        backend.index_parsed_file(&uri, &parsed, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_releases_type_index_snapshot_before_publishing() {
+        let gate = HoldGate::new(HoldPoint::Pass2SnapshotDropped);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
+        let scan = spawn_scan(&backend);
+        wait_arrived(&gate, HoldPoint::Pass2SnapshotDropped).await;
+
+        let holders = Arc::strong_count(&backend.state.info_service.read().type_index);
+        let before = Arc::as_ptr(&backend.state.info_service.read().type_index);
+        index_edited_thing(&backend, &tmp);
+        let after = Arc::as_ptr(&backend.state.info_service.read().type_index);
+        gate.release();
+        assert!(scan.await.expect("scan panicked"), "scan must complete");
+
+        assert_eq!(holders, 1, "the scan kept its type index snapshot");
+        assert_eq!(
+            before, after,
+            "an index write after pass 2 copied the index"
+        );
+        assert!(
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .contains("thing", "thing_edited")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_edit_during_snapshot_window_reaches_final_index() {
+        let gate = HoldGate::new(HoldPoint::Pass2Before);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
+        let scan = spawn_scan(&backend);
+        wait_arrived(&gate, HoldPoint::Pass2Before).await;
+
+        index_edited_thing(&backend, &tmp);
+        gate.release();
+        assert!(scan.await.expect("scan panicked"), "scan must complete");
+
+        let info = backend.state.info_service.read();
+        for name in ["thing_edited", "thing_0", "thing_1", "thing_2"] {
+            assert!(info.type_index.contains("thing", name), "lost {name}");
+        }
     }
 
     fn open_buffer(backend: &Backend, tmp: &tempfile::TempDir, name: &str, parsed: bool) -> String {

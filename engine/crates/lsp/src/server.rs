@@ -1193,7 +1193,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<SymbolInformation>>> {
         self.wait_for_notifications().await;
         self.mark_activity();
-        self.symbol_impl(params).await
+        self.symbol_impl(params)
     }
 
     async fn folding_range(
