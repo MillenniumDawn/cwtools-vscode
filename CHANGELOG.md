@@ -3,6 +3,7 @@
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
+* Move the graph hover highlight between nodes by swapping the two neighborhoods instead of restyling every element. The dim now clears 100 ms after the pointer leaves a node, so a quick move to the next node skips the full clear. (#1324)
 
 #### Engine
 
