@@ -6,7 +6,7 @@
 
 #### Tooling
 
-* Validate release tags against the manifest and release notes before any publishing jobs start. (#1249)
+* Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
 
 ### 4.0.8
 

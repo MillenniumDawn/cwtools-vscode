@@ -26,19 +26,23 @@ def test_rejects_invalid_metadata(tag: str, manifest: object, changelog: str) ->
         validate_release_metadata(tag, manifest, changelog)
 
 
-def test_preflight_precedes_release_output_and_downstream_jobs() -> None:
+def test_preflight_gates_downstream_jobs_and_reports_its_own_failure() -> None:
     workflow_path = (
         Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
     )
     workflow = workflow_path.read_text(encoding="utf-8")
-    tag_check = (
-        'RELEASE_TAG="$GITHUB_REF_NAME" python3 scripts/build/build.py '
-        "validate-release-metadata"
-    )
-    main_check = (
-        'RELEASE_TAG="v$version" python3 scripts/build/build.py '
-        "validate-release-metadata"
-    )
-    assert workflow.index(tag_check) < workflow.index('echo "release=true"')
-    assert workflow.index(main_check) < workflow.index('echo "This push cuts release')
-    assert "needs: check" in workflow
+    check_job = workflow[
+        workflow.index("\n  check:\n") : workflow.index("\n  verify:\n")
+    ]
+    preflight = check_job.index("validate-release-metadata")
+    # The step runs in the job every other job needs, after the outputs that
+    # name the release, and only for a release.
+    assert check_job.index('echo "release=true"') < preflight
+    assert "if: steps.check.outputs.release == 'true'" in check_job
+    assert "RELEASE_TAG: ${{ steps.check.outputs.tag }}" in check_job
+    verify_job = workflow[workflow.index("\n  verify:\n") :]
+    assert "needs: check" in verify_job[: verify_job.index("steps:")]
+    # A failed preflight opens the fix pull request like any other failure.
+    release_failed = workflow[workflow.index("\n  release-failed:\n") :]
+    condition = release_failed[: release_failed.index("runs-on:")]
+    assert "needs.check.result == 'failure'" in condition

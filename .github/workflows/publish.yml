@@ -50,7 +50,6 @@ jobs:
         id: check
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            RELEASE_TAG="$GITHUB_REF_NAME" python3 scripts/build/build.py validate-release-metadata
             echo "A v* tag was pushed by hand; publishing it as a release."
             {
               echo "release=true"
@@ -76,7 +75,6 @@ jobs:
           if [ "$version" = "$top" ] \
             && ! git rev-parse -q \
               --verify "refs/tags/v$version" >/dev/null; then
-            RELEASE_TAG="v$version" python3 scripts/build/build.py validate-release-metadata
             echo "This push cuts release v$version."
             {
               echo "release=true"
@@ -90,6 +88,14 @@ jobs:
             echo "release=false"
             python3 scripts/build/build.py prerelease-identity
           } >> "$GITHUB_OUTPUT"
+      # After the outputs are written, so a failure here still tells
+      # `release-failed` which release to open the fix pull request for. Every
+      # other job needs this one, so nothing builds or publishes past a failure.
+      - name: Validate the release metadata
+        if: steps.check.outputs.release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.check.outputs.tag }}
+        run: python3 scripts/build/build.py validate-release-metadata
 
   # Fails the run before the 45-minute matrix rather than after it, and before
   # any target has published. A pre-release skips a registry it has no token
@@ -410,7 +416,8 @@ jobs:
       - github
     if: >-
       ${{ always() && needs.check.outputs.release == 'true' && (
-          needs.verify.result == 'failure'
+          needs.check.result == 'failure'
+       || needs.verify.result == 'failure'
        || needs.build-server.result == 'failure'
        || needs.package.result == 'failure'
        || needs.marketplace.result == 'failure'
