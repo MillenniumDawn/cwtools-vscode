@@ -13,6 +13,7 @@
 * Apply the configured min/max bounds to keyed variable_field values, reporting out-of-range numbers as CW240 instead of accepting them. Integer and floating values and numeric strings are checked against the same comparison bare values use. Dynamic values, variable references, and the int-only (CW271) and 32-bit precision (CW270) checks are unchanged. The pinned Millennium Dawn baseline gains three CW240 rows: set_war_support = -1 in common/national_focus/05_georgia.txt, add_war_support = -2 in events/05_australia_events.txt, and add_war_support = 15 in events/05_netherlands.txt. (#1241)
 * Watch an explicitly supplied `--vanilla` directory in `validate --watch`, deduplicated against the rules, workspace and parent roots, so an edit under the vanilla install reruns validation without another workspace change. Mod ignore-dir exclusions are not applied to the vanilla root, and an unset vanilla adds no root. (#1268)
 * Report the missing UTF-8 BOM error (CW254) once per physical localisation file. Multi-language CSV files parsed one projection per language and repeated the file-level error for every projection; language-specific entry diagnostics are unchanged. (#1263)
+* Cut the `|format` suffix off localization commands before parsing a Jomini chain, as plain commands already do. `[Root.GetFoo('x')|0]` and `[a.b|U]` no longer end in a bogus `|0` or `b|U` segment that could surface as a false CW226. A `|` inside parentheses or quotes is kept. (#1320)
 
 ### 4.0.7
 
