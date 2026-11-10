@@ -7,7 +7,8 @@
 #   # Rust (engine/) and the node tools come from the repo's own toolchains;
 #   # the Python checks need to be on PATH, in one environment so mypy can
 #   # see pytest's types:
-#   python3 -m pip install -r requirements-dev.txt
+#   uv sync --locked --python 3.12
+#   source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 #   npm install                      # provides eslint via node_modules/.bin
 #
 # The fixers (cargo fmt, ruff --fix, black, eslint --fix) rewrite the files

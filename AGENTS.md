@@ -78,13 +78,13 @@ Every host label and host-coverage run goes through `scripts/build/hosttest.py`.
 
 Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `node scripts/build/python.mjs scripts/build/hosttest.py --label smoke --grep 'name'` (unrecognized arguments pass through to `vscode-test`). Watch mode: `npm run test:node:watch`.
 
-Coverage: `npm run test:coverage` (the `host`, `live`, `restart`, and `multi-root` labels together, needs a built server binary; V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). CI calls `scripts/build/host_coverage.py --skip-compile` after its development build so coverage reuses the compiled client, then `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment. The host and node runs cover disjoint modules (engine.ts and executable.ts are vitest-owned, and `HOST_COVERAGE_DROPS` in `scripts/build/coverage_metrics.py` keeps them out of the host report).
+Coverage: `npm run test:coverage` (the `host`, `live`, `restart`, and `multi-root` labels together, needs a built server binary; V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). CI calls `scripts/build/host_coverage.py --skip-compile` after its development build so coverage reuses the compiled client, then `scripts/build/coverage_summary.py` renders Rust, host, Node and Python into the PR comment. The host and node runs cover disjoint modules (engine.ts and executable.ts are vitest-owned, and `HOST_COVERAGE_DROPS` in `scripts/build/coverage_metrics.py` keeps them out of the host report).
 
 Host suites must not import extension modules directly: the host runs the esbuild bundle, so a direct import is a second copy of the module. Reach the extension's own modules through its activation API (`graphPanelModule()` in `extension/test/support/utils.ts`).
 
 ### The Python helpers
 
-`scripts/` and `tests/scripts/` are their own toolchain: ruff, black, pylint, mypy and pytest, configured in `pyproject.toml` and pinned in `requirements-dev.txt` (`python3 -m pip install -r requirements-dev.txt`, one environment so mypy can see pytest's types). Run `ruff check scripts tests/scripts`, `black --check scripts tests/scripts`, `pylint scripts tests/scripts`, `mypy scripts tests/scripts`, and `pytest` before calling a change to them done. mypy is strict and pylint has to stay at 10.00; the `Python lint & tests` CI job runs that same list.
+`scripts/` and `tests/scripts/` are their own toolchain: ruff, black, pylint, mypy, pytest and coverage.py, configured in `pyproject.toml` and locked completely in `uv.lock`. Use uv 0.12.19 and `uv sync --locked --python 3.12`, then activate `.venv` (see [the contributor guide](docs/CONTRIBUTING.md#the-python-helpers)). Run `ruff check scripts tests/scripts`, `black --check scripts tests/scripts`, `pylint scripts tests/scripts`, `mypy scripts tests/scripts`, and `pytest` before calling a change to them done. mypy is strict and pylint has to stay at 10.00. The `Python lint & tests` matrix runs those checks natively on Ubuntu, Windows and macOS; Linux runs pytest through `python scripts/build/python_coverage.py` to enforce the measured line and branch floors and publish production-only coverage. Intentional dependency changes update `pyproject.toml` and `uv.lock` together; CI never refreshes a stale lock.
 
 Tests are pytest-native: plain functions, `pytest.raises`, `tmp_path`, `monkeypatch`, and `@pytest.mark.parametrize` rather than `unittest.TestCase`. `scripts/build/*.py` import each other by bare name, so they are importable directly (`pythonpath` in `pyproject.toml`, `source-roots` for pylint). The standalone entry points in `scripts/` load by path from fixtures in `tests/scripts/conftest.py`, which is what keeps `scripts/coverage.py` from shadowing the `coverage` package.
 
@@ -125,7 +125,7 @@ Three things to know about them:
 - `scripts/build/hosttest.py`: display-backend picker in front of `vscode-test`
 - `vitest.config.mts`: node-only unit test config
 - `pyproject.toml`: ruff/black/pylint/mypy/pytest config for `scripts/` and `tests/scripts/`
-- `requirements-dev.txt`: the pinned versions of those five
+- `uv.lock`: the complete Python toolchain lock
 - `engine/Cargo.toml`: the Rust workspace manifest; all crates inherit its version
 - `scripts/guard.py`: the diagnostics regression gate
 - Build scripts: `build.cmd` (Windows) / `build.sh` (Unix)

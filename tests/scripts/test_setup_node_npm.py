@@ -111,23 +111,15 @@ def test_dependency_install_mode(
     if bash is None:
         pytest.skip("bash is not available")
 
-    bin_path = tmp_path / "bin"
-    bin_path.mkdir()
-    npm = bin_path / "npm"
-    npm.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$NPM_CALLS"\n')
-    npm.chmod(0o755)
     calls_path = tmp_path / "calls"
     environment = os.environ.copy()
-    environment.update(
-        {
-            "NPM_CALLS": str(calls_path),
-            "IGNORE_SCRIPTS": ignore_scripts,
-            "PATH": f"{bin_path}{os.pathsep}{environment['PATH']}",
-        }
-    )
+    environment.update({"NPM_CALLS": str(calls_path), "IGNORE_SCRIPTS": ignore_scripts})
+    # A shell function works on native Windows Git Bash too; a generated
+    # extensionless Unix executable depends on shebang and PATH conversion.
+    stub = 'npm() { printf "%s\\n" "$*" >> "$NPM_CALLS"; }\n'
 
     result = subprocess.run(
-        [bash, "-c", _install_script()],
+        [bash, "-c", stub + _install_script()],
         check=False,
         capture_output=True,
         text=True,

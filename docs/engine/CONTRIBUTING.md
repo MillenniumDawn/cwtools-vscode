@@ -27,7 +27,8 @@ pre-commit install --hook-type pre-commit --hook-type pre-push
 # The Python checks must be on PATH, in one environment so mypy can see
 # pytest's types (the Rust and TypeScript ones come from the repo's own
 # toolchains):
-python3 -m pip install -r requirements-dev.txt
+uv sync --locked --python 3.12
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 npm install                      # provides eslint via node_modules/.bin
 ```
 

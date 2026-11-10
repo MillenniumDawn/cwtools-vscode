@@ -35,8 +35,13 @@ jobs:
   # Fast client gate: typecheck, lint, and unit tests. Gives contributors
   # quick feedback while the heavier jobs catch up.
   check:
+    name: Node checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,19 +54,27 @@ jobs:
         run: npm run test:node
 
   # The helpers under scripts/ are their own toolchain, so they get their own
-  # job instead of riding along in the node and Rust ones. Versions come from
-  # requirements-dev.txt and the config for all five is in pyproject.toml, so
-  # this job runs what a contributor's pre-commit hooks already ran.
+  # job instead of riding along in the node and Rust ones. uv.lock pins the
+  # complete toolchain; native runners exercise non-UI portability. Only Linux
+  # measures coverage, so there is one baseline and one report artifact.
   python:
     if: github.event_name != 'schedule'
-    name: Python lint & tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Python lint & tests (${{ matrix.os }})
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install virtual display test dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes xvfb xauth
@@ -73,40 +86,36 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
-      # No npm cache: this job only installs esbuild, and a cache saved
-      # from here would claim the key the check and build jobs share.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
-          node-version: "26"
-      - name: Install esbuild for the release-define smoke
-        run: |
-          version="$(
-            node -p 'require("./package-lock.json").packages["node_modules/esbuild"].version'
-          )"
-          prefix="$RUNNER_TEMP/cwtools-esbuild"
-          mkdir -p "$prefix"
-          printf '{"private":true}\n' > "$prefix/package.json"
-          npm install \
-            --prefix "$prefix" \
-            --no-save \
-            --package-lock=false \
-            "esbuild@${version}"
-          mkdir -p node_modules
-          ln -s "$prefix/node_modules/esbuild" node_modules/esbuild
-      - name: Install checks
-        run: python3 -m pip install -r requirements-dev.txt
+          version: "0.12.19"
+          enable-cache: true
+      # Reuse the cross-platform, lockfile-based npm installation for the
+      # esbuild smoke and Node config probes used by the Python tests.
+      - uses: ./.github/actions/setup-node-npm
+      - name: Install checks from the complete lock
+        run: uv sync --locked
       - name: ruff
-        run: ruff check scripts tests/scripts
+        run: uv run --locked ruff check scripts tests/scripts
       - name: black
-        run: black --check scripts tests/scripts
+        run: uv run --locked black --check scripts tests/scripts
       - name: pylint
-        run: pylint scripts tests/scripts
+        run: uv run --locked pylint scripts tests/scripts
       - name: mypy
-        run: mypy scripts tests/scripts
-      - name: pytest
-        run: pytest
+        run: uv run --locked mypy scripts tests/scripts
+      - name: pytest (native non-UI)
+        if: runner.os != 'Linux'
+        run: uv run --locked pytest
+      - name: pytest with production branch coverage
+        if: runner.os == 'Linux'
+        run: uv run --locked python scripts/build/python_coverage.py
+      - name: Upload Python coverage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-python
+          path: coverage-python
+          if-no-files-found: error
 
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
@@ -677,16 +686,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # One PR comment for rust, extension-host, and node coverage.
+  # One PR comment for Rust, extension-host, Node and Python coverage.
   coverage-report:
     name: Coverage report
-    needs: [build, coverage-rs]
+    needs: [build, coverage-rs, python]
     if: >-
       always()
       && !cancelled()
       && github.event_name != 'schedule'
       && (needs.build.result == 'success'
-      || needs.coverage-rs.result == 'success')
+      || needs.coverage-rs.result == 'success'
+      || needs.python.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -714,8 +724,22 @@ jobs:
         with:
           name: rust-coverage
           path: engine/target/coverage
+      - name: Download Python coverage
+        if: needs.python.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-python
+          path: coverage-python
       - name: Coverage summary
-        run: python3 scripts/build/coverage_summary.py
+        env:
+          PYTHON_COVERAGE_RESULT: ${{ needs.python.result }}
+        shell: bash
+        run: |
+          if [[ "$PYTHON_COVERAGE_RESULT" == "success" ]]; then
+            python3 scripts/build/coverage_summary.py --require-python
+          else
+            python3 scripts/build/coverage_summary.py
+          fi
       - name: Coverage PR comment
         if: github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5

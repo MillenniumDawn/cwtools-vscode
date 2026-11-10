@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Lock the complete Python helper environment with uv, enforce measured production line and branch coverage, and run non-UI Python and Node checks natively on Ubuntu, Windows and macOS. (#1225, #1226, #1227)
+
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)

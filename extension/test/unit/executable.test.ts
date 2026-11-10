@@ -29,8 +29,9 @@ suite("executable — existAndIsExe", () => {
 		});
 	});
 
+	// Windows treats X_OK as an existence check and has no Unix mode bits.
 	test.each([
-		["no-exec", 0o644, false],
+		["no-exec", 0o644, process.platform === "win32"],
 		["owner-exec", 0o744, true],
 		["group-exec", 0o710, true],
 		["others-exec", 0o701, true],
@@ -45,7 +46,7 @@ suite("executable — existAndIsExe", () => {
 
 	test.each([
 		["exec-target", 0o755, true],
-		["plain-target", 0o644, false],
+		["plain-target", 0o644, process.platform === "win32"],
 	])("follows a symlink to %s", async (name, mode, expected) => {
 		const link = path.join(tmpDir, `link-to-${name}`);
 		fs.symlinkSync(makeFile(name, mode), link);
