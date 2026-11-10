@@ -595,7 +595,7 @@ mod tests {
             pt.insert(
                 "idea".to_string(),
                 vec![TypeInstance {
-                    name: "true".to_string(),
+                    name: "yes".to_string(),
                     location: SourceLocation {
                         line: 1,
                         col: 0,
@@ -607,7 +607,7 @@ mod tests {
             );
             idx.merge("file:///mod/y.txt", pt);
         }
-        let loc = loc(&[("5", "Five"), ("true", "True")]);
+        let loc = loc(&[("5", "Five"), ("yes", "Yes")]);
         assert!(hints_for(text, &idx, &loc).is_empty());
     }
 }
