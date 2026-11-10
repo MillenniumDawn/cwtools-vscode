@@ -137,9 +137,10 @@ fn parse_bracket(s: &str, start: usize) -> Option<(LocElement<'_>, usize)> {
     }
 
     let content = &s[start + 1..i - 1];
+    let chain = strip_format(content);
 
-    if (content.contains('.') || content.contains('('))
-        && let Ok(commands) = parse_jomini(content)
+    if (chain.contains('.') || chain.contains('('))
+        && let Ok(commands) = parse_jomini(chain)
     {
         return Some((LocElement::JominiCommand(commands), i));
     }
@@ -147,6 +148,23 @@ fn parse_bracket(s: &str, start: usize) -> Option<(LocElement<'_>, usize)> {
     let command = content.find('|').map(|p| &content[..p]).unwrap_or(content);
 
     Some((LocElement::Command(command), i))
+}
+
+fn strip_format(content: &str) -> &str {
+    let mut depth = 0usize;
+    let mut quoted = false;
+
+    for (i, ch) in content.char_indices() {
+        match ch {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.saturating_sub(1),
+            '|' if !quoted && depth == 0 => return &content[..i],
+            _ => {}
+        }
+    }
+
+    content
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -333,6 +351,8 @@ mod tests {
         );
         let elems = parse_loc_elements("[Scope.GetName(]");
         assert_eq!(elems, vec![LocElement::Command("Scope.GetName(")]);
+        let elems = parse_loc_elements("[Scope.GetName(|Y]");
+        assert_eq!(elems, vec![LocElement::Command("Scope.GetName(")]);
     }
 
     #[test]
@@ -356,6 +376,60 @@ mod tests {
             panic!("expected JominiCommand, got {elems:?}");
         };
         assert_eq!(cmds[0].params, vec![JominiParam::Literal(String::new())]);
+    }
+
+    fn plain(key: &str) -> JominiCommand {
+        JominiCommand {
+            key: key.to_string(),
+            params: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_jomini_chain_drops_format_suffix() {
+        assert_eq!(
+            parse_loc_elements("[Root.GetName|U]"),
+            vec![LocElement::JominiCommand(vec![
+                plain("Root"),
+                plain("GetName")
+            ])]
+        );
+        assert_eq!(
+            parse_loc_elements("[?VAR.z|1]"),
+            vec![LocElement::JominiCommand(vec![plain("?VAR"), plain("z")])]
+        );
+    }
+
+    #[test]
+    fn test_jomini_function_drops_format_suffix() {
+        let call = JominiCommand {
+            key: "Y".to_string(),
+            params: vec![JominiParam::Literal("a".to_string())],
+        };
+        assert_eq!(
+            parse_loc_elements("[X.Y('a')|0]"),
+            vec![LocElement::JominiCommand(vec![plain("X"), call])]
+        );
+    }
+
+    #[test]
+    fn test_jomini_pipe_inside_quoted_param_is_kept() {
+        let call = JominiCommand {
+            key: "Y".to_string(),
+            params: vec![JominiParam::Literal("a|b".to_string())],
+        };
+        assert_eq!(
+            parse_loc_elements("[X.Y('a|b')]"),
+            vec![LocElement::JominiCommand(vec![plain("X"), call])]
+        );
+    }
+
+    #[test]
+    fn test_dot_in_format_suffix_is_not_a_chain() {
+        assert_eq!(
+            parse_loc_elements("[?var|0.5]"),
+            vec![LocElement::Command("?var")]
+        );
     }
 
     #[test]
