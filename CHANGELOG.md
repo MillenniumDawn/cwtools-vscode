@@ -49,6 +49,8 @@
 * Keep parsing after an unclosed `@\[` expression. The scan for `]` ran past the end of the line, to the next `]` anywhere in the file or to its end, so the statements in between were missing from the tree while the expression was being typed. The expression now ends on its own line, and the error is still reported.
 * Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or explicit localisation fields change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
 * Collect an open document's reference sites under a read lock. Call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
+* Return changed names to their queue when the next keystroke aborts the dependent sweep that took them. In configs that track type uses, open files whose unused-instance status changed were otherwise never revalidated.
+* Check every document link's target in one blocking task with the search roots resolved once, and keep the rule walk off the async workers. Each candidate used to resolve itself and every root in its own task, one after another.
 * Store each complex enum and value-set string once across files, and reject lines without the searched name before scanning them for highlights and rename.
 
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)

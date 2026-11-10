@@ -27,6 +27,22 @@ pub(crate) struct ValidatedScript {
     pub(crate) covered_export_revision: Option<u64>,
 }
 
+/// Returns drained changed names to their queue when the sweep that took them
+/// is dropped before it finishes.
+struct RequeueChangedNames<'a> {
+    queue: &'a parking_lot::Mutex<NameTokens>,
+    names: &'a NameTokens,
+    armed: bool,
+}
+
+impl Drop for RequeueChangedNames<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.queue.lock().extend(self.names.iter().copied());
+        }
+    }
+}
+
 pub(crate) fn code_lens_refresh_needed(
     first_accepted_ast: bool,
     exports_changed: bool,
@@ -34,6 +50,32 @@ pub(crate) fn code_lens_refresh_needed(
     references_after: u64,
 ) -> bool {
     first_accepted_ast || exports_changed || references_before != references_after
+}
+
+#[cfg(test)]
+mod requeue_changed_names_tests {
+    use super::{NameTokens, RequeueChangedNames};
+
+    #[test]
+    fn an_aborted_sweep_returns_its_names_and_a_finished_one_does_not() {
+        let queue = parking_lot::Mutex::new(NameTokens::default());
+        let names: NameTokens = [7, 9].into_iter().collect();
+
+        drop(RequeueChangedNames {
+            queue: &queue,
+            names: &names,
+            armed: true,
+        });
+        assert_eq!(*queue.lock(), names);
+
+        queue.lock().clear();
+        drop(RequeueChangedNames {
+            queue: &queue,
+            names: &names,
+            armed: false,
+        });
+        assert!(queue.lock().is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -1494,8 +1536,17 @@ impl Backend {
         );
         let changed_names: NameTokens = self.state.pending_changed_names.lock().drain().collect();
         if !changed_names.is_empty() {
+            // The next keystroke aborts this task at an await inside the sweep.
+            // The drained names then exist only in this future, so the guard
+            // puts them back for the validation that replaces it.
+            let mut requeue = RequeueChangedNames {
+                queue: &self.state.pending_changed_names,
+                names: &changed_names,
+                armed: true,
+            };
             self.revalidate_open_dependents(&uri, generation, Some(&changed_names))
                 .await;
+            requeue.armed = false;
         } else {
             tracing::debug!(uri = %uri, "exports unchanged; skipping dependent sweep");
         }
