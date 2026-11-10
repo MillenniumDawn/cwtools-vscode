@@ -770,4 +770,83 @@ mod tests {
             "each rule group scans top-level clauses in source order before the next group"
         );
     }
+
+    #[test]
+    fn boolean_values_define_variables_by_their_script_spelling() {
+        let table = StringTable::new();
+        let parsed = parse_string(
+            "root = { section = { variable = yes no } flags = { on = yes } }\n",
+            &table,
+        );
+        let variable = NewField::VariableSetField("variable".to_string());
+        let mut rules = RuleSet::new();
+        rules.types.push(type_def("first", "common/test"));
+        rules.root_rules.push(root_type(
+            "first",
+            vec![
+                node(
+                    NewField::SpecificField("section".to_string()),
+                    vec![
+                        leaf(
+                            NewField::SpecificField("variable".to_string()),
+                            variable.clone(),
+                        ),
+                        (
+                            RuleType::LeafValueRule {
+                                right: variable.clone(),
+                            },
+                            Options::default(),
+                        ),
+                    ],
+                ),
+                node(
+                    NewField::SpecificField("flags".to_string()),
+                    vec![leaf(variable, NewField::ScalarField)],
+                ),
+            ],
+        ));
+        rules.reindex();
+
+        let vars = collect_defined_variables_from_rules(
+            &rules,
+            &parsed,
+            "common/test/example.txt",
+            &table,
+            None,
+        );
+        let mut rows: Vec<_> = vars["variable"]
+            .iter()
+            .map(|definition| (definition.name.as_str(), definition.value.as_deref()))
+            .collect();
+        rows.sort_unstable();
+        assert_eq!(
+            rows,
+            [("no", None), ("on", Some("yes")), ("yes", None)],
+            "a captured yes or no keeps the spelling the script used"
+        );
+    }
+
+    #[test]
+    fn boolean_set_variable_entries_keep_their_script_spelling() {
+        let table = StringTable::new();
+        let parsed = parse_string(
+            "set_variable = { var = yes value = no }\n\
+             set_variable = { enabled = yes }\n",
+            &table,
+        );
+        let effects = HashSet::from(["set_variable".to_string()]);
+
+        let collected = crate::collect_variables_and_value_sets(
+            &parsed,
+            &RuleSet::new(),
+            &table,
+            Some(&effects),
+        );
+        let rows: Vec<_> = collected
+            .variables
+            .iter()
+            .map(|definition| (definition.name.as_str(), definition.value.as_deref()))
+            .collect();
+        assert_eq!(rows, [("yes", Some("no")), ("enabled", Some("yes"))]);
+    }
 }

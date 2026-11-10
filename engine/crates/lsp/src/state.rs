@@ -26,6 +26,7 @@ pub(crate) use crate::loc_text::LocText;
 /// validation permit (#477). Validation has one inside its synchronous phase.
 /// The open-buffer uses of a scan have one inside their rayon region (#1152), and its
 /// type-uses merge has one before it takes the `type_uses` write guard (#1163).
+/// A scan has one right after it releases its type index snapshot (#1321).
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
@@ -33,6 +34,7 @@ pub(crate) enum HoldPoint {
     Pass2Mid,
     Pass2After,
     OpenUses,
+    Pass2SnapshotDropped,
     TypeUsesMerge,
     WatchedFile,
     ValidatePrepared,
