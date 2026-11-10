@@ -671,7 +671,7 @@ pub fn build_doc_symbols(
     syms
 }
 
-pub(crate) async fn locations_at(
+pub(crate) fn locations_at(
     backend: &Backend,
     pairs: impl IntoIterator<Item = (String, cwtools_info::SourceLocation)>,
     name: &str,
@@ -679,7 +679,7 @@ pub(crate) async fn locations_at(
 ) -> Vec<Location> {
     let pairs: Vec<_> = pairs.into_iter().collect();
     let uris: Vec<String> = pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
-    let texts = backend.file_text_snapshots_for(&uris).await;
+    let texts = backend.open_text_snapshots_for(&uris);
     let indexed = crate::lines::index_snapshots(&texts, &backend.position_encoding());
     locations_at_with_lines(backend, pairs, name, fallback, &indexed)
 }
