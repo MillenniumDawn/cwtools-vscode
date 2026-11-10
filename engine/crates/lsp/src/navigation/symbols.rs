@@ -7,7 +7,7 @@ use super::helpers::{SymbolCandidate, WORKSPACE_SYMBOL_LIMIT};
 use super::{TopSymbols, make_symbol, symbol_rank};
 
 impl Backend {
-    pub(crate) async fn symbol_impl(
+    pub(crate) fn symbol_impl(
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
@@ -78,7 +78,7 @@ impl Backend {
         let cands = top.into_sorted_vec();
 
         let text_uris: Vec<String> = cands.iter().map(|c| c.file_uri.clone()).collect();
-        let texts = self.file_text_snapshots_for(&text_uris).await;
+        let texts = self.open_text_snapshots_for(&text_uris);
         let indexed = crate::lines::index_snapshots(&texts, &self.position_encoding());
         let mut symbols: Vec<SymbolInformation> = Vec::with_capacity(cands.len());
         let fallback = Url::parse("file:///unknown").expect("static URI");
@@ -103,5 +103,88 @@ impl Backend {
         } else {
             Ok(Some(symbols))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cwtools_info::{FileInfo, SourceLocation};
+
+    use super::*;
+    use crate::access::{MAX_URI_READ_BYTES, read_authorized_text, recorded_reads_under};
+    use crate::paths::path_to_uri;
+    use crate::testing::{open_document, workspace_backend};
+
+    fn define_variable(backend: &Backend, uri: &str, name: &str, line: u32, col: u16) {
+        let location = SourceLocation {
+            line,
+            col,
+            end: (line, col),
+        };
+        backend.state.info_service.write().files.insert(
+            uri.to_string(),
+            FileInfo {
+                defined_variables: HashMap::from([(name.to_string(), location)]),
+                ..FileInfo::default()
+            },
+        );
+    }
+
+    #[test]
+    fn closed_files_get_their_ranges_without_a_read() {
+        let (backend, workspace) = workspace_backend();
+        let write = |name: &str, text: &str| {
+            let path = workspace.path().join(name);
+            std::fs::write(&path, text).expect("write fixture");
+            path_to_uri(&path)
+        };
+        let ascii = write("ascii.txt", "ascii_var = 1\n");
+        // Accented and CJK text is one UTF-16 unit per char, so the index
+        // column is already exact after it.
+        let bmp = write("bmp.txt", "caf\u{e9}\u{4e16} bmp_var = 1\n");
+        let open = path_to_uri(&workspace.path().join("open.txt"));
+        open_document(&backend, &open, "\u{1f600} open_var = 1\n");
+        define_variable(&backend, &ascii, "ascii_var", 1, 0);
+        define_variable(&backend, &bmp, "bmp_var", 1, 6);
+        define_variable(&backend, &open, "open_var", 1, 2);
+        let before = recorded_reads_under(workspace.path());
+
+        let symbols = backend
+            .symbol_impl(WorkspaceSymbolParams {
+                query: "_var".to_string(),
+                ..WorkspaceSymbolParams::default()
+            })
+            .expect("workspace symbol request")
+            .expect("three matching symbols");
+
+        let range = |name: &str| {
+            let symbol = symbols.iter().find(|s| s.name == name).expect(name);
+            (symbol.location.range.start, symbol.location.range.end)
+        };
+        assert_eq!(
+            range("ascii_var"),
+            (Position::new(0, 0), Position::new(0, 9))
+        );
+        assert_eq!(
+            range("bmp_var"),
+            (Position::new(0, 6), Position::new(0, 13))
+        );
+        assert_eq!(
+            range("open_var"),
+            (Position::new(0, 3), Position::new(0, 11))
+        );
+        assert_eq!(
+            recorded_reads_under(workspace.path()),
+            before,
+            "workspace symbol must answer from the index, not the disk"
+        );
+
+        // A read of the closed file is recorded, so the equality above cannot
+        // hold because the instrumentation went quiet.
+        let roots = backend.state.config.read().authorized_roots.clone();
+        assert!(read_authorized_text(&ascii, &roots, MAX_URI_READ_BYTES).is_some());
+        assert_eq!(recorded_reads_under(workspace.path()), before + 1);
     }
 }

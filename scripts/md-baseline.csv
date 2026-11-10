@@ -591,6 +591,12 @@ common/ideologies/00_ideologies.txt,43,Warning,CW235,Modifier guarantee_tension 
 common/ideologies/00_ideologies.txt,44,Warning,CW235,Modifier annex_cost_factor has value 0. Modifiers are additive so likely doesn't do anything
 common/ideologies/00_ideologies.txt,45,Warning,CW235,Modifier puppet_cost_factor has value 0. Modifiers are additive so likely doesn't do anything
 common/military_industrial_organization/organizations/MD_generic_organization.txt,14396,Warning,CW100,Localisation key GER_generic_AFV_manufacturer is not defined for any language
+common/modifiers/00_static_modifiers.txt,220,Warning,CW235,Modifier license_production_speed has value 0. Modifiers are additive so likely doesn't do anything
+common/modifiers/00_static_modifiers.txt,232,Warning,CW235,Modifier license_production_speed has value 0. Modifiers are additive so likely doesn't do anything
+common/modifiers/00_static_modifiers.txt,244,Warning,CW235,Modifier license_production_speed has value 0. Modifiers are additive so likely doesn't do anything
+common/modifiers/00_static_modifiers.txt,344,Warning,CW235,Modifier license_production_speed has value 0. Modifiers are additive so likely doesn't do anything
+common/modifiers/00_static_modifiers.txt,355,Warning,CW235,Modifier license_production_speed has value 0. Modifiers are additive so likely doesn't do anything
+common/modifiers/00_static_modifiers.txt,365,Warning,CW235,Modifier license_purchase_cost has value 0. Modifiers are additive so likely doesn't do anything
 common/national_focus/00_generic_dummy.txt,4,Warning,CW100,Localisation key dummy_generic_focus is not defined for any language
 common/national_focus/00_music_dlc_compatibility.txt,19,Warning,CW100,Localisation key SPR_the_popular_front is not defined for any language
 common/national_focus/00_music_dlc_compatibility.txt,3,Warning,CW100,Localisation key SPA_a_great_spain is not defined for any language
@@ -5147,6 +5153,12 @@ common/scripted_effects/ZAM_political_leaders.txt,61,Information,CW272,This is a
 common/scripted_effects/ZAM_political_leaders.txt,78,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 common/scripted_effects/ZAM_political_leaders.txt,8,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 common/scripted_effects/ZAM_political_leaders.txt,96,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
+common/scripted_guis/00_missiles_scripted_guis.txt,1144,Error,CW240,"Field 'parent_window_token' has value 'MD_countrymissilesview_production', expected Enum(""parent_window_token"")"
+common/scripted_guis/00_missiles_scripted_guis.txt,1829,Error,CW240,"Field 'parent_window_token' has value 'MD_countrymissilesview_space', expected Enum(""parent_window_token"")"
+common/scripted_guis/00_missiles_scripted_guis.txt,2290,Error,CW240,"Field 'parent_window_token' has value 'MD_countrymissilesview_satellites', expected Enum(""parent_window_token"")"
+common/scripted_guis/00_missiles_scripted_guis.txt,2447,Error,CW240,"Field 'parent_window_token' has value 'MD_countrymissilesview_space', expected Enum(""parent_window_token"")"
+common/scripted_guis/00_missiles_scripted_guis.txt,2960,Error,CW240,"Field 'parent_window_token' has value 'MD_satellite_orbit_view', expected Enum(""parent_window_token"")"
+common/scripted_guis/00_missiles_scripted_guis.txt,30,Error,CW240,"Field 'parent_window_token' has value 'topbar', expected Enum(""parent_window_token"")"
 common/scripted_guis/99_HEZ_scripted_guis.txt,12,Warning,CW246,The variable hez_days_remaining_loc has not been set
 common/special_projects/projects/air_projects.txt,1457,Error,CW262,Unexpected block 'has_game_rule'
 common/special_projects/projects/zz_event_horizon_special_projects.txt,115,Error,CW263,Unexpected field 'EH_scenario_enabled'
@@ -5159,8 +5171,6 @@ common/special_projects/projects/zz_event_horizon_special_projects.txt,640,Error
 common/special_projects/projects/zz_event_horizon_special_projects.txt,804,Error,CW263,Unexpected field 'EH_scenario_enabled'
 common/technology_sharing/00_tech_sharing_groups.txt,4,Warning,CW100,Localisation key continuous_tech_share_group_name is not defined for any language
 common/technology_sharing/00_tech_sharing_groups.txt,5,Warning,CW100,Localisation key continuous_tech_share_group_desc is not defined for any language
-common/unit_leader/02_navy_leader_traits.txt,541,Error,CW267,"Expected a unit_stat value, got 0.1"
-common/unit_leader/02_navy_leader_traits.txt,551,Error,CW267,"Expected a unit_stat value, got 0.1"
 common/unit_medals/HOL_medals.txt,31,Warning,CW242,"Field 'unit_modifiers' appears 2 time(s), expected at most 1"
 common/unit_medals/MD_default.txt,116,Warning,CW242,"Field 'officer_xp' appears 0 time(s), expected at least 1"
 common/unit_medals/MD_default.txt,30,Warning,CW242,"Field 'officer_xp' appears 0 time(s), expected at least 1"
@@ -5170,16 +5180,17 @@ common/unit_medals/MD_default.txt,81,Warning,CW242,"Field 'officer_xp' appears 0
 common/unit_medals/MD_default.txt,99,Warning,CW242,"Field 'officer_xp' appears 0 time(s), expected at least 1"
 common/units/MD_division_support.txt,677,Warning,CW242,"Field 'battalion_mult' appears 2 time(s), expected at most 1"
 common/units/MD_division_support.txt,741,Warning,CW242,"Field 'battalion_mult' appears 2 time(s), expected at most 1"
-common/units/MD_hq_support_companies.txt,1031,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,1126,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,688,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,742,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,831,Error,CW267,"Expected a unit_stat value, got false"
-common/units/MD_hq_support_companies.txt,929,Error,CW267,"Expected a unit_stat value, got false"
+common/units/MD_hq_support_companies.txt,1031,Error,CW263,Unexpected field 'regimental'
+common/units/MD_hq_support_companies.txt,1126,Error,CW263,Unexpected field 'regimental'
+common/units/MD_hq_support_companies.txt,688,Error,CW263,Unexpected field 'regimental'
+common/units/MD_hq_support_companies.txt,742,Error,CW263,Unexpected field 'regimental'
+common/units/MD_hq_support_companies.txt,831,Error,CW263,Unexpected field 'regimental'
+common/units/MD_hq_support_companies.txt,929,Error,CW263,Unexpected field 'regimental'
 common/units/critical_parts/00_critical_parts.txt,157,Error,CW263,Unexpected field 'armor_value'
 common/units/critical_parts/00_critical_parts.txt,170,Error,CW263,Unexpected field 'fuel_consumption'
 common/units/critical_parts/00_critical_parts.txt,183,Error,CW263,Unexpected field 'fuel_consumption'
 common/units/critical_parts/00_critical_parts.txt,63,Error,CW263,Unexpected field 'armor_value'
+common/units/equipment/MD_missiles.txt,13,Error,CW240,"Field 'interface_category' has value 'support', expected Enum(""interface_category"")"
 common/units/equipment/MD_tank_chassis.txt,1403,Warning,CW100,Localisation key x is not defined for any language
 common/units/equipment/MD_tank_chassis.txt,1419,Warning,CW100,Localisation key x is not defined for any language
 common/units/equipment/MD_tank_chassis.txt,1444,Warning,CW100,Localisation key x is not defined for any language
