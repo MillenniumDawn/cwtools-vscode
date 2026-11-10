@@ -101,6 +101,23 @@ foo = {
 }
 
 #[test]
+fn a_bool_value_is_quoted_as_yes_or_no_in_cw240() {
+    for value in ["yes", "no"] {
+        let source = format!("foo = {{ required_field = ok count = {value} }}");
+        let errors = validate(RULES, &source, &Opts::DEFAULT);
+        let err = errors
+            .iter()
+            .find(|e| e.code == Some("CW240"))
+            .expect("CW240 emitted");
+        assert!(
+            err.message.contains(&format!("has value '{value}'")),
+            "got: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
 fn missing_required_is_cw242() {
     // `required_field` has `## cardinality = 1..1` and is omitted.
     let codes = codes(
