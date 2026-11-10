@@ -340,6 +340,24 @@ fn cw240_boolean_enum_suggestion_stays_a_string() {
     );
 }
 
+#[test]
+fn enum_accepts_bare_boolean_it_lists() {
+    let errors = validate(BOOLEAN_ENUM_RULES, "foo = { mode = yes }", &Opts::DEFAULT);
+    assert!(
+        !errors.iter().any(|e| e.code == Some("CW240")),
+        "bare yes is a member of the enum, got: {errors:?}"
+    );
+}
+
+#[test]
+fn enum_rejects_bare_boolean_it_does_not_list() {
+    let errors = validate(BOOLEAN_ENUM_RULES, "foo = { mode = no }", &Opts::DEFAULT);
+    assert!(
+        errors.iter().any(|e| e.code == Some("CW240")),
+        "bare no is not a member of the enum, got: {errors:?}"
+    );
+}
+
 const ESCAPED_ENUM_RULES: &str = r#"
 types = { type[foo] = { path = "game/common/foo" } }
 enums = { enum[mode] = { "hist\"oric\\mode" fantasy sandbox } }
