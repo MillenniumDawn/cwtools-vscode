@@ -921,6 +921,18 @@ impl Backend {
         snapshots
     }
 
+    /// The open buffers among `uris`, shared by reference. A closed file is
+    /// left out and never read, so its caller falls back to the index column.
+    pub(crate) fn open_text_snapshots_for(
+        &self,
+        uris: &[String],
+    ) -> HashMap<String, FileTextSnapshot> {
+        let docs = self.state.documents.lock();
+        uris.iter()
+            .filter_map(|uri| Some((uri.clone(), docs.text_snapshot(uri)?)))
+            .collect()
+    }
+
     pub(crate) fn source_range_with_lines(
         &self,
         lines: Option<&DocLines>,
