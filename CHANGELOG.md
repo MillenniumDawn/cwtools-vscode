@@ -9,6 +9,7 @@
 
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
+* Release the workspace scan's type index snapshot once pass 2 has validated, instead of holding it through publishing and the open-document revalidation. An index write in that window, such as an open document reindexed after the scan, no longer copies the whole index. An edit made while pass 2 is still validating still copies it, because that pass reads a stable snapshot. Diagnostics are unchanged. (#1321)
 * Fail `cwtools parse <dir>` when a rules directory contains error-severity diagnostics, preserving its summary and errors. Loader warnings still exit successfully. (#1248)
 * Cut the `|format` suffix off localization commands before parsing a Jomini chain, as plain commands already do. `[Root.GetFoo('x')|0]` and `[a.b|U]` no longer end in a bogus `|0` or `b|U` segment that could surface as a false CW226. A `|` inside parentheses or quotes is kept. (#1320)
 
