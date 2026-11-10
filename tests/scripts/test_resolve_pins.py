@@ -218,6 +218,24 @@ def test_stellaris_pins_use_their_own_repositories(resolve_pins: ModuleType) -> 
     ]
 
 
+def test_a_failed_stellaris_lookup_leaves_empty_pins_without_raising(
+    resolve_pins: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def gh_api(_repo: str, _pin: str) -> str:
+        raise RuntimeError("gh api failed: HTTP 404")
+
+    text = resolve_pins.STELLARIS_BASELINE.read_text(encoding="utf-8")
+    assert resolve_pins.resolve_stellaris_lookup(
+        text, resolve_pins.STELLARIS_BASELINE, gh_api
+    ) == ("", "")
+    assert "::warning::Stellaris pins were not resolved" in capsys.readouterr().out
+    # A pin this repository wrote wrongly is still an error.
+    with pytest.raises(resolve_pins.PinError):
+        resolve_pins.resolve_stellaris_lookup(
+            text, resolve_pins.STELLARIS_BASELINE, lambda _repo, _pin: "not-a-sha"
+        )
+
+
 def test_stellaris_rejects_dirty_and_unresolved_pins(resolve_pins: ModuleType) -> None:
     text = resolve_pins.STELLARIS_BASELINE.read_text(encoding="utf-8")
     pin = resolve_pins.parse_pin(text, "corpus")

@@ -16,6 +16,9 @@ def test_stellaris_guard_uses_resolved_pins_and_retains_failures() -> None:
     assert "needs: pins" in job
     assert "needs.pins.outputs.stellaris_corpus_rev" in job
     assert "needs.pins.outputs.stellaris_rules_rev" in job
+    # Empty pins fail the tier before any checkout can fall back to a default
+    # branch.
+    assert job.index("Require resolved Stellaris pins") < job.index("actions/checkout")
     assert "scripts/guard.py stellaris --no-build" in job
     assert "ui-prescripted-countries/ui-prescripted-countries" in job
     assert "cwtools-stellaris-config/config" in job

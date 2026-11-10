@@ -128,6 +128,26 @@ def resolve_stellaris_pins(
     return corpus, rules
 
 
+def resolve_stellaris_lookup(
+    baseline_text: str,
+    baseline_path: Path,
+    gh_api: Callable[[str, str], str],
+) -> tuple[str, str]:
+    """Resolve the Stellaris pins, or return empty ones when the lookup fails.
+
+    The Stellaris corpus and rules live in repositories this project does not
+    own. A lookup that fails there must fail the Stellaris tier, which refuses
+    empty pins, and not the Millennium Dawn and vanilla tiers that share this
+    job. A malformed pin in the baseline is this repository's fault and still
+    raises.
+    """
+    try:
+        return resolve_stellaris_pins(baseline_text, baseline_path, gh_api)
+    except RuntimeError as error:
+        print(f"::warning::Stellaris pins were not resolved: {error}")
+        return "", ""
+
+
 def gh_api_commit_sha(repo: str, pin: str) -> str:
     """Resolve `pin` to a commit SHA in `repo` via the `gh` CLI."""
     result = subprocess.run(
@@ -170,7 +190,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         md_sha, rules_sha, lines = resolve_pins(
             baseline_text, MD_BASELINE, md_repo, rules_repo, gh_api_commit_sha
         )
-        stellaris_corpus, stellaris_rules = resolve_stellaris_pins(
+        stellaris_corpus, stellaris_rules = resolve_stellaris_lookup(
             stellaris_text, STELLARIS_BASELINE, gh_api_commit_sha
         )
     except PinError as error:
