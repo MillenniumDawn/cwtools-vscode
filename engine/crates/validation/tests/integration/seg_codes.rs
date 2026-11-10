@@ -268,6 +268,38 @@ fn target_resolving_to_country_is_clean() {
 }
 
 #[test]
+fn quoted_target_is_checked_without_its_quotes() {
+    for script in [
+        r#"foo = { tgt = "SER" }"#,
+        r#"foo = { tgt = SER }"#,
+        r#"foo = { tgt = "faction_leader" }"#,
+        r#"foo = { tgt = faction_leader }"#,
+    ] {
+        let c = codes(TARGET_RULES, script, &HOI4);
+        assert!(c.is_empty(), "{script} got: {c:?}");
+    }
+}
+
+#[test]
+fn quoted_unknown_target_is_still_cw244() {
+    for script in [
+        r#"foo = { tgt = "NOT_A_TAG_OR_SCOPE" }"#,
+        r#"foo = { tgt = NOT_A_TAG_OR_SCOPE }"#,
+        r#"foo = { tgt = "not_a_link" }"#,
+        r#"foo = { tgt = not_a_link }"#,
+    ] {
+        let c = codes(TARGET_RULES, script, &HOI4);
+        assert_eq!(c, ["CW244"], "{script}");
+    }
+}
+
+#[test]
+fn quoted_target_in_the_wrong_scope_is_still_cw243() {
+    let c = codes(TARGET_RULES, r#"foo = { tgt = "capital_scope" }"#, &HOI4);
+    assert_eq!(c, ["CW243"]);
+}
+
+#[test]
 fn target_scope_probe_does_not_change_following_scope() {
     // The wrong-scope probe temporarily reaches state, but the next trigger is
     // still validated in foo's country scope.

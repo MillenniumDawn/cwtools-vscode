@@ -344,7 +344,14 @@ pub(super) fn validate_leaf(
             && ctx.scope_checks
             && let Some(sc) = scope_context.as_mut()
         {
-            with_leaf_value_str(&leaf.value, table, |value| {
+            with_leaf_value_str(&leaf.value, table, |raw| {
+                let value = match leaf.value {
+                    Value::QString(_) => raw
+                        .strip_prefix('"')
+                        .and_then(|s| s.strip_suffix('"'))
+                        .unwrap_or(raw),
+                    _ => raw,
+                };
                 validate_scope_target(sc, value, expected, leaf, file_path, errors);
             });
         }

@@ -227,10 +227,6 @@ pub(crate) fn is_datetime_shape(s: &str) -> bool {
     }
 }
 
-pub(crate) fn enum_is_authoritative(def: &EnumDefinition) -> bool {
-    def.values.len() > 5
-}
-
 pub(crate) fn enum_contains(
     ruleset: &cwtools_rules::rules_types::RuleSet,
     enum_name: &str,
@@ -238,16 +234,7 @@ pub(crate) fn enum_contains(
 ) -> bool {
     match ruleset.enum_by_name().get(enum_name) {
         Some(&idx) if !ruleset.enums[idx].values.is_empty() => {
-            if ruleset.enum_values_contains_ci(idx, value) {
-                return true;
-            }
-            if ruleset.enum_has_at_constant(idx) {
-                return true;
-            }
-            if enum_is_authoritative(&ruleset.enums[idx]) {
-                return !value.is_empty();
-            }
-            false
+            ruleset.enum_values_contains_ci(idx, value) || ruleset.enum_has_at_constant(idx)
         }
         _ => true,
     }
