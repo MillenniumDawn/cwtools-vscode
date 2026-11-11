@@ -2,11 +2,12 @@
 
 #### Engine
 
-* Index a boolean as `yes` or `no`, the way the script spells it, instead of `true` or `false`. A type instance named by a `name_field` set to `yes` is now found by a reference spelled `yes`, which no longer raises a false CW500, and variable names and values captured from `yes` or `no` follow the same spelling. Stellaris CW227, CW229, CW109 and CW250 also read a boolean `template`, `area` or `key` as `yes` or `no`. The vanilla cache format version moves to 17, so an existing `.cwv` file is rebuilt once. (#1334)
-* Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
+* Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)
+* Index a boolean as `yes` or `no`, the way the script spells it, instead of `true` or `false`. A type instance named by a `name_field` set to `yes` is now found by a reference spelled `yes`, which no longer raises a false CW500, and variable names and values captured from `yes` or `no` follow the same spelling. Stellaris CW227, CW229, CW109 and CW250 also read a boolean `template`, `area` or `key` as `yes` or `no`. The vanilla cache format version moves to 17, so an existing `.cwv` file is rebuilt once. (#1334)
+* Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
 
 #### Tooling
 
