@@ -219,6 +219,67 @@ fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
 }
 
 #[test]
+fn test_closing_loc_reconciles_saved_and_discarded_keys_after_watched_event() {
+    for saved in [true, false] {
+        let definition_rel = "localisation/definition_l_english.yml";
+        let reference_rel = "localisation/reference_l_english.yml";
+        let initial = loc(" DEF_KEY:0 \"definition\"\n");
+        let edited = loc(" DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n");
+        let reference = loc(" REF_KEY:0 \"see $new_key$\"\n");
+        let mut server = storm_start(
+            storm_builder()
+                .file(definition_rel, initial.as_str())
+                .file(reference_rel, reference.as_str()),
+        );
+        server.open_as(definition_rel, "paradox", &initial);
+        server.diag_codes_for("definition_l_english.yml", 1);
+        server.open_as(reference_rel, "paradox", &reference);
+        assert!(
+            server
+                .diag_codes_for("reference_l_english.yml", 1)
+                .contains(&"CW225".to_string())
+        );
+
+        server.change(definition_rel, 2, &edited);
+        let frames = drain(&mut server);
+        assert!(
+            publish_codes_for(&frames, "reference_l_english.yml")
+                .last()
+                .is_some_and(|codes| !codes.contains(&"CW225".to_string())),
+            "live key must satisfy the reference: {frames:?}"
+        );
+
+        if saved {
+            server.write_file(definition_rel, &edited);
+        }
+        let definition_uri = server.uri(definition_rel);
+        server.send(&watched_changes(std::slice::from_ref(&definition_uri)));
+        server.drain_until_quiet(WATCHED_QUIET, Duration::from_secs(8));
+        server.close(definition_rel);
+        let close_frames = drain(&mut server);
+        if !saved {
+            assert!(
+                publish_codes_for(&close_frames, "reference_l_english.yml")
+                    .last()
+                    .is_some_and(|codes| codes.contains(&"CW225".to_string())),
+                "discarding the key must refresh its dependent: {close_frames:?}"
+            );
+        }
+
+        // Revalidate the reference once more to prove the closed-file overlay
+        // itself agrees with disk even when no key-set diff was needed.
+        server.change(reference_rel, 2, &reference);
+        let codes = server.diag_codes_for("reference_l_english.yml", 1);
+        assert_eq!(
+            codes.contains(&"CW225".to_string()),
+            !saved,
+            "saved={saved}, codes={codes:?}"
+        );
+        server.stop();
+    }
+}
+
+#[test]
 fn test_open_loc_revalidation_skips_ignored_targets() {
     let definition_rel = "localisation/definition_l_english.yml";
     let ignored_rel = "localisation/ignored_l_english.yml";

@@ -12,6 +12,7 @@
 * Rebuild base-game value sets and variables when their collection rules change. (#1213)
 * Index a boolean as `yes` or `no`, the way the script spells it, instead of `true` or `false`. A type instance named by a `name_field` set to `yes` is now found by a reference spelled `yes`, which no longer raises a false CW500, and variable names and values captured from `yes` or `no` follow the same spelling. Stellaris CW227, CW229, CW109 and CW250 also read a boolean `template`, `area` or `key` as `yes` or `no`. The vanilla cache format version moves to 17, so an existing `.cwv` file is rebuilt once. (#1334)
 * Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
+* Reconcile localization keys with disk on close, including saves whose watched event arrived while the file was open. (#1237)
 
 #### Tooling
 

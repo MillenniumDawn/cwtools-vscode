@@ -175,7 +175,7 @@ pub fn parse_loc_buffer(text: &str, path: &str) -> Vec<cwtools_localization::Loc
 
 /// Lowercased loc keys defined in a single loc file's text. A cheap single-file
 /// parse used to keep the live overlay current on edit (#36).
-fn loc_keys_of(text: &str, path: &str) -> HashSet<String> {
+pub(crate) fn loc_keys_of(text: &str, path: &str) -> HashSet<String> {
     loc_keys_from(&parse_loc_buffer(text, path))
 }
 
@@ -4329,6 +4329,111 @@ mod ignored_tests {
             socket.next().now_or_never().is_none(),
             "late close clear must not publish"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn close_reconciles_loc_after_open_watched_batch_is_consumed() {
+        for saved in [true, false] {
+            let workspace = tempfile::tempdir().unwrap();
+            let loc_dir = workspace.path().join("localisation");
+            std::fs::create_dir_all(&loc_dir).unwrap();
+            let path = loc_dir.join("definition_l_english.yml");
+            let source = crate::paths::path_to_uri(&path);
+            let dependent = crate::paths::path_to_uri(&loc_dir.join("reference_l_english.yml"));
+            let initial = "\u{feff}l_english:\n DEF_KEY:0 \"definition\"\n";
+            let edited = "\u{feff}l_english:\n DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n";
+            let reference = "\u{feff}l_english:\n REF_KEY:0 \"see $new_key$\"\n";
+            std::fs::write(&path, if saved { edited } else { initial }).unwrap();
+            let workspace_uri = crate::paths::path_to_uri(workspace.path());
+            let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+            backend.state.index_ready.store(true, Ordering::Relaxed);
+            let publications = Arc::new(Mutex::new(Vec::<PublishDiagnosticsParams>::new()));
+            let results = Arc::clone(&publications);
+            let drain = tokio::spawn(async move {
+                while let Some(message) = socket.next().await {
+                    if message.method() == "textDocument/publishDiagnostics" {
+                        results.lock().push(
+                            serde_json::from_value(message.params().cloned().unwrap()).unwrap(),
+                        );
+                    }
+                }
+            });
+            open_stale_publication_doc(&backend, &source, edited);
+            open_stale_publication_doc(&backend, &dependent, reference);
+            backend
+                .parse_and_validate(&source, edited, crate::ValidateTrigger::DidOpen, Some(1))
+                .await;
+            let (before, _) = backend
+                .parse_and_validate(
+                    &dependent,
+                    reference,
+                    crate::ValidateTrigger::DidOpen,
+                    Some(1),
+                )
+                .await;
+            assert!(!before.iter().any(|d| matches!(
+                &d.code,
+                Some(NumberOrString::String(code)) if code == "CW225"
+            )));
+
+            // Await the actual watched worker, not just the notification or
+            // socket quiet: this event must be skipped while the URI is open.
+            backend
+                .process_watched_batch(HashSet::from([source.clone()]), Vec::new())
+                .await;
+            assert!(
+                !backend
+                    .state
+                    .loc_watched_overlay
+                    .read()
+                    .contains_key(&source)
+            );
+            publications.lock().clear();
+            backend
+                .did_close_impl(DidCloseTextDocumentParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: Url::parse(&source).unwrap(),
+                    },
+                })
+                .await;
+            assert_eq!(backend.loc_overlay_keys().contains("new_key"), saved);
+            if !saved {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if publications.lock().iter().any(|p| {
+                            p.uri.as_str() == dependent
+                                && p.diagnostics.iter().any(|d| {
+                                    matches!(
+                                        &d.code,
+                                        Some(NumberOrString::String(code)) if code == "CW225"
+                                    )
+                                })
+                        }) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("discarded key must revalidate the dependent");
+            }
+            let (after, _) = backend
+                .parse_and_validate(
+                    &dependent,
+                    reference,
+                    crate::ValidateTrigger::DidChange,
+                    Some(1),
+                )
+                .await;
+            assert_eq!(
+                after.iter().any(|d| matches!(
+                    &d.code,
+                    Some(NumberOrString::String(code)) if code == "CW225"
+                )),
+                !saved
+            );
+            drain.abort();
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
