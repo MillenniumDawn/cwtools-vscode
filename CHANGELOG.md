@@ -4,6 +4,8 @@
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
+* Share discovery file-count budgets across include directories and roots in a scan, enforce aggregate CLI script read budgets, and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)
+* Retry base-game file indexing after incomplete discovery, and retry workspace-folder scans only while another scan is busy.
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
@@ -49,11 +51,6 @@
 #### Engine
 
 * Stop reading closed files to place workspace symbol and go-to-definition results. Their ranges now use the indexed column directly, which differs from the old result only for a symbol that follows astral-plane characters (such as emoji) on the same line under UTF-16 positions. Open documents still convert exactly. (#1323)
-* Share discovery and CLI script read budgets across a scan and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)
-* Retry base-game file indexing on quiet scans after a discovery limit is exceeded, instead of recording an incomplete scan as successful.
-* Retry base-game file indexing on quiet scans after a discovery limit is exceeded, instead of recording an incomplete scan as successful. Retry workspace-folder rescans only while another scan is running, not after discovery fails.
-* Share discovery file-count budgets across include directories and roots in a scan, enforce aggregate CLI script read budgets, and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)
-* Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
 * Release the workspace scan's type index snapshot once pass 2 has validated, instead of holding it through publishing and the open-document revalidation. An index write in that window, such as an open document reindexed after the scan, no longer copies the whole index. An edit made while pass 2 is still validating still copies it, because that pass reads a stable snapshot. Diagnostics are unchanged. (#1321)
