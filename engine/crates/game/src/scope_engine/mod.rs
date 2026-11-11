@@ -125,6 +125,135 @@ mod tests {
         );
     }
 
+    // ── replace_scope PREV chain ordering (#1243) ─────────────────────────────
+
+    #[test]
+    fn replace_scope_prev_sits_below_current() {
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(None, None, &[], &["201".to_string()]);
+        assert_eq!(ctx.scopes, vec![ScopeId(201), ScopeId(205)]);
+        assert_eq!(ctx.root, ScopeId(200));
+        let res = ctx.change_scope("prev");
+        assert_eq!(
+            res,
+            ScopeResult::NewScope {
+                scope: ScopeId(201),
+                ignore_keys: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn replace_scope_prevprev_order() {
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(None, None, &[], &["201".to_string(), "202".to_string()]);
+        assert_eq!(ctx.scopes, vec![ScopeId(202), ScopeId(201), ScopeId(205)]);
+
+        let mut fresh_ctx = stl_ctx();
+        fresh_ctx.push_scope(ScopeId(205));
+        fresh_ctx.apply_replace_scope(None, None, &[], &["201".to_string(), "202".to_string()]);
+        let res = fresh_ctx.change_scope("prevprev");
+        assert_eq!(
+            res,
+            ScopeResult::NewScope {
+                scope: ScopeId(202),
+                ignore_keys: vec![]
+            }
+        );
+
+        let res = ctx.change_scope("prev");
+        assert_eq!(
+            res,
+            ScopeResult::NewScope {
+                scope: ScopeId(201),
+                ignore_keys: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn replace_scope_three_prevs_deepest_first() {
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(
+            None,
+            None,
+            &[],
+            &["201".to_string(), "202".to_string(), "203".to_string()],
+        );
+        assert_eq!(
+            ctx.scopes,
+            vec![ScopeId(203), ScopeId(202), ScopeId(201), ScopeId(205)]
+        );
+        let res = ctx.change_scope("prevprevprev");
+        assert_eq!(
+            res,
+            ScopeResult::NewScope {
+                scope: ScopeId(203),
+                ignore_keys: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn replace_scope_four_prevs_deepest_first() {
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(
+            None,
+            None,
+            &[],
+            &[
+                "201".to_string(),
+                "202".to_string(),
+                "203".to_string(),
+                "204".to_string(),
+            ],
+        );
+        assert_eq!(
+            ctx.scopes,
+            vec![
+                ScopeId(204),
+                ScopeId(203),
+                ScopeId(202),
+                ScopeId(201),
+                ScopeId(205)
+            ]
+        );
+        let res = ctx.change_scope("prevprevprevprev");
+        assert_eq!(
+            res,
+            ScopeResult::NewScope {
+                scope: ScopeId(204),
+                ignore_keys: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn replace_scope_keeps_current_and_root() {
+        // prevs land below the current frame; root moves only when named.
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(
+            Some("201"),
+            None,
+            &[],
+            &["202".to_string(), "203".to_string()],
+        );
+        assert_eq!(ctx.scopes, vec![ScopeId(203), ScopeId(202), ScopeId(205)]);
+        assert_eq!(ctx.root, ScopeId(201));
+
+        // Without prevs the stack is left alone, current frame included.
+        let mut ctx = stl_ctx();
+        ctx.push_scope(ScopeId(205));
+        ctx.apply_replace_scope(None, None, &[], &[]);
+        assert_eq!(ctx.scopes, vec![ScopeId(200), ScopeId(205)]);
+        assert_eq!(ctx.root, ScopeId(200));
+    }
+
     // ── FROM chain tests ──────────────────────────────────────────────────────
 
     #[test]
