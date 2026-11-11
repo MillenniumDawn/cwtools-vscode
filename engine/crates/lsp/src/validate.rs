@@ -2255,16 +2255,8 @@ impl Backend {
             // One parse per document version: a request that arrived before this
             // validation already parsed this text, and one that arrives during it
             // takes this parse instead of making its own.
-            let memoized = parsed_version.and_then(|version| {
-                self.state
-                    .fresh_ast_cache
-                    .lock()
-                    .as_ref()
-                    .filter(|(cached_uri, cached_version, _)| {
-                        cached_uri == uri && *cached_version == version
-                    })
-                    .map(|(_, _, ast)| Arc::clone(ast))
-            });
+            let memoized =
+                parsed_version.and_then(|version| self.memoized_parse(uri, version, text));
             let (parsed_ast, table) = match memoized {
                 Some(ast) => {
                     let table = self.table_for(&ast);
@@ -2274,8 +2266,7 @@ impl Backend {
                     let table = self.state.string_table.with_overlay();
                     let ast = Arc::new(parse_string(text, &table));
                     if let Some(version) = parsed_version {
-                        *self.state.fresh_ast_cache.lock() =
-                            Some((uri.to_string(), version, Arc::clone(&ast)));
+                        self.memoize_parse(uri, version, text, &ast);
                     }
                     (ast, table)
                 }
@@ -2637,6 +2628,54 @@ mod info_revision_tests {
             )
             .await;
         assert!(Arc::ptr_eq(&validated.expect("script").ast, &current));
+    }
+
+    /// A request snapshots a document, the document closes, and the request's
+    /// parse finishes afterwards. Reopening restarts the versions, so the version
+    /// alone would match the old tree to the new text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_parse_that_outlives_its_document_is_not_reused_after_a_reopen() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        let old_text = "idea_old = { }";
+        let new_text = "idea_new = { }\nidea_other = { }";
+        open_loc_doc(&backend, &uri, old_text);
+        let old_ast = backend.ast_for(&uri).expect("parse of the first open");
+        assert_eq!(old_ast.root_children.len(), 1);
+
+        // `did_close` removes the document and evicts its memoized parse.
+        backend.state.documents.lock().remove(&uri);
+        *backend.state.fresh_ast_cache.lock() = None;
+
+        // The late store finds no open document and is dropped.
+        backend.memoize_parse(&uri, 1, old_text, &old_ast);
+        assert!(backend.state.fresh_ast_cache.lock().is_none());
+
+        // Reopened at version 1 with different text: the late store is still
+        // refused, and neither a request nor the validation sees the old tree.
+        open_loc_doc(&backend, &uri, new_text);
+        backend.memoize_parse(&uri, 1, old_text, &old_ast);
+        assert!(backend.state.fresh_ast_cache.lock().is_none());
+        assert!(backend.memoized_parse(&uri, 1, new_text).is_none());
+
+        // Even an entry planted under the same uri and version is not a match
+        // for different text.
+        *backend.state.fresh_ast_cache.lock() = Some(crate::state::FreshAst {
+            uri: uri.clone(),
+            version: 1,
+            text: Arc::from(old_text),
+            ast: Arc::clone(&old_ast),
+        });
+        let (_, validated) = backend
+            .parse_and_validate(&uri, new_text, crate::ValidateTrigger::DidOpen, Some(1))
+            .await;
+        let validated = validated.expect("script").ast;
+        assert!(!Arc::ptr_eq(&validated, &old_ast));
+        assert_eq!(validated.root_children.len(), 2);
+        assert_eq!(
+            backend.ast_for(&uri).expect("current").root_children.len(),
+            2
+        );
     }
 
     /// The hazard that made `ParsedFile` own its guard: a handler can hold an AST

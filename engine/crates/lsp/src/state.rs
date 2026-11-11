@@ -354,8 +354,7 @@ pub(crate) struct DocumentState {
     pub(crate) validation_permits: tokio::sync::Semaphore,
     pub(crate) info_revision: AtomicU64,
     pub(crate) fallback_cache: parking_lot::Mutex<Option<CompletionCacheEntry>>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) fresh_ast_cache: parking_lot::Mutex<Option<(String, i32, Arc<ParsedFile>)>>,
+    pub(crate) fresh_ast_cache: parking_lot::Mutex<Option<FreshAst>>,
     pub(crate) completion_generation: parking_lot::Mutex<HashMap<String, u64>>,
     pub(crate) next_completion_id: AtomicU64,
     pub(crate) last_loc_signature: parking_lot::Mutex<Option<u64>>,
@@ -1442,6 +1441,28 @@ pub(crate) struct FixableEdits {
     pub(crate) entries: Vec<(String, cwtools_parser::fix::SpanEdit)>,
     pub(crate) version: Option<i32>,
     pub(crate) content_hash: Option<u64>,
+}
+
+/// The one memoized parse of an open document's current text. The version alone
+/// does not identify the text: a document closed and reopened starts its
+/// versions again, so the text the tree was parsed from is part of the key.
+pub(crate) struct FreshAst {
+    pub(crate) uri: String,
+    pub(crate) version: i32,
+    pub(crate) text: Arc<str>,
+    pub(crate) ast: Arc<ParsedFile>,
+}
+
+impl FreshAst {
+    pub(crate) fn matches(&self, uri: &str, version: i32, text: &str) -> bool {
+        self.uri == uri && self.version == version && same_text(&self.text, text)
+    }
+}
+
+/// Text equality with a pointer check first, since the usual caller holds the
+/// same buffer the entry was stored with.
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
+    (a.len() == b.len() && std::ptr::eq(a.as_ptr(), b.as_ptr())) || a == b
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

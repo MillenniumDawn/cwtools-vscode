@@ -337,6 +337,42 @@ impl Backend {
     /// Snapshot the document AST for `uri`, re-parsing the live text when none is cached so
     /// hover/goto/completion still resolve mid-edit. The fresh parse is memoized by
     /// `(uri, version)` (#87), since a document has no stored AST until its first validate.
+    /// The memoized parse of `text`, if `uri` is still at `version` with that text.
+    pub(crate) fn memoized_parse(
+        &self,
+        uri: &str,
+        version: i32,
+        text: &str,
+    ) -> Option<Arc<ParsedFile>> {
+        self.state
+            .fresh_ast_cache
+            .lock()
+            .as_ref()
+            .filter(|fresh| fresh.matches(uri, version, text))
+            .map(|fresh| Arc::clone(&fresh.ast))
+    }
+
+    /// Memoize `ast` as the parse of `text`, unless the document has moved on.
+    /// A parse can finish after its document was edited, or closed and reopened
+    /// with its versions starting again; storing it then would hand an old tree
+    /// to whoever asks for that version next. The check and the store happen
+    /// under the document lock, the order `did_close` evicts in.
+    pub(crate) fn memoize_parse(&self, uri: &str, version: i32, text: &str, ast: &Arc<ParsedFile>) {
+        let documents = self.state.documents.lock();
+        let Some(document) = documents.get(uri) else {
+            return;
+        };
+        if document.version != version || !crate::state::same_text(&document.text, text) {
+            return;
+        }
+        *self.state.fresh_ast_cache.lock() = Some(crate::state::FreshAst {
+            uri: uri.to_string(),
+            version,
+            text: Arc::clone(&document.text),
+            ast: Arc::clone(ast),
+        });
+    }
+
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
         self.ast_snapshot(uri, true)
     }
@@ -364,15 +400,7 @@ impl Backend {
             }
             (doc.text.clone(), doc.version)
         };
-        let cached = {
-            let guard = self.state.fresh_ast_cache.lock();
-            guard
-                .as_ref()
-                .filter(|(cached_uri, cached_version, _)| {
-                    cached_uri == uri && *cached_version == version
-                })
-                .map(|(_, _, ast)| Arc::clone(ast))
-        };
+        let cached = self.memoized_parse(uri, version, &text);
         if let Some(ast) = cached {
             return Some(AstSnapshot {
                 ast,
@@ -385,17 +413,7 @@ impl Backend {
         let table = self.state.string_table.with_overlay();
         tokio::task::block_in_place(|| {
             let ast = Arc::new(cwtools_parser::parser::parse_string(&text, &table));
-            let mut slot = self.state.fresh_ast_cache.lock();
-            // A slow parse of an older version must not replace a newer one.
-            let superseded = slot
-                .as_ref()
-                .is_some_and(|(cached_uri, cached_version, _)| {
-                    cached_uri == uri && *cached_version > version
-                });
-            if !superseded {
-                *slot = Some((uri.to_string(), version, Arc::clone(&ast)));
-            }
-            drop(slot);
+            self.memoize_parse(uri, version, &text, &ast);
             Some(AstSnapshot {
                 ast,
                 source: AstSource::FreshParse,
@@ -765,7 +783,7 @@ impl Backend {
                 }
                 self.state.completion_generation.lock().remove(&uri);
                 let mut fresh = self.state.fresh_ast_cache.lock();
-                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                if fresh.as_ref().is_some_and(|cached| cached.uri == uri) {
                     *fresh = None;
                 }
             }
@@ -894,7 +912,7 @@ impl Backend {
             self.state.completion_generation.lock().remove(&uri);
             {
                 let mut fresh = self.state.fresh_ast_cache.lock();
-                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                if fresh.as_ref().is_some_and(|cached| cached.uri == uri) {
                     *fresh = None;
                 }
             }

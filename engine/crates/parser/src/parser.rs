@@ -26,6 +26,9 @@ struct Parser<'a> {
     /// Line of the first leaf-value quote read to end of line unclosed; the
     /// formatter refuses files carrying one.
     unclosed_leaf_value_quote_line: Option<u32>,
+    /// Line and byte offset of an `@\[` whose line has no `]` after it. A later
+    /// `@\[` on that line cannot close either, so it is not scanned again.
+    unclosed_meta_from: Option<(u32, usize)>,
     /// Pooled comment text; comments store only a [`CommentRange`] into it
     /// (#575). Grows like any `Vec`, so retaining a comment allocates nothing
     /// of its own.
@@ -58,6 +61,7 @@ impl<'a> Parser<'a> {
             comment_mode,
             depth: 0,
             unclosed_leaf_value_quote_line: None,
+            unclosed_meta_from: None,
             comment_pool: String::new(),
         }
     }
@@ -660,6 +664,15 @@ impl<'a> Parser<'a> {
             return None;
         }
         let start = self.byte_pos();
+        // Each unclosed bracket falls back to a short token, so a line of them
+        // would otherwise scan its own remainder once per bracket.
+        if self
+            .unclosed_meta_from
+            .is_some_and(|(line, from)| line == self.line && start >= from)
+        {
+            self.push_unclosed_meta_error();
+            return None;
+        }
         let saved = self.save();
         self.advance(); // '@'
         if self.peek() != Some('\\') {
@@ -679,16 +692,21 @@ impl<'a> Parser<'a> {
             // Rewind, or everything after the bracket, closing braces included,
             // is lost from the tree while the expression is being typed.
             self.restore(saved);
-            self.errors.push(ParseError::Pos(
-                self.pos().line,
-                self.pos().col,
-                "unclosed metaprogramming bracket: expected ']'".to_string(),
-            ));
+            self.unclosed_meta_from = Some((self.line, start));
+            self.push_unclosed_meta_error();
             return None;
         }
         let s = &self.input[start..self.byte_pos()];
         let tokens = self.table.intern(s);
         Some(Value::String(tokens))
+    }
+
+    fn push_unclosed_meta_error(&mut self) {
+        self.errors.push(ParseError::Pos(
+            self.pos().line,
+            self.pos().col,
+            "unclosed metaprogramming bracket: expected ']'".to_string(),
+        ));
     }
 
     fn parse(mut self) -> ParsedFile {
@@ -1580,6 +1598,44 @@ shorthand { nested = value }
             2,
             "the statement after the clause must survive an unclosed bracket"
         );
+    }
+
+    #[test]
+    fn a_line_of_unclosed_metaprogramming_brackets_is_scanned_once() {
+        let table = StringTable::new();
+        // 200,000 brackets on one line: rescanning the rest of the line for each
+        // is 2 * 10^10 steps and does not finish; one scan is immediate.
+        let count = 200_000;
+        let mut input = "@\\[ ".repeat(count);
+        input.push_str("\nafter = yes\n");
+        let started = std::time::Instant::now();
+        let result = parse_string(&input, &table);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            started.elapsed()
+        );
+        let unclosed = result
+            .errors
+            .iter()
+            .filter(|e| format!("{e:?}").contains("unclosed metaprogramming bracket"))
+            .count();
+        assert_eq!(unclosed, count);
+        let last = result.root_children.last().expect("the statement after");
+        assert!(matches!(last, Child::Leaf(_)), "{last:?}");
+    }
+
+    #[test]
+    fn a_closed_bracket_after_an_unclosed_line_still_parses() {
+        let table = StringTable::new();
+        let result = parse_string("a = @\\[ 1\nb = @\\[ 2 ]\n", &table);
+        // The unclosed line leaves its fragments as extra statements before `b`.
+        match value_of(&result, &table, result.root_children.len() - 1) {
+            Value::String(t) => {
+                assert_eq!(table.get_string(t.normal).unwrap_or_default(), r"@\[ 2 ]");
+            }
+            v => panic!("expected String, got {v:?}"),
+        }
     }
 
     #[test]
