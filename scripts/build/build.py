@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -372,6 +373,35 @@ def read_changelog() -> str:
     return (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
+def validate_release_metadata(
+    tag: str, manifest_version: object, changelog: str
+) -> None:
+    """Reject inconsistent release inputs before any publisher starts."""
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise RuntimeError(f"invalid release tag {tag!r}; expected vMAJOR.MINOR.PATCH")
+    version = tag[1:]
+    if manifest_version != version:
+        raise RuntimeError(
+            f"release tag {tag} does not match manifest version {manifest_version!r}"
+        )
+    top = top_changelog_version(changelog)
+    if top != version:
+        raise RuntimeError(f"release tag {tag} does not match changelog version {top}")
+    # Use the exact parser used later by GitHub publication, including its
+    # nonempty-section requirement.
+    release_notes(changelog, version)
+
+
+def cmd_validate_release_metadata() -> None:
+    manifest_path = EXTENSION_PACKAGE_ROOT / "package.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"invalid extension manifest: {manifest_path}")
+    validate_release_metadata(
+        os.environ.get("RELEASE_TAG", ""), manifest.get("version"), read_changelog()
+    )
+
+
 def resolve_version() -> dict[str, Any]:
     return resolve_version_from(os.environ, read_changelog())
 
@@ -682,6 +712,7 @@ def cmd_release() -> None:
 
 
 COMMANDS: dict[str, Callable[[], object]] = {
+    "validate-release-metadata": cmd_validate_release_metadata,
     "prerelease-identity": cmd_prerelease_identity,
     "compile": cmd_compile,
     "compile-release": cmd_compile_release,
