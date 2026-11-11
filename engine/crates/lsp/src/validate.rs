@@ -1432,15 +1432,23 @@ impl Backend {
             ),
             None => (None, Vec::new(), None, None),
         };
+        let tokens = parsed
+            .as_ref()
+            .map(|ast| collect_doc_tokens(ast, &self.state.string_table));
         let mut first_accepted_ast = false;
         {
-            // Update tokens before taking the documents lock: `doc_tokens` is acquired before
-            // `documents` everywhere to avoid ABBA deadlock with `revalidate_open_dependents`,
-            // which takes doc_tokens then documents.
-            self.update_doc_tokens(&uri, parsed.as_ref());
+            // Keep the documented lock order, and commit tokens only after accepting
+            // the same document version. A superseded validation must not replace
+            // the current version's token set.
+            let mut doc_tokens = self.state.doc_tokens.write();
             let mut docs = self.state.documents.lock();
             if !docs.mark_validated(&uri, expected_version, &text) {
                 return;
+            }
+            if let Some(tokens) = tokens {
+                doc_tokens.insert(uri.clone(), tokens);
+            } else {
+                doc_tokens.remove(&uri);
             }
             if let Some(used) = tracked_uses {
                 let changed = self.refresh_type_uses(&uri, used);
@@ -6044,6 +6052,89 @@ mod ignored_tests {
             Some(2)
         );
         assert_eq!(backend.state.validation_permits.available_permits(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn superseded_validation_cannot_replace_current_document_tokens() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/ideas/edit.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        open_stale_publication_doc(&backend, &uri, "old = { ref = obsolete_name }");
+
+        let gate = HoldGate::new(HoldPoint::ValidateBeforeAcceptance);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let old_uri = uri.clone();
+        let old = tokio::spawn(async move {
+            worker
+                .debounced_validate(
+                    old_uri,
+                    1,
+                    0,
+                    crate::ValidateTrigger::DidChange,
+                    &CancelFlag::default(),
+                )
+                .await;
+        });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("old validation did not reach acceptance");
+        }
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from("new = { ref = current_name }"))
+            .unwrap();
+        backend
+            .debounced_validate(
+                uri.clone(),
+                2,
+                0,
+                crate::ValidateTrigger::DidChange,
+                &CancelFlag::default(),
+            )
+            .await;
+        gate.release();
+        old.await.unwrap();
+
+        let current = doc_token_hash("current_name");
+        let obsolete = doc_token_hash("obsolete_name");
+        {
+            let tokens = backend.state.doc_tokens.read();
+            let tokens = tokens.get(&uri).expect("current tokens");
+            assert!(tokens.contains(&current));
+            assert!(!tokens.contains(&obsolete));
+        }
+
+        while let Some(Some(_)) = socket.next().now_or_never() {}
+        assert!(
+            backend
+                .revalidate_open_dependents("", 0, Some(&NameTokens::from_iter([current])))
+                .await
+        );
+        let mut published = false;
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                published |= params.uri.as_str() == uri && params.version == Some(2);
+            }
+        }
+        assert!(
+            published,
+            "the current name must select the document for a sweep"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
