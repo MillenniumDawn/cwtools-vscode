@@ -370,6 +370,17 @@ impl ScanBudget {
     }
 }
 
+impl FileManagerConfig {
+    /// Zero means unlimited, matching the no-filter discovery check.
+    pub fn read_cap(&self) -> u64 {
+        if self.max_file_size == 0 {
+            u64::MAX
+        } else {
+            self.max_file_size
+        }
+    }
+}
+
 /// Atomic running total of bytes read in one scan, shared across the parallel read
 /// fan-out so the whole scan stops adding files once the total-byte budget is exhausted.
 #[derive(Debug, Default)]
@@ -499,7 +510,7 @@ impl FileManager {
         use rayon::prelude::*;
 
         let table = &self.string_table;
-        let max_file_size = self.config.max_file_size;
+        let max_file_size = self.config.read_cap();
         let max_bytes = self.config.scan_budget.max_bytes;
         let bytes = ScanBytes::new();
         files
@@ -2715,6 +2726,53 @@ replace_path = "COMMON/ideas"
         assert!(
             !names.iter().any(|n| n.ends_with("big.txt")),
             "over-cap file must be skipped: {names:?}"
+        );
+    }
+
+    #[test]
+    fn discover_and_parse_treats_a_zero_cap_as_unlimited() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let root = tmp.path();
+        std::fs::write(root.join("ok.txt"), "x = 1").unwrap();
+
+        let mut fm = FileManager::new(FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            max_file_size: 0,
+            ..Default::default()
+        });
+        let files = fm.discover_and_parse().expect("discover");
+        assert_eq!(
+            files.len(),
+            1,
+            "a zero cap must not refuse the discovered file"
+        );
+        assert_eq!(
+            files[0].root_children.len(),
+            1,
+            "the file must be parsed whole"
+        );
+    }
+
+    #[test]
+    fn parse_files_rejects_whole_input_over_a_positive_cap() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let file = tmp.path().join("layered.txt");
+        std::fs::write(&file, "x = 1").unwrap();
+
+        let fm = FileManager::new(FileManagerConfig {
+            root: tmp.path().to_path_buf(),
+            include_dirs: vec![".".into()],
+            max_file_size: 2,
+            ..Default::default()
+        });
+        let files = fm.parse_files(vec![DiscoveredFile {
+            path: file,
+            logical_path: "layered.txt".to_string(),
+        }]);
+        assert!(
+            files.is_empty(),
+            "an over-cap file must be refused, not truncated"
         );
     }
 
