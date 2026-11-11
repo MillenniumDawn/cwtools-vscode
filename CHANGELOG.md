@@ -2,15 +2,7 @@
 
 #### Engine
 
-* Keep inline `# cwtools-ignore` directives when open documents are revalidated after a rescan, a background reindex or a settings change. Suppressed diagnostics used to come back until the next edit of the file. That pass now also runs off the async workers.
-* Resolve hover, go-to-definition, highlights, references, rename, semantic tokens, inlay hints, colors, document links and the outline against the syntax tree of the current text. Between an edit and its debounced validation they used the previous version's tree under the new positions, and semantic tokens built that way stayed cached until the next edit. Completion still uses the last validated tree. A request and the validation of the same document version share one parse.
-* Offer the whole name when renaming a dotted event id or localisation key from any segment. The range used to start after the last dot before the cursor.
-* Keep parsing after an unclosed `@\[` expression. The scan for `]` ran past the end of the line, to the next `]` anywhere in the file or to its end, so the statements in between were missing from the tree while the expression was being typed. The expression now ends on its own line, and the error is still reported. The parse cache is invalidated once so unchanged files use the new recovery.
-* Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or explicit localisation fields change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
-* Collect an open document's reference sites under a read lock. Call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
-* Return changed names to their queue when the next keystroke aborts the dependent sweep that took them. In configs that track type uses, open files whose unused-instance status changed were otherwise never revalidated.
-* Check every document link's target in one blocking task with the search roots resolved once, and keep the rule walk off the async workers. Each candidate used to resolve itself and every root in its own task, one after another.
-* Store each complex enum and value-set string once across files, and reject lines without the searched name before scanning them for highlights and rename.
+* Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
@@ -22,22 +14,28 @@
 * Index a boolean as `yes` or `no`, the way the script spells it, instead of `true` or `false`. A type instance named by a `name_field` set to `yes` is now found by a reference spelled `yes`, which no longer raises a false CW500, and variable names and values captured from `yes` or `no` follow the same spelling. Stellaris CW227, CW229, CW109 and CW250 also read a boolean `template`, `area` or `key` as `yes` or `no`. The vanilla cache format version moves to 17, so an existing `.cwv` file is rebuilt once. (#1334)
 * Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
 * Reconcile localization keys with disk on close, including saves whose watched event arrived while the file was open. (#1237)
+* Keep inline `# cwtools-ignore` directives when open documents are revalidated after a rescan, a background reindex or a settings change. Suppressed diagnostics used to come back until the next edit of the file. That pass now also runs off the async workers.
+* Resolve hover, go-to-definition, highlights, references, rename, semantic tokens, inlay hints, colors, document links and the outline against the syntax tree of the current text. Between an edit and its debounced validation they used the previous version's tree under the new positions, and semantic tokens built that way stayed cached until the next edit. Completion still uses the last validated tree. A request and the validation of the same document version share one parse.
+* Offer the whole name when renaming a dotted event id or localisation key from any segment. The range used to start after the last dot before the cursor.
+* Keep parsing after an unclosed `@\[` expression. The scan for `]` ran past the end of the line, to the next `]` anywhere in the file or to its end, so the statements in between were missing from the tree while the expression was being typed. The expression now ends on its own line, and the error is still reported. The parse cache is invalidated once so unchanged files use the new recovery.
+* Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or explicit localisation fields change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
+* Collect an open document's reference sites under a read lock. Call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
+* Return changed names to their queue when the next keystroke aborts the dependent sweep that took them. In configs that track type uses, open files whose unused-instance status changed were otherwise never revalidated.
+* Check every document link's target in one blocking task with the search roots resolved once, and keep the rule walk off the async workers. Each candidate used to resolve itself and every root in its own task, one after another.
+* Store each complex enum and value-set string once across files, and reject lines without the searched name before scanning them for highlights and rename.
 
 #### Tooling
 
-* Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
 * Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
 * Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
+* Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
 
 #### Extension
 
+* End pending rules-update progress when the server stops or fails to start, and prevent an old scan completion from reloading a stopped or restarted server. (#1270)
 * Hide palette commands that are not registered yet. With CWTools disabled, no `descriptor.mod`, a missing server binary, or a stopped server, the restart, output, base-game, baseline, graph-from-JSON, profiling, reindex, cache, rules-reload and localisation commands no longer appear and fail with "command not found".
 * Stop asking the server for file types when the focused editor is not a script file. Switching to settings, markdown or a diff no longer sends a request or logs a failure while the server is starting.
 * Log a failed language change for an opened document instead of failing activation.
-* End pending rules-update progress when the server stops or fails to start, and prevent an old scan completion from reloading a stopped or restarted server. (#1270)
-
-#### Extension
-
 * Show each path component once in the Files view, using the server's logical path. (#1269)
 
 ### 4.0.8
