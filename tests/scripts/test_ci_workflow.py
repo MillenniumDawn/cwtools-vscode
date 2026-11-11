@@ -10,6 +10,22 @@ CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LIVE_SETTINGS = REPO_ROOT / "extension" / "test" / "host" / "liveSettings.test.ts"
 
 
+def test_stellaris_guard_uses_resolved_pins_and_retains_failures() -> None:
+    workflow = CI.read_text(encoding="utf-8")
+    job = workflow.split("  stellaris:\n", 1)[1].split("  # One PR comment", 1)[0]
+    assert "needs: pins" in job
+    assert "needs.pins.outputs.stellaris_corpus_rev" in job
+    assert "needs.pins.outputs.stellaris_rules_rev" in job
+    # Empty pins fail the tier before any checkout can fall back to a default
+    # branch.
+    assert job.index("Require resolved Stellaris pins") < job.index("actions/checkout")
+    assert "scripts/guard.py stellaris --no-build" in job
+    assert "ui-prescripted-countries/ui-prescripted-countries" in job
+    assert "cwtools-stellaris-config/config" in job
+    assert "if: failure()" in job
+    assert "drift.diff" in job and "validate.log" in job
+
+
 def test_package_steps_do_not_run_after_cancellation() -> None:
     workflow = CI.read_text(encoding="utf-8")
     test_build = workflow_step(workflow, "Test build")
