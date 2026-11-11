@@ -248,7 +248,7 @@ fn parse_discovered_files_for_index(
 
     let bytes = ScanBytes::new();
     let read_budget = ParseReadBudget {
-        max_file_size: config.max_file_size,
+        max_file_size: config.read_cap(),
         max_scan_bytes: config.scan_budget.max_bytes,
         bytes: &bytes,
     };
@@ -2012,6 +2012,74 @@ mod tests {
         assert_ne!(
             workspace_cache::source_cache_key(&path),
             loaded.fingerprint.metadata
+        );
+    }
+
+    #[test]
+    fn parse_discovered_files_for_index_treats_a_zero_cap_as_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("mod");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "x = 1\n").unwrap();
+        let cache_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let table = StringTable::new();
+        let cache = open_parse_cache(&cache_dir, "hoi4", &root).expect("parse cache");
+        let config = FileManagerConfig {
+            root: root.clone(),
+            max_file_size: 0,
+            ..Default::default()
+        };
+        let parsed = parse_discovered_files_for_index(
+            vec![DiscoveredFile {
+                path: root.join("a.txt"),
+                logical_path: "a.txt".to_string(),
+            }],
+            &table,
+            &cache,
+            &config,
+        );
+        assert_eq!(parsed.len(), 1, "a zero cap must not refuse the file");
+        assert_eq!(
+            parsed[0].root_children.len(),
+            1,
+            "the file must be parsed whole"
+        );
+    }
+
+    #[test]
+    fn parse_discovered_files_for_index_rejects_the_whole_input_over_a_positive_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("mod");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "x = 1\n").unwrap();
+        let cache_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let table = StringTable::new();
+        let cache = open_parse_cache(&cache_dir, "hoi4", &root).expect("parse cache");
+        let config = FileManagerConfig {
+            root: root.clone(),
+            max_file_size: 2,
+            ..Default::default()
+        };
+        let parsed = parse_discovered_files_for_index(
+            vec![DiscoveredFile {
+                path: root.join("a.txt"),
+                logical_path: "a.txt".to_string(),
+            }],
+            &table,
+            &cache,
+            &config,
+        );
+        assert!(
+            parsed.is_empty(),
+            "an over-cap file must be refused, not truncated"
+        );
+        assert!(
+            !cache.wrote.load(Ordering::Relaxed),
+            "a refused read must not write a cache entry"
         );
     }
 
