@@ -228,16 +228,21 @@ pub(crate) fn children_to_rules(
                     _ => {
                         let right_str = value_to_string(&leaf.value, table);
                         if right_str.starts_with("colour[") && right_str.ends_with(']') {
-                            let colour_rules = build_colour_rules(&right_str);
-                            RuleType::NodeRule {
-                                left: field_from_string(&key),
-                                rules: colour_rules.into(),
+                            // One overload per channel form so the whole body must match a single form.
+                            for channel in build_colour_rules(&right_str) {
+                                rules.push((
+                                    RuleType::NodeRule {
+                                        left: field_from_string(&key),
+                                        rules: vec![channel].into(),
+                                    },
+                                    opts.clone(),
+                                ));
                             }
-                        } else {
-                            let left = field_from_string(&key);
-                            let right = field_from_string(&right_str);
-                            RuleType::LeafRule { left, right }
+                            continue;
                         }
+                        let left = field_from_string(&key);
+                        let right = field_from_string(&right_str);
+                        RuleType::LeafRule { left, right }
                     }
                 };
                 rules.push((rule, opts));
