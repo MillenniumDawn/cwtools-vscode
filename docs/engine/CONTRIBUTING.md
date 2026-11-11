@@ -103,7 +103,7 @@ syntax, not volume, so keep it small. Anything corpus-sized belongs in a bench
 that reads the sibling checkouts under `CWTOOLS_PROJECTS`.
 
 No real game rules are committed. A test that needs them calls
-`cwtools_test_support::stellaris_config()` or `hoi4_config()`, which return the
+`cwtools_test_support::stellaris_config()`, `hoi4_config()`, or `vic3_config()`, which return the
 upstream config repo at the commit `rules-pins.json` pins. The first call
 fetches that commit with git into `cwtools/test-rules/` under the user cache
 dir (`XDG_CACHE_HOME`, `LOCALAPPDATA`, else `~/.cache` on every OS), and later

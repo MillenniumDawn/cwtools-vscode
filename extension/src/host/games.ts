@@ -20,7 +20,7 @@ export interface GameDef {
 	contentHint?: string;
 }
 
-export const RULES_MANIFEST_REVISION = 3;
+export const RULES_MANIFEST_REVISION = 2;
 
 // Order matters: more-specific newer game hints sit before older prefixes
 // ("crusader kings iii" contains "crusader kings ii"; EU5 runs before EU4's
@@ -104,7 +104,7 @@ export const GAMES: GameDef[] = [
 		id: "vic3",
 		display: "Victoria 3",
 		repo: "https://github.com/cwtools/cwtools-vic3-config",
-		repoRef: "bec10017635de6dac01525210b4c932db0ce1c40", // 2026-11-09
+		repoRef: "ba728e59a22e18dd590964e1c0201976852f46a8", // 2026-08-05
 		exeName: "victoria3",
 		binariesPrefix: true,
 		folderHint: /(vic3|victoria (iii|3))/,

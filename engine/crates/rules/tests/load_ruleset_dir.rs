@@ -229,3 +229,52 @@ fn load_hoi4_config_dir() {
         ruleset.enums.len()
     );
 }
+
+/// Undefined names already present in the Victoria 3 pin this repo ships.
+/// A later pin may resolve one. It may not add another. `bec10017` adds
+/// `terrain_manipulator` by commenting out its declaration while `buildings.cwt`
+/// still names it.
+fn is_known_vic3_undefined(name: &str) -> bool {
+    matches!(
+        name,
+        "animation"
+            | "country"
+            | "named_colors"
+            | "scripted_color_clause"
+            | "strata"
+            | "template_special_selection_clause"
+    )
+}
+
+fn referenced_name(message: &str) -> &str {
+    let (head, _) = message.rsplit_once('`').unwrap_or((message, ""));
+    head.rsplit_once('`').map(|(_, name)| name).unwrap_or(head)
+}
+
+/// Loading the pinned Victoria 3 rules must not publish a new CW601. The error
+/// is raised when the rules load, before any game file is opened.
+#[test]
+fn load_vic3_config_dir_has_no_new_undefined_references() {
+    let table = StringTable::new();
+    let (ruleset, errors) = load_ruleset_from_dir(
+        cwtools_test_support::vic3_config(),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+
+    let unexpected: Vec<_> = errors
+        .iter()
+        .filter(|error| error.code == "CW601")
+        .filter(|error| !is_known_vic3_undefined(referenced_name(&error.message)))
+        .map(|error| format!("{}:{} {}", error.file.display(), error.line, error.message))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "pinned Victoria 3 rules add undefined references: {unexpected:?}"
+    );
+    assert!(
+        ruleset.types.len() > 20,
+        "expected > 20 types, got {}",
+        ruleset.types.len()
+    );
+}

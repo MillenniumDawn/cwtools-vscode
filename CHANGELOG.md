@@ -3,6 +3,7 @@
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
+* Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
@@ -17,7 +18,6 @@
 
 #### Tooling
 
-* Update the pinned Victoria 3 rules and refresh managed rule installations. (#1315)
 * Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
 * Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
 
