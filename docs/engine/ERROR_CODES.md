@@ -251,7 +251,7 @@ Problems in the `.cwt` ruleset itself rather than in the script it checks. Emitt
 
 ## Reconciliations
 
-These are intentional ID renumberings documented in `error_codes.rs`. All converge Rust-invented codes onto their F# equivalents so downstream baselines key off a single consistent number.
+These are intentional ID renumberings documented in `crates/error_codes/src/lib.rs`. All converge Rust-invented codes onto their F# equivalents so downstream baselines key off a single consistent number.
 
 - **CW501 -> CW261** (`DuplicateTypeDef`): cwtools-rs originally emitted duplicate-type errors as CW501; converged to F#'s CW261. CW501 is retired.
 - **CW502 -> CW239** (`UnusedType`): cwtools-rs reserved CW502 for unused-type errors; converged to F#'s CW239. CW502 is retired.

@@ -243,6 +243,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		notifyStopped = notifications.markStopped;
 
 		registerCommands(context, client, tracker, serverExe, language, workspaceFolder);
+		// Activation returns before this point when CWTools is disabled, has no
+		// descriptor, or has no server binary. The palette hides the client-owned
+		// commands until they exist, so they cannot dead-end in "command not found".
+		void commands.executeCommand("setContext", "cwtoolsCommandsRegistered", true);
 
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(client);

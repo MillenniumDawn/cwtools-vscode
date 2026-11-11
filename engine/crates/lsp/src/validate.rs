@@ -21,10 +21,26 @@ use crate::paths::{logical_path_from_uri, uri_to_path_str};
 use crate::state::LocDocumentCache;
 
 pub(crate) struct ValidatedScript {
-    pub(crate) ast: ParsedFile,
+    pub(crate) ast: Arc<ParsedFile>,
     pub(crate) use_sites: Vec<cwtools_info::IndexedUseSite>,
     pub(crate) tracked_uses: Option<UsedInstances>,
     pub(crate) covered_export_revision: Option<u64>,
+}
+
+/// Returns drained changed names to their queue when the sweep that took them
+/// is dropped before it finishes.
+struct RequeueChangedNames<'a> {
+    queue: &'a parking_lot::Mutex<NameTokens>,
+    names: &'a NameTokens,
+    armed: bool,
+}
+
+impl Drop for RequeueChangedNames<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.queue.lock().extend(self.names.iter().copied());
+        }
+    }
 }
 
 pub(crate) fn code_lens_refresh_needed(
@@ -34,6 +50,32 @@ pub(crate) fn code_lens_refresh_needed(
     references_after: u64,
 ) -> bool {
     first_accepted_ast || exports_changed || references_before != references_after
+}
+
+#[cfg(test)]
+mod requeue_changed_names_tests {
+    use super::{NameTokens, RequeueChangedNames};
+
+    #[test]
+    fn an_aborted_sweep_returns_its_names_and_a_finished_one_does_not() {
+        let queue = parking_lot::Mutex::new(NameTokens::default());
+        let names: NameTokens = [7, 9].into_iter().collect();
+
+        drop(RequeueChangedNames {
+            queue: &queue,
+            names: &names,
+            armed: true,
+        });
+        assert_eq!(*queue.lock(), names);
+
+        queue.lock().clear();
+        drop(RequeueChangedNames {
+            queue: &queue,
+            names: &names,
+            armed: false,
+        });
+        assert!(queue.lock().is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -949,12 +991,13 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let table = self.state.string_table.rebound(ast.overlay());
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
-        Some(
-            self.state
-                .info_service
-                .write()
-                .file_reference_sites_for_ast(uri, ast, &table, &ruleset, &logical_path),
-        )
+        Some(self.state.info_service.read().file_reference_sites_for_ast(
+            uri,
+            ast,
+            &table,
+            &ruleset,
+            &logical_path,
+        ))
     }
 
     pub(crate) fn refresh_open_reference_sites(&self) {
@@ -1425,7 +1468,7 @@ impl Backend {
         });
         let (parsed, open_use_sites, tracked_uses, covered_export_revision) = match parsed {
             Some(script) => (
-                Some(Arc::new(script.ast)),
+                Some(script.ast),
                 script.use_sites,
                 script.tracked_uses,
                 script.covered_export_revision,
@@ -1493,8 +1536,17 @@ impl Backend {
         );
         let changed_names: NameTokens = self.state.pending_changed_names.lock().drain().collect();
         if !changed_names.is_empty() {
+            // The next keystroke aborts this task at an await inside the sweep.
+            // The drained names then exist only in this future, so the guard
+            // puts them back for the validation that replaces it.
+            let mut requeue = RequeueChangedNames {
+                queue: &self.state.pending_changed_names,
+                names: &changed_names,
+                armed: true,
+            };
             self.revalidate_open_dependents(&uri, generation, Some(&changed_names))
                 .await;
+            requeue.armed = false;
         } else {
             tracing::debug!(uri = %uri, "exports unchanged; skipping dependent sweep");
         }
@@ -2199,13 +2251,32 @@ impl Backend {
         tokio::task::block_in_place(|| {
             // Mid-edit text: intern its novel strings into a reclaimable region so
             // half-typed identifiers do not accumulate in the base table (#475).
-            let table = self.state.string_table.with_overlay();
-            let parsed = parse_string(text, &table);
+            //
+            // One parse per document version: a request that arrived before this
+            // validation already parsed this text, and one that arrives during it
+            // takes this parse instead of making its own.
+            let memoized =
+                parsed_version.and_then(|version| self.memoized_parse(uri, version, text));
+            let (parsed_ast, table) = match memoized {
+                Some(ast) => {
+                    let table = self.table_for(&ast);
+                    (ast, table)
+                }
+                None => {
+                    let table = self.state.string_table.with_overlay();
+                    let ast = Arc::new(parse_string(text, &table));
+                    if let Some(version) = parsed_version {
+                        self.memoize_parse(uri, version, text, &ast);
+                    }
+                    (ast, table)
+                }
+            };
+            let parsed: &ParsedFile = &parsed_ast;
             diagnostics.extend(parse_errors_to_diagnostics(&parsed.errors, &lines));
 
             let use_sites = self.index_parsed_file_checked(
                 uri,
-                &parsed,
+                parsed,
                 parsed_version,
                 parsed_version.map(|_| cwtools_cache::workspace::content_hash(text)),
             );
@@ -2267,22 +2338,22 @@ impl Backend {
                     let run = if track {
                         match cancel {
                             Some(flag) => validate_prepared_tracking_uses_cancellable(
-                                &parsed, uri, &prepared, flag,
+                                parsed, uri, &prepared, flag,
                             )
                             .map(|(errs, used)| (errs, Some(used))),
                             None => {
                                 let (errs, used) =
-                                    validate_prepared_tracking_uses(&parsed, uri, &prepared);
+                                    validate_prepared_tracking_uses(parsed, uri, &prepared);
                                 Some((errs, Some(used)))
                             }
                         }
                     } else {
                         match cancel {
                             Some(flag) => {
-                                validate_prepared_cancellable(&parsed, uri, &prepared, flag)
+                                validate_prepared_cancellable(parsed, uri, &prepared, flag)
                                     .map(|errs| (errs, None))
                             }
-                            None => Some((validate_prepared(&parsed, uri, &prepared), None)),
+                            None => Some((validate_prepared(parsed, uri, &prepared), None)),
                         }
                     };
                     let Some((mut errs, used)) = run else {
@@ -2338,7 +2409,7 @@ impl Backend {
             Some((
                 diagnostics,
                 Some(ValidatedScript {
-                    ast: parsed,
+                    ast: parsed_ast,
                     use_sites,
                     tracked_uses,
                     covered_export_revision,
@@ -2462,7 +2533,7 @@ mod info_revision_tests {
             .parse_and_validate(uri, text, crate::ValidateTrigger::DidChange, Some(version))
             .await;
         if let Some(parsed) = parsed {
-            let ast = Arc::new(parsed.ast);
+            let ast = parsed.ast;
             backend.update_doc_tokens(uri, Some(&ast));
             backend.state.documents.lock().set_ast(uri, version, ast);
         }
@@ -2482,11 +2553,7 @@ mod info_revision_tests {
             .parse_and_validate(&uri, seed, crate::ValidateTrigger::DidOpen, Some(1))
             .await;
         if let Some(parsed) = parsed {
-            backend
-                .state
-                .documents
-                .lock()
-                .set_ast(&uri, 1, Arc::new(parsed.ast));
+            backend.state.documents.lock().set_ast(&uri, 1, parsed.ast);
         }
 
         let before = backend.state.string_table.stats().entries;
@@ -2514,10 +2581,100 @@ mod info_revision_tests {
 
         backend.state.documents.lock().remove(&uri);
         backend.update_doc_tokens(&uri, None);
+        // `did_close` drops the memoized parse of the closed document too.
+        *backend.state.fresh_ast_cache.lock() = None;
         assert_eq!(
             backend.state.string_table.stats().overlay_regions,
             0,
             "the region must go with the document"
+        );
+    }
+
+    /// Between an edit and its debounced validation the stored AST belongs to the
+    /// previous text. Handlers map positions with the new text, so they must get
+    /// the new tree; completion still gets the stored one, tagged stale.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ast_for_matches_the_current_text_before_validation_catches_up() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { }").await;
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 3, Arc::from("inserted = { }\nidea_a = { }"))
+            .unwrap();
+
+        let current = backend.ast_for(&uri).expect("current ast");
+        assert_eq!(current.root_children.len(), 2);
+        assert!(Arc::ptr_eq(
+            &current,
+            &backend.ast_for(&uri).expect("memoized ast")
+        ));
+
+        let stale = backend.ast_snapshot_for(&uri).expect("stored ast");
+        assert!(matches!(stale.source, crate::state::AstSource::StoredStale));
+        assert_eq!(stale.ast.root_children.len(), 1);
+
+        // The validation of that version takes the same parse instead of making
+        // a second one.
+        let (_, validated) = backend
+            .parse_and_validate(
+                &uri,
+                "inserted = { }\nidea_a = { }",
+                crate::ValidateTrigger::DidChange,
+                Some(3),
+            )
+            .await;
+        assert!(Arc::ptr_eq(&validated.expect("script").ast, &current));
+    }
+
+    /// A request snapshots a document, the document closes, and the request's
+    /// parse finishes afterwards. Reopening restarts the versions, so the version
+    /// alone would match the old tree to the new text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_parse_that_outlives_its_document_is_not_reused_after_a_reopen() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        let old_text = "idea_old = { }";
+        let new_text = "idea_new = { }\nidea_other = { }";
+        open_loc_doc(&backend, &uri, old_text);
+        let old_ast = backend.ast_for(&uri).expect("parse of the first open");
+        assert_eq!(old_ast.root_children.len(), 1);
+
+        // `did_close` removes the document and evicts its memoized parse.
+        backend.state.documents.lock().remove(&uri);
+        *backend.state.fresh_ast_cache.lock() = None;
+
+        // The late store finds no open document and is dropped.
+        backend.memoize_parse(&uri, 1, old_text, &old_ast);
+        assert!(backend.state.fresh_ast_cache.lock().is_none());
+
+        // Reopened at version 1 with different text: the late store is still
+        // refused, and neither a request nor the validation sees the old tree.
+        open_loc_doc(&backend, &uri, new_text);
+        backend.memoize_parse(&uri, 1, old_text, &old_ast);
+        assert!(backend.state.fresh_ast_cache.lock().is_none());
+        assert!(backend.memoized_parse(&uri, 1, new_text).is_none());
+
+        // Even an entry planted under the same uri and version is not a match
+        // for different text.
+        *backend.state.fresh_ast_cache.lock() = Some(crate::state::FreshAst {
+            uri: uri.clone(),
+            version: 1,
+            text: Arc::from(old_text),
+            ast: Arc::clone(&old_ast),
+        });
+        let (_, validated) = backend
+            .parse_and_validate(&uri, new_text, crate::ValidateTrigger::DidOpen, Some(1))
+            .await;
+        let validated = validated.expect("script").ast;
+        assert!(!Arc::ptr_eq(&validated, &old_ast));
+        assert_eq!(validated.root_children.len(), 2);
+        assert_eq!(
+            backend.ast_for(&uri).expect("current").root_children.len(),
+            2
         );
     }
 

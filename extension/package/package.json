@@ -147,6 +147,50 @@
         {
           "command": "cwtools.copySetupReport",
           "when": "resourceScheme == cwtools-setup-report"
+        },
+        {
+          "command": "cwtools.restartServer",
+          "when": "cwtoolsCommandsRegistered"
+        },
+        {
+          "command": "cwtools.showOutput",
+          "when": "cwtoolsCommandsRegistered"
+        },
+        {
+          "command": "cwtools.selectBaseGame",
+          "when": "cwtoolsCommandsRegistered"
+        },
+        {
+          "command": "cwtools.writeDiagnosticsBaseline",
+          "when": "cwtoolsCommandsRegistered"
+        },
+        {
+          "command": "cwtools.graphFromJson",
+          "when": "cwtoolsCommandsRegistered"
+        },
+        {
+          "command": "cwtools.exportProfilingLog",
+          "when": "cwtoolsCommandsRegistered"
+        },
+        {
+          "command": "genlocall",
+          "when": "cwtoolsServerRunning"
+        },
+        {
+          "command": "reloadrulesconfig",
+          "when": "cwtoolsServerRunning"
+        },
+        {
+          "command": "cacheVanilla",
+          "when": "cwtoolsServerRunning"
+        },
+        {
+          "command": "clearAllCaches",
+          "when": "cwtoolsServerRunning"
+        },
+        {
+          "command": "reindexWorkspace",
+          "when": "cwtoolsServerRunning"
         }
       ]
     },

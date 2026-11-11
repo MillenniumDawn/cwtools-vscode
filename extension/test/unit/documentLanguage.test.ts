@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
 	activeEditor: undefined as object | undefined,
 	switchEditor: undefined as ((editor: unknown) => void) | undefined,
 	documents: [] as Array<{ languageId: string; uri: { scheme: string; fsPath: string } }>,
+	setLanguageError: undefined as Error | undefined,
 }));
 
 vi.mock("vscode", async (importOriginal) => {
@@ -40,6 +41,7 @@ vi.mock("vscode", async (importOriginal) => {
 		},
 		languages: {
 			setTextDocumentLanguage: (document: { languageId: string }, languageId: string) => {
+				if (state.setLanguageError) return Promise.reject(state.setLanguageError);
 				document.languageId = languageId;
 				return Promise.resolve(document);
 			},
@@ -125,6 +127,41 @@ suite("documentLanguage", () => {
 		vi.useFakeTimers();
 		state.activeEditor = undefined;
 		state.documents = [];
+		state.setLanguageError = undefined;
+		state.logError.mockClear();
+		state.executeCommand.mockClear();
+	});
+
+	test("an editor that is not a script file makes no server request", async () => {
+		const { tracker, requests } = await startTracker();
+
+		await focus({
+			document: {
+				languageId: "markdown",
+				uri: { scheme: "file", toString: () => "file:///workspace/README.md" },
+			},
+		});
+		await settle();
+
+		assert.strictEqual(requests.length, 0);
+		assert.strictEqual(tracker.getLatestType(), "");
+		assert.deepStrictEqual(graphFileWrites(), [false]);
+	});
+
+	test("a rejected language change is logged and does not fail registration", async () => {
+		const workspaceRoot = path.join(process.cwd(), "selected-mod");
+		const file = path.join(workspaceRoot, "common", "example.txt");
+		const document = {
+			languageId: "plaintext",
+			uri: { scheme: "file", fsPath: file, toString: () => pathToFileURL(file).toString() },
+		};
+		state.documents = [document];
+		state.setLanguageError = new Error("document closed");
+
+		await startTracker(workspaceRoot);
+
+		assert.strictEqual(document.languageId, "plaintext");
+		assert.strictEqual(state.logError.mock.calls.length, 1);
 	});
 
 	test("server-resolved parent roots classify already-open documents without trusting unrelated roots", async () => {

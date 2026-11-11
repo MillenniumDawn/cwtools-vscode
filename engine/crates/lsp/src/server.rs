@@ -337,32 +337,70 @@ impl Backend {
     /// Snapshot the document AST for `uri`, re-parsing the live text when none is cached so
     /// hover/goto/completion still resolve mid-edit. The fresh parse is memoized by
     /// `(uri, version)` (#87), since a document has no stored AST until its first validate.
+    /// The memoized parse of `text`, if `uri` is still at `version` with that text.
+    pub(crate) fn memoized_parse(
+        &self,
+        uri: &str,
+        version: i32,
+        text: &str,
+    ) -> Option<Arc<ParsedFile>> {
+        self.state
+            .fresh_ast_cache
+            .lock()
+            .as_ref()
+            .filter(|fresh| fresh.matches(uri, version, text))
+            .map(|fresh| Arc::clone(&fresh.ast))
+    }
+
+    /// Memoize `ast` as the parse of `text`, unless the document has moved on.
+    /// A parse can finish after its document was edited, or closed and reopened
+    /// with its versions starting again; storing it then would hand an old tree
+    /// to whoever asks for that version next. The check and the store happen
+    /// under the document lock, the order `did_close` evicts in.
+    pub(crate) fn memoize_parse(&self, uri: &str, version: i32, text: &str, ast: &Arc<ParsedFile>) {
+        let documents = self.state.documents.lock();
+        let Some(document) = documents.get(uri) else {
+            return;
+        };
+        if document.version != version || !crate::state::same_text(&document.text, text) {
+            return;
+        }
+        *self.state.fresh_ast_cache.lock() = Some(crate::state::FreshAst {
+            uri: uri.to_string(),
+            version,
+            text: Arc::clone(&document.text),
+            ast: Arc::clone(ast),
+        });
+    }
+
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
+        self.ast_snapshot(uri, true)
+    }
+
+    /// `allow_stale` hands back the AST of an earlier version while the debounced
+    /// validation of the current one is pending. Completion wants that: the text
+    /// being typed is usually malformed. Everything else maps positions with the
+    /// current text, so it needs the tree of that same text.
+    fn ast_snapshot(&self, uri: &str, allow_stale: bool) -> Option<AstSnapshot> {
         let (text, version) = {
             let docs = self.state.documents.lock();
             let doc = docs.get(uri)?;
             if let Some(ast) = &doc.ast {
-                let source = if doc.ast_version == Some(doc.version) {
-                    AstSource::StoredCurrent
-                } else {
-                    AstSource::StoredStale
-                };
-                return Some(AstSnapshot {
-                    ast: ast.clone(),
-                    source,
-                });
+                let current = doc.ast_version == Some(doc.version);
+                if current || allow_stale {
+                    return Some(AstSnapshot {
+                        ast: ast.clone(),
+                        source: if current {
+                            AstSource::StoredCurrent
+                        } else {
+                            AstSource::StoredStale
+                        },
+                    });
+                }
             }
             (doc.text.clone(), doc.version)
         };
-        let cached = {
-            let guard = self.state.fresh_ast_cache.lock();
-            guard
-                .as_ref()
-                .filter(|(cached_uri, cached_version, _)| {
-                    cached_uri == uri && *cached_version == version
-                })
-                .map(|(_, _, ast)| Arc::clone(ast))
-        };
+        let cached = self.memoized_parse(uri, version, &text);
         if let Some(ast) = cached {
             return Some(AstSnapshot {
                 ast,
@@ -375,7 +413,7 @@ impl Backend {
         let table = self.state.string_table.with_overlay();
         tokio::task::block_in_place(|| {
             let ast = Arc::new(cwtools_parser::parser::parse_string(&text, &table));
-            *self.state.fresh_ast_cache.lock() = Some((uri.to_string(), version, Arc::clone(&ast)));
+            self.memoize_parse(uri, version, &text, &ast);
             Some(AstSnapshot {
                 ast,
                 source: AstSource::FreshParse,
@@ -383,8 +421,12 @@ impl Backend {
         })
     }
 
+    /// The AST of the document's current text: the stored one when validation has
+    /// caught up, otherwise a parse memoized per `(uri, version)`. A stale tree
+    /// under new positions resolves the wrong element, and semantic tokens built
+    /// from one are cached against the new text until the next edit.
     pub(crate) fn ast_for(&self, uri: &str) -> Option<Arc<ParsedFile>> {
-        self.ast_snapshot_for(uri).map(|snapshot| snapshot.ast)
+        self.ast_snapshot(uri, false).map(|snapshot| snapshot.ast)
     }
 
     pub(crate) fn element_at_cursor(
@@ -741,7 +783,7 @@ impl Backend {
                 }
                 self.state.completion_generation.lock().remove(&uri);
                 let mut fresh = self.state.fresh_ast_cache.lock();
-                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                if fresh.as_ref().is_some_and(|cached| cached.uri == uri) {
                     *fresh = None;
                 }
             }
@@ -870,7 +912,7 @@ impl Backend {
             self.state.completion_generation.lock().remove(&uri);
             {
                 let mut fresh = self.state.fresh_ast_cache.lock();
-                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                if fresh.as_ref().is_some_and(|cached| cached.uri == uri) {
                     *fresh = None;
                 }
             }
