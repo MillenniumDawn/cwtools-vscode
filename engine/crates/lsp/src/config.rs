@@ -735,6 +735,18 @@ impl Backend {
     }
 
     pub(crate) async fn load_rules_config(&self, cache_path: &std::path::Path) -> bool {
+        self.load_rules_config_with_budget(
+            cache_path,
+            cwtools_file_manager::file_manager::ScanBudget::default(),
+        )
+        .await
+    }
+
+    async fn load_rules_config_with_budget(
+        &self,
+        cache_path: &std::path::Path,
+        budget: cwtools_file_manager::file_manager::ScanBudget,
+    ) -> bool {
         // Surface a missing rules dir explicitly. The client may hand us a path that
         // doesn't resolve here (e.g. a Windows `rules_folder`), which otherwise degrades
         // silently to a generic "no rules loaded" with an empty error list.
@@ -748,14 +760,8 @@ impl Backend {
         }
         let dir = cache_path.to_path_buf();
         let table = self.state.string_table.clone();
-        let loaded = tokio::task::spawn_blocking(move || {
-            load_ruleset_from_dir(
-                &dir,
-                &table,
-                cwtools_file_manager::file_manager::ScanBudget::default(),
-            )
-        })
-        .await;
+        let loaded =
+            tokio::task::spawn_blocking(move || load_ruleset_from_dir(&dir, &table, budget)).await;
         let (combined_ruleset, parse_errors) = match loaded {
             Ok(result) => result,
             Err(error) => {
@@ -875,47 +881,47 @@ impl Backend {
             *self.state.last_rules_toast.lock() = None;
         }
 
-        let loaded = !combined_ruleset.types.is_empty()
-            || !combined_ruleset.enums.is_empty()
-            || !combined_ruleset.aliases.is_empty()
-            || !combined_ruleset.root_rules.is_empty();
-
-        if loaded {
-            self.client
-                .log_message(
-                    MessageType::INFO,
-                    format!(
-                        "Loaded rules from {} ({} types, {} enums, {} aliases, {} errors)",
-                        cache_path.display(),
-                        combined_ruleset.types.len(),
-                        combined_ruleset.enums.len(),
-                        combined_ruleset.aliases.len(),
-                        parse_errors.len(),
-                    ),
-                )
-                .await;
-            if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
-                return false;
-            }
-            self.set_ruleset(combined_ruleset);
-            self.rebuild_modifier_keys();
-            // Rule-driven tokens change globally: drop the delta cache so edits do not
-            // patch stale data, and tell the client to re-request them (#184).
-            self.invalidate_all_semantic_tokens();
-            self.request_semantic_refresh().await;
-        } else {
+        // Empty is a valid ruleset. Any acquisition failure, including scan
+        // limits as well as I/O errors, retains the last good rules because an
+        // incomplete read cannot represent the configured directory reliably.
+        if parse_errors
+            .iter()
+            .any(|error| error.code == cwtools_error_codes::CW600_RULES_FILE_UNREADABLE.id)
+        {
             self.client
                 .log_message(
                     MessageType::WARNING,
                     format!(
-                        "No rules loaded from {}. Errors: {:?}",
-                        cache_path.display(),
-                        parse_errors
+                        "Could not read all rules from {}; retaining previous rules",
+                        cache_path.display()
                     ),
                 )
                 .await;
+            return false;
         }
-        loaded
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "Loaded rules from {} ({} types, {} enums, {} aliases, {} errors)",
+                    cache_path.display(),
+                    combined_ruleset.types.len(),
+                    combined_ruleset.enums.len(),
+                    combined_ruleset.aliases.len(),
+                    parse_errors.len(),
+                ),
+            )
+            .await;
+        if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
+            return false;
+        }
+        self.set_ruleset(combined_ruleset);
+        self.rebuild_modifier_keys();
+        // Rule-driven tokens change globally: drop the delta cache so edits do not
+        // patch stale data, and tell the client to re-request them (#184).
+        self.invalidate_all_semantic_tokens();
+        self.request_semantic_refresh().await;
+        true
     }
 
     pub(crate) async fn did_change_workspace_folders_impl(
@@ -1682,6 +1688,104 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("custom")),
             "stale rules must not replace the selected folder's rules: {after_stale_load:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn empty_rules_replace_previous_rules_but_io_failure_retains_them() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let initial = temp.path().join("initial");
+        let empty = temp.path().join("empty");
+        std::fs::create_dir_all(&initial).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        let rule = initial.join("types.cwt");
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = \"common/custom\" } }\ncustom = { value = scalar }\n",
+        )
+        .unwrap();
+        backend.state.config.write().rules_dir = Some(initial.clone());
+        assert!(backend.load_rules_config(&initial).await);
+        {
+            let rules = backend.state.rules.read();
+            let rules = rules.ruleset.as_ref().unwrap();
+            assert!(!rules.types.is_empty());
+            assert!(!rules.root_rules.is_empty());
+        }
+
+        backend.state.config.write().rules_dir = Some(empty.clone());
+        assert!(backend.load_rules_config(&empty).await);
+        {
+            let rules = backend.state.rules.read();
+            let rules = rules.ruleset.as_ref().unwrap();
+            assert!(rules.types.is_empty());
+            assert!(rules.root_rules.is_empty());
+        }
+
+        backend.state.config.write().rules_dir = Some(initial.clone());
+        assert!(backend.load_rules_config(&initial).await);
+        std::fs::remove_file(&rule).unwrap();
+        assert!(backend.load_rules_config(&initial).await);
+        {
+            let rules = backend.state.rules.read();
+            let rules = rules.ruleset.as_ref().unwrap();
+            assert!(rules.types.is_empty());
+            assert!(rules.root_rules.is_empty());
+        }
+
+        // Per-file and aggregate scan caps are acquisition failures too,
+        // even though the loader classifies them as non-retryable.
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = \"common/custom\" } }\n",
+        )
+        .unwrap();
+        assert!(backend.load_rules_config(&initial).await);
+        let previous = Arc::clone(backend.state.rules.read().ruleset.as_ref().unwrap());
+        for budget in [
+            cwtools_file_manager::file_manager::ScanBudget {
+                max_file_size: 1,
+                ..Default::default()
+            },
+            cwtools_file_manager::file_manager::ScanBudget {
+                max_bytes: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                !backend
+                    .load_rules_config_with_budget(&initial, budget)
+                    .await
+            );
+            assert!(Arc::ptr_eq(
+                &previous,
+                backend.state.rules.read().ruleset.as_ref().unwrap()
+            ));
+        }
+
+        // Missing input reports a retryable I/O failure and preserves the
+        // previously loaded nonempty rules instead of installing partial data.
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = common/custom } }\n",
+        )
+        .unwrap();
+        assert!(backend.load_rules_config(&initial).await);
+        let missing = temp.path().join("missing");
+        backend.state.config.write().rules_dir = Some(missing.clone());
+        assert!(!backend.load_rules_config(&missing).await);
+        assert!(
+            !backend
+                .state
+                .rules
+                .read()
+                .ruleset
+                .as_ref()
+                .unwrap()
+                .types
+                .is_empty(),
+            "an acquisition failure must retain the last good rules"
         );
     }
 
