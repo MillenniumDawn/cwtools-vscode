@@ -270,6 +270,52 @@ fn replace_scope_prev_chain_orders_prev_blocks() {
     assert!(!c.contains(&"CW104".to_string()), "got: {:?}", c);
 }
 
+#[test]
+fn sparse_replacement_scopes_keep_their_parsed_depth() {
+    for depth in [
+        "fromfrom",
+        "fromfromfromfrom",
+        "prevprevprev",
+        "prevprevprevprev",
+    ] {
+        let near = if depth.starts_with("from") {
+            "from"
+        } else {
+            "prev"
+        };
+        let rules = format!(
+            r#"
+scopes = {{
+    Country = {{ aliases = {{ country }} }}
+    State = {{ aliases = {{ state }} }}
+}}
+types = {{ type[foo] = {{ path = "game/common/foo" }} }}
+## replace_scope = {{ this = country root = country {depth} = state }}
+foo = {{
+    {depth} = {{ alias_name[trigger] = alias_match_left[trigger] }}
+    {near} = {{ alias_name[trigger] = alias_match_left[trigger] }}
+}}
+## scope = state
+alias[trigger:state_only] = bool
+## scope = country
+alias[trigger:country_only] = bool
+"#
+        );
+        let valid = format!("foo = {{ {depth} = {{ state_only = yes }} }}");
+        let invalid = format!("foo = {{ {depth} = {{ country_only = yes }} }}");
+        let c = codes(&rules, &valid, &HOI4);
+        assert!(!c.contains(&"CW104".to_string()), "{depth}: {c:?}");
+        let c = codes(&rules, &invalid, &HOI4);
+        assert!(c.contains(&"CW104".to_string()), "{depth}: {c:?}");
+
+        // An unset shallower slot is ANY. Before this fix the only configured
+        // scope shifted here, causing the country-only trigger to be rejected.
+        let hole = format!("foo = {{ {near} = {{ country_only = yes }} }}");
+        let c = codes(&rules, &hole, &HOI4);
+        assert!(!c.contains(&"CW104".to_string()), "{depth} hole: {c:?}");
+    }
+}
+
 /// A `scope[country]` target field. Resolving the chain from the default country
 /// scope catches a target that lands in the wrong scope (CW243) or uses a link in
 /// the wrong scope (CW245).
