@@ -31,7 +31,9 @@ export function filesToTreeNodes(arr: FileListItem[]): TreeNode[] {
 	const tree = new Map<string, TreeNodeInternal>();
 
 	function addnode(obj: FileListItem): void {
-		const splitpath = (obj.scope + "/" + obj.logicalpath)
+		// The server's logical path already includes its scope as the first
+		// component. `scope` is metadata, not an additional tree level.
+		const splitpath = obj.logicalpath
 			.split("/")
 			.filter((s) => s.length > 0);
 		let ptr = tree;

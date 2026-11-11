@@ -1,11 +1,16 @@
 import { suite, test } from "vitest";
 import * as assert from "assert";
+import { readFileSync } from "fs";
 import { Uri } from "vscode";
 import { FilesProvider, filesToTreeNodes } from "../../src/host/fileExplorer";
 import type { FileListItem } from "../../src/host/fileExplorer";
 
 function item(logicalpath: string, scope = "mod"): FileListItem {
-	return { scope, logicalpath, uri: `file:///ws/${scope}/${logicalpath}` };
+	return {
+		scope,
+		logicalpath: `${scope}/${logicalpath}`,
+		uri: `file:///ws/${scope}/${logicalpath}`,
+	};
 }
 
 suite("filesToTreeNodes", () => {
@@ -86,6 +91,25 @@ suite("filesToTreeNodes", () => {
 });
 
 suite("FilesProvider", () => {
+	test("renders the server file-list contract once and preserves reveal across refresh", () => {
+		// The server integration test checks its emitted entry against this same
+		// fixture, so this exercises the actual protocol contract on both sides.
+		const entry = JSON.parse(
+			readFileSync("extension/test/fixtures/file-list-entry.json", "utf8"),
+		) as Pick<FileListItem, "scope" | "logicalpath">;
+		const uri = "file:///ws/common/national_focus/f.txt";
+		const files = new FilesProvider([{ ...entry, uri }]);
+		let node = files.getChildren()[0];
+		assert.strictEqual(node.fileName, "common");
+		node = node.children[0];
+		assert.strictEqual(node.fileName, "national_focus");
+		assert.strictEqual(node.children[0].fileName, "f.txt");
+		assert.strictEqual(files.findNodeByUri(Uri.parse(uri)), node.children[0]);
+		files.refresh([]);
+		assert.strictEqual(files.findNodeByUri(Uri.parse(uri)), undefined);
+		files.refresh([{ ...entry, uri }]);
+		assert.strictEqual(files.findNodeByUri(Uri.parse(uri))?.fileName, "f.txt");
+	});
 	const provider = () =>
 		new FilesProvider([item("events/irm.txt"), item("events/irm_faction.txt")]);
 

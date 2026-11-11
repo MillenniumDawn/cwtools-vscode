@@ -23,6 +23,10 @@
 
 * End pending rules-update progress when the server stops or fails to start, and prevent an old scan completion from reloading a stopped or restarted server. (#1270)
 
+#### Extension
+
+* Show each path component once in the Files view, using the server's logical path. (#1269)
+
 ### 4.0.8
 
 #### Extension
