@@ -1150,7 +1150,8 @@ impl Backend {
             || ignore_changed
             || localisation_changed
             || hover_all_changed
-            || workspace_wide_changed;
+            || workspace_wide_changed
+            || codes_changed;
         {
             let mut cfg = self.state.config.write();
             if let Some(files) = files {
@@ -1203,7 +1204,7 @@ impl Backend {
         if ignore_changed {
             *self.state.loc_discovery_cache.lock() = None;
         }
-        if rescan || codes_changed {
+        if rescan {
             self.state
                 .settings_generation
                 .fetch_add(1, Ordering::SeqCst);
@@ -1217,12 +1218,16 @@ impl Backend {
             reindex_idle_secs = ?reindex_idle_secs,
             "config updated via didChangeConfiguration"
         );
-        if rescan {
-            if !self.validate_entire_workspace(false).await {
-                self.spawn_deferred_revalidation("didChangeConfiguration");
-            }
-        } else if codes_changed && self.state.index_ready.load(Ordering::Relaxed) {
-            self.revalidate_all_open_docs(crate::ValidateTrigger::ConfigChange)
+        // A workspace scan normally revalidates open documents at its end.
+        // With no workspace root the scan returns early, so keep open buffers
+        // responsive to code-filter changes through the direct path instead.
+        let revalidate_without_workspace =
+            codes_changed && self.state.config.read().workspace_uri.is_none();
+        if rescan && !self.validate_entire_workspace(false).await {
+            self.spawn_deferred_revalidation("didChangeConfiguration");
+        }
+        if revalidate_without_workspace && self.state.index_ready.load(Ordering::Relaxed) {
+            self.revalidate_all_open_docs(crate::ValidateTrigger::Reindex)
                 .await;
         }
     }
