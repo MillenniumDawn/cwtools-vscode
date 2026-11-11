@@ -13,6 +13,12 @@ pub struct SubtypeRuleKeyGroup {
     pub node_rule_groups: Vec<Vec<SubtypeRuleKeyGroup>>,
 }
 
+/// Effect names mapped to the value-set namespace they collect.
+type ValueSetEffects = rustc_hash::FxHashMap<String, String>;
+
+/// Effect names mapped to their collected field and value-set namespace pairs.
+type ValueSetEffectFields = rustc_hash::FxHashMap<String, Vec<(String, String)>>;
+
 /// The enum of `$PARAM$` names that the engine fills from scripted effect and
 /// trigger files when a config uses it without defining it.
 pub const SCRIPTED_EFFECT_PARAMS: &str = "scripted_effect_params";
@@ -434,76 +440,15 @@ impl RuleSet {
         self.alias_exact.clear();
         self.alias_categories.clear();
         self.pretriggers.clear();
-        self.value_set_effects.clear();
-        self.value_set_effect_fields.clear();
-        fn first_value_set_ns(rule: &RuleType) -> Option<&str> {
-            fn of_field(f: &NewField) -> Option<&str> {
-                match f {
-                    NewField::VariableSetField(ns) => Some(ns.as_str()),
-                    _ => None,
-                }
-            }
-            match rule {
-                RuleType::LeafRule { left, right } => of_field(left).or_else(|| of_field(right)),
-                RuleType::LeafValueRule { right } => of_field(right),
-                RuleType::NodeRule { left, rules } => of_field(left)
-                    .or_else(|| rules.iter().find_map(|(rt, _)| first_value_set_ns(rt))),
-                RuleType::ValueClauseRule { rules } | RuleType::SubtypeRule { rules, .. } => {
-                    rules.iter().find_map(|(rt, _)| first_value_set_ns(rt))
-                }
-            }
-        }
-        fn collect_binding_fields(rule: &RuleType, out: &mut Vec<(String, String)>) {
-            match rule {
-                RuleType::LeafRule {
-                    left: NewField::SpecificField(key),
-                    right: NewField::VariableSetField(ns),
-                } => out.push((key.to_ascii_lowercase(), ns.clone())),
-                RuleType::NodeRule { left, rules } => {
-                    if let NewField::SpecificField(key) = left {
-                        for (rt, _) in rules.iter() {
-                            if let RuleType::LeafValueRule {
-                                right: NewField::VariableSetField(ns),
-                            } = rt
-                            {
-                                out.push((key.to_ascii_lowercase(), ns.clone()));
-                            }
-                        }
-                    }
-                    for (rt, _) in rules.iter() {
-                        collect_binding_fields(rt, out);
-                    }
-                }
-                RuleType::ValueClauseRule { rules } | RuleType::SubtypeRule { rules, .. } => {
-                    for (rt, _) in rules.iter() {
-                        collect_binding_fields(rt, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for (i, (name, (rule, _))) in self.aliases.iter().enumerate() {
+        (self.value_set_effects, self.value_set_effect_fields) =
+            self.value_set_effect_definitions();
+        for (i, (name, _)) in self.aliases.iter().enumerate() {
             if let Some((cat, key)) = name.split_once(':') {
                 if let Some(scope) = cat.strip_suffix("_pre_trigger") {
                     self.pretriggers
                         .entry(scope.to_ascii_lowercase())
                         .or_default()
                         .insert(key.to_ascii_lowercase());
-                }
-                if cat == "effect" || cat == "trigger" {
-                    if let Some(ns) = first_value_set_ns(rule) {
-                        self.value_set_effects
-                            .entry(key.to_ascii_lowercase())
-                            .or_insert_with(|| ns.to_string());
-                    }
-                    let mut fields = Vec::new();
-                    collect_binding_fields(rule, &mut fields);
-                    if !fields.is_empty() {
-                        self.value_set_effect_fields
-                            .entry(key.to_ascii_lowercase())
-                            .or_default()
-                            .extend(fields);
-                    }
                 }
                 self.alias_exact
                     .entry(cat.to_string())
@@ -830,6 +775,80 @@ impl RuleSet {
     pub fn type_reference_rules(&self) -> &rustc_hash::FxHashMap<String, Vec<TypeReferenceRule>> {
         self.assert_reindexed();
         &self.type_reference_rules
+    }
+
+    /// Derive the value-set collection rules from aliases. This can be used before
+    /// reindexing, when the cached lookup maps are not yet available.
+    pub fn value_set_effect_definitions(&self) -> (ValueSetEffects, ValueSetEffectFields) {
+        fn first_value_set_ns(rule: &RuleType) -> Option<&str> {
+            fn of_field(f: &NewField) -> Option<&str> {
+                match f {
+                    NewField::VariableSetField(ns) => Some(ns.as_str()),
+                    _ => None,
+                }
+            }
+            match rule {
+                RuleType::LeafRule { left, right } => of_field(left).or_else(|| of_field(right)),
+                RuleType::LeafValueRule { right } => of_field(right),
+                RuleType::NodeRule { left, rules } => of_field(left)
+                    .or_else(|| rules.iter().find_map(|(rt, _)| first_value_set_ns(rt))),
+                RuleType::ValueClauseRule { rules } | RuleType::SubtypeRule { rules, .. } => {
+                    rules.iter().find_map(|(rt, _)| first_value_set_ns(rt))
+                }
+            }
+        }
+        fn collect_binding_fields(rule: &RuleType, out: &mut Vec<(String, String)>) {
+            match rule {
+                RuleType::LeafRule {
+                    left: NewField::SpecificField(key),
+                    right: NewField::VariableSetField(ns),
+                } => out.push((key.to_ascii_lowercase(), ns.clone())),
+                RuleType::NodeRule { left, rules } => {
+                    if let NewField::SpecificField(key) = left {
+                        for (rt, _) in rules.iter() {
+                            if let RuleType::LeafValueRule {
+                                right: NewField::VariableSetField(ns),
+                            } = rt
+                            {
+                                out.push((key.to_ascii_lowercase(), ns.clone()));
+                            }
+                        }
+                    }
+                    for (rt, _) in rules.iter() {
+                        collect_binding_fields(rt, out);
+                    }
+                }
+                RuleType::ValueClauseRule { rules } | RuleType::SubtypeRule { rules, .. } => {
+                    for (rt, _) in rules.iter() {
+                        collect_binding_fields(rt, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut effects = rustc_hash::FxHashMap::default();
+        let mut fields: rustc_hash::FxHashMap<String, Vec<(String, String)>> =
+            rustc_hash::FxHashMap::default();
+        for (name, (rule, _)) in &self.aliases {
+            if let Some((cat, key)) = name.split_once(':')
+                && (cat == "effect" || cat == "trigger")
+            {
+                if let Some(ns) = first_value_set_ns(rule) {
+                    effects
+                        .entry(key.to_ascii_lowercase())
+                        .or_insert_with(|| ns.to_string());
+                }
+                let mut bindings = Vec::new();
+                collect_binding_fields(rule, &mut bindings);
+                if !bindings.is_empty() {
+                    fields
+                        .entry(key.to_ascii_lowercase())
+                        .or_default()
+                        .extend(bindings);
+                }
+            }
+        }
+        (effects, fields)
     }
 
     pub fn value_set_effects(&self) -> &rustc_hash::FxHashMap<String, String> {
