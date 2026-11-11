@@ -158,9 +158,9 @@ through the diff.
 
 The Stellaris guard runs the rule loader and rule engine over a real mod's
 scripted prescripted countries and localization. Its rows are mostly rule-config
-and generic field diagnostics, not scope or trigger checks. CI does not run it,
-so run it by hand when changing shared rule-engine code, Stellaris dispatch or
-validation behavior:
+and generic field diagnostics, not scope or trigger checks. CI runs it against
+the revisions pinned in the committed baseline. Run it locally too when changing
+shared rule-engine code, Stellaris dispatch or validation behavior:
 
 ```sh
 python3 scripts/guard.py stellaris
