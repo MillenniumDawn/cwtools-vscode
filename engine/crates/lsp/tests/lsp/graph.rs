@@ -436,7 +436,8 @@ fn test_get_graph_data_while_initial_scan_builds_reports_request_failed() {
 
 #[test]
 fn test_get_graph_data_without_rules_reports_request_failed() {
-    let mut server = storm_start(storm_base());
+    // Unlike an empty rules directory, no rules directory was configured.
+    let mut server = storm_start(TestServer::builder().vanilla().scan_release_marker());
     let response = server.call(
         "workspace/executeCommand",
         json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
@@ -447,6 +448,22 @@ fn test_get_graph_data_without_rules_reports_request_failed() {
     assert_eq!(
         response["error"]["message"],
         "getGraphData: no rules config is loaded, so no entity types are known"
+    );
+}
+
+#[test]
+fn test_get_graph_data_with_empty_rules_reports_empty_index() {
+    let mut server = storm_start(storm_base());
+    let response = server.call(
+        "workspace/executeCommand",
+        json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+    );
+    server.stop();
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32803, "got: {response}");
+    assert_eq!(
+        response["error"]["message"],
+        "getGraphData: the workspace index is empty; no entities have been indexed"
     );
 }
 
