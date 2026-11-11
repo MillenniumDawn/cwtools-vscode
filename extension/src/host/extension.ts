@@ -19,7 +19,7 @@ import {
 	observeRulesFileNotifications,
 	observeWatchedFileEvents,
 } from "./lspClient";
-import { registerServerNotifications } from "./serverNotifications";
+import { registerServerNotifications, type InitialScanOutcome } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { gameContentRoots } from "./gameContentRoots";
 import { registerCommands } from "./commands";
@@ -190,7 +190,9 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 				workspace.getConfiguration("cwtools").get<string>(`cache.${language}`),
 			]);
 		trustedRulesRoots(rulesCache);
-		let initialScanDone: Promise<void> = Promise.resolve();
+		// No notifications yet, so nothing may authorize a rules reload.
+		let initialScanDone: () => Promise<InitialScanOutcome> = () =>
+			Promise.resolve({ kind: "stopped", isCurrent: () => false });
 		const fetchRules = (client: LanguageClient) => {
 			void fetchRulesInBackground(
 				language,

@@ -127,6 +127,7 @@ vi.mock("../../src/host/engine", async (importOriginal) => {
 });
 
 import { LANGUAGE_REPOS, RULES_MANIFEST_REVISION } from "../../src/host/games";
+import type { InitialScanOutcome } from "../../src/host/serverNotifications";
 import {
 	RULES_MANIFEST_CACHE_KEY,
 	RULES_MANIFEST_ETAG_CACHE_KEY,
@@ -243,7 +244,10 @@ function session(
 	return {
 		updates,
 		requests,
-		sync: (initialScanDone: Promise<void> = Promise.resolve()) =>
+		sync: (
+			initialScanDone: () => Promise<InitialScanOutcome> = () =>
+				Promise.resolve({ kind: "ready", isCurrent: () => true }),
+		) =>
 			fetchRulesInBackground(
 				"hoi4",
 				"/cache",
@@ -349,10 +353,11 @@ suite("rulesSetup", () => {
 		const reviewed = manifest(sha("f"));
 		const fetch = stubManifestFetch(reviewed);
 		const { sync, updates, requests } = session();
-		let finishInitialScan!: () => void;
-		const initialScanDone = new Promise<void>((resolve) => {
+		let finishInitialScan!: (outcome: InitialScanOutcome) => void;
+		const scanPromise = new Promise<InitialScanOutcome>((resolve) => {
 			finishInitialScan = resolve;
 		});
+		const initialScanDone = () => scanPromise;
 
 		const first = sync(initialScanDone);
 		assert.strictEqual(sync(initialScanDone), first, "in-flight fetch is shared");
@@ -370,7 +375,7 @@ suite("rulesSetup", () => {
 		]);
 		assert.deepStrictEqual(requests, []);
 
-		finishInitialScan();
+		finishInitialScan({ kind: "ready", isCurrent: () => true });
 		await settle(first);
 		assert.deepStrictEqual(logger.logError.mock.calls, []);
 		assert.deepStrictEqual(requests, RELOAD);
@@ -407,6 +412,57 @@ suite("rulesSetup", () => {
 		assert.deepStrictEqual(logger.logWarn.mock.calls, [
 			["Could not cache rules manifest: disk full"],
 		]);
+	});
+
+	test("skips the reload when the waited-on server stops before its scan finishes", async () => {
+		state.hasGitDirectory = true;
+		state.head = sha("e");
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+
+		await settle(
+			sync(() =>
+				Promise.resolve({ kind: "stopped" as const, isCurrent: () => false }),
+			),
+		);
+
+		assert.deepStrictEqual(requests, []);
+		assert.deepStrictEqual(logger.logError.mock.calls, []);
+		assert.deepStrictEqual(warnings(), []);
+	});
+
+	test("does not adopt a new server lifecycle while fetching rules", async () => {
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+		let originalIsCurrent = true;
+		let scan = Promise.resolve<InitialScanOutcome>({
+			kind: "ready",
+			isCurrent: () => originalIsCurrent,
+		});
+		const pending = sync(() => scan);
+		originalIsCurrent = false;
+		scan = Promise.resolve({ kind: "ready", isCurrent: () => true });
+
+		await settle(pending);
+		assert.deepStrictEqual(requests, []);
+	});
+
+	test("does not reload a restarted server even when the wait resolved as ready", async () => {
+		state.hasGitDirectory = true;
+		state.head = sha("e");
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+
+		// The scan finished in the previous lifecycle, but that start was
+		// replaced before the fetch got to send the reload (#1270).
+		await settle(
+			sync(() =>
+				Promise.resolve({ kind: "ready" as const, isCurrent: () => false }),
+			),
+		);
+
+		assert.deepStrictEqual(requests, []);
+		assert.deepStrictEqual(logger.logError.mock.calls, []);
 	});
 
 	test("skips an oversized response by content-length without reading the body", async () => {
