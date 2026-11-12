@@ -27,6 +27,8 @@
 
 #### Tooling
 
+* Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
+
 * Verify the publishing build checks out the requested commit while keeping the Rust lockfile enforced.
 
 * Enforce the committed Rust lockfile in CI, coverage, guard and release builds. (#1218)
