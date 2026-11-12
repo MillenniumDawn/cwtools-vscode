@@ -28,7 +28,16 @@ def test_workflows_lock_engine_compilation() -> None:
     assert all("--locked" in command for command in commands)
     assert ci.count("run: cargo build --locked --release -p cwtools_cli") >= 2
     assert "metadata --locked --format-version 1" in ci  # separate fuzz workspace
-    assert "cargo build --locked --release -p cwtools_lsp" in publish
+    server_step = publish.split("- name: Build server", 1)[1].split(
+        "- name: Upload binary", 1
+    )[0]
+    identity_check = 'test "$(git rev-parse HEAD)" = "$CWTOOLS_BUILD_COMMIT"'
+    build_command = "cargo build --locked --release -p cwtools_lsp"
+    assert "shell: bash" in server_step
+    assert "CWTOOLS_BUILD_COMMIT: ${{ github.sha }}" in server_step
+    assert identity_check in server_step
+    assert build_command in server_step
+    assert server_step.index(identity_check) < server_step.index(build_command)
     assert "cargo build --locked --workspace --release" in bench
 
 
