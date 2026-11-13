@@ -3043,7 +3043,14 @@ mod info_revision_tests {
             Some(vec!["Elsewhere".to_string(), "Here".to_string()])
         );
 
-        let text = open("l_english:\n new_key:0 \"New\"\n shared_key:0 \"Here\"\n");
+        let text: Arc<str> =
+            Arc::from("l_english:\n new_key:0 \"New\"\n shared_key:0 \"Here\"\n");
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::clone(&text))
+            .unwrap();
         backend
             .parse_and_validate(&uri, &text, crate::ValidateTrigger::DidChange, Some(2))
             .await;
