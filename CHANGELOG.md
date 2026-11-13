@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Run non-UI client and Python helper tests on Windows and macOS as well as Linux. (#1227)
+
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
