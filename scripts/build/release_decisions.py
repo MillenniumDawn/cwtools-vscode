@@ -1,4 +1,5 @@
 """Fail-closed CI prerequisite for publication."""
+
 from __future__ import annotations
 
 import json
@@ -94,9 +95,7 @@ def main() -> None:
     try:
         pages = json.load(sys.stdin)
     except (ValueError, OSError) as error:
-        raise SystemExit(
-            "Unable to read CI results; retry after CI succeeds."
-        ) from error
+        raise SystemExit("Unable to read CI results; retry later.") from error
     if not ci_succeeded(pages, os.environ.get("GITHUB_SHA", "")):
         raise SystemExit("No complete successful CI result for this SHA; retry later.")
 
