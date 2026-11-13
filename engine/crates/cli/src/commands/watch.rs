@@ -769,6 +769,23 @@ mod tests {
     }
 
     #[test]
+    fn default_file_exclusions_do_not_trigger_watch_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("common")).unwrap();
+        let watched = [mods_root(dir.path())];
+        for name in ["README.txt", "Changelog.txt", "LICENSE.txt", "notes.md"] {
+            let file = dir.path().join("common").join(name);
+            let before = fingerprint(&watched, Some(&[]));
+            fs::write(&file, "ignored").unwrap();
+            assert_eq!(fingerprint(&watched, Some(&[])), before, "{name}");
+            fs::write(&file, "ignored edit with a different length").unwrap();
+            assert_eq!(fingerprint(&watched, Some(&[])), before, "{name}");
+            fs::remove_file(file).unwrap();
+            assert_eq!(fingerprint(&watched, Some(&[])), before, "{name}");
+        }
+    }
+
+    #[test]
     fn fingerprint_moves_when_a_file_is_added_changed_or_removed() {
         let dir = tempfile::tempdir().unwrap();
         let roots = [mods_root(dir.path())];
