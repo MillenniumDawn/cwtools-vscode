@@ -6972,9 +6972,9 @@ user = { uses = <thing> }
         let drain = tokio::spawn(async move {
             while let Some(message) = socket.next().await {
                 if message.method() == "textDocument/publishDiagnostics" {
-                    results.lock().push(
-                        serde_json::from_value(message.params().cloned().unwrap()).unwrap(),
-                    );
+                    results
+                        .lock()
+                        .push(serde_json::from_value(message.params().cloned().unwrap()).unwrap());
                 } else if message.method() == "window/logMessage"
                     && message
                         .params()
@@ -7033,10 +7033,7 @@ user = { uses = <thing> }
         .await
         .expect("the publication stream must reach the marker");
         let published = publications.lock();
-        let relevant: Vec<_> = published
-            .iter()
-            .filter(|p| p.uri.as_str() == uri)
-            .collect();
+        let relevant: Vec<_> = published.iter().filter(|p| p.uri.as_str() == uri).collect();
         assert!(!relevant.is_empty(), "current validation must publish");
         assert!(
             relevant.iter().all(|p| p.version == Some(2)),
