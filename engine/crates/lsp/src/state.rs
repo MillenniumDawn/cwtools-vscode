@@ -39,6 +39,7 @@ pub(crate) enum HoldPoint {
     WatchedFile,
     ValidatePrepared,
     ValidateBeforeAcceptance,
+    LocParsed,
     DependentUsesPrepared,
     ExportSweepSnapshot,
     LoadingBarActiveChecked,

@@ -2012,13 +2012,23 @@ impl Backend {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn record_watched_loc_keys(
         &self,
         uri: &str,
         path: &str,
         text: &str,
     ) -> HashSet<String> {
-        let new_keys = loc_keys_of(text, path);
+        let files = parse_loc_buffer(text, path);
+        self.record_watched_loc_parsed(uri, &files)
+    }
+
+    fn record_watched_loc_parsed(
+        &self,
+        uri: &str,
+        files: &[cwtools_localization::LocFile],
+    ) -> HashSet<String> {
+        let new_keys = loc_keys_from(files);
         if self.loc_overlay_entry_matches(&self.state.loc_watched_overlay, uri, &new_keys) {
             return HashSet::new();
         }
@@ -2074,7 +2084,7 @@ impl Backend {
         parsed_version: Option<i32>,
     ) -> (Vec<Diagnostic>, Option<ValidatedScript>) {
         // No cancel signal: the traversal always reaches the end of its blocks.
-        self.parse_and_validate_inner(uri, text, trigger, parsed_version, None)
+        self.parse_and_validate_inner(uri, text, trigger, parsed_version, None, None)
             .await
             .unwrap_or_default()
     }
@@ -2090,9 +2100,30 @@ impl Backend {
         cancel: &CancelFlag,
     ) -> Option<(Vec<Diagnostic>, Option<ValidatedScript>)> {
         let outcome = self
-            .parse_and_validate_inner(uri, text, trigger, parsed_version, Some(cancel))
+            .parse_and_validate_inner(uri, text, trigger, parsed_version, Some(cancel), None)
             .await?;
         (!cancel.is_cancelled()).then_some(outcome)
+    }
+
+    /// Validate a watched localisation file and return its key changes to the
+    /// batch, or reject it if an open buffer took ownership while it was read.
+    pub(crate) async fn parse_and_validate_watched_loc(
+        &self,
+        uri: &str,
+        text: &str,
+    ) -> Option<(Vec<Diagnostic>, HashSet<String>)> {
+        let mut changed = HashSet::new();
+        let (diagnostics, _) = self
+            .parse_and_validate_inner(
+                uri,
+                text,
+                crate::ValidateTrigger::Watched,
+                None,
+                None,
+                Some(&mut changed),
+            )
+            .await?;
+        Some((diagnostics, changed))
     }
 
     async fn parse_and_validate_inner(
@@ -2102,6 +2133,7 @@ impl Backend {
         trigger: crate::ValidateTrigger,
         parsed_version: Option<i32>,
         cancel: Option<&CancelFlag>,
+        watched_changed: Option<&mut HashSet<String>>,
     ) -> Option<(Vec<Diagnostic>, Option<ValidatedScript>)> {
         if self.is_ignored_uri(uri) {
             self.clear_ignored_file_state(uri);
@@ -2125,7 +2157,26 @@ impl Backend {
                 let parsed_loc = try_parse_loc_buffer(text, &path);
                 let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
                 let parsed_loc = parsed_loc.unwrap_or_default();
-                let is_open = self.state.documents.lock().contains_key(uri);
+                #[cfg(test)]
+                self.hold(crate::state::HoldPoint::LocParsed);
+                // Keep the document locked until all shared localisation state is
+                // installed. A version check without this lock leaves an edit window
+                // between the check and the writes.
+                let docs = self.state.documents.lock();
+                if cancel.is_some_and(CancelFlag::is_cancelled)
+                    || (matches!(
+                        trigger,
+                        crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
+                    ) && docs.contains_key(uri))
+                    || parsed_version.is_some_and(|version| {
+                        !docs.get(uri).is_some_and(|doc| doc.version == version)
+                            || docs.content_hash(uri)
+                                != Some(cwtools_cache::workspace::content_hash(text))
+                    })
+                {
+                    return None;
+                }
+                let is_open = docs.contains_key(uri);
                 let changed_keys: HashSet<String> = if is_open {
                     let new_keys = loc_keys_from(&parsed_loc);
                     if self.loc_overlay_entry_matches(&self.state.loc_live_overlay, uri, &new_keys)
@@ -2140,9 +2191,22 @@ impl Backend {
                         overlay.insert(uri.to_string(), new_keys);
                         diff
                     }
+                } else if matches!(trigger, crate::ValidateTrigger::Watched) {
+                    self.record_watched_loc_parsed(uri, &parsed_loc)
                 } else {
                     HashSet::new()
                 };
+                // Update hover and closed-file locations while the version is
+                // still protected by the document lock.
+                self.update_loc_text_for_file(uri, &parsed_loc);
+                if matches!(
+                    trigger,
+                    crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
+                ) && !is_open
+                {
+                    self.update_loc_locations_for_file(uri, &parsed_loc);
+                }
+                drop(docs);
                 let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
                 let diagnostics = self.validate_loc_parsed(
@@ -2152,21 +2216,9 @@ impl Backend {
                     &additional_loc_keys,
                     &extra,
                 );
-                // Update the hover loc_text map so tooltips reflect the latest edits
-                // without waiting for a full workspace rescan (#53).
-                self.update_loc_text_for_file(uri, &parsed_loc);
-                // Only the two triggers whose `text` is the file on disk: a
-                // watched change, or a close reading back what was saved.
-                if matches!(
-                    trigger,
-                    crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
-                ) && !is_open
-                {
-                    self.update_loc_locations_for_file(uri, &parsed_loc);
-                }
                 let cache = cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
-                (changed_keys, diagnostics, cache)
-            });
+                Some((changed_keys, diagnostics, cache))
+            })?;
             if let Some(cache) = cache
                 && let Err(rejection) =
                     self.state
@@ -2182,7 +2234,9 @@ impl Backend {
             }
             // A changed key can fix or break CW100/CW122 on open files, so re-validate those
             // without a full rescan (#36), scoped to docs whose tokens mention a changed key.
-            if !changed_keys.is_empty() {
+            if let Some(batch) = watched_changed {
+                batch.extend(changed_keys);
+            } else if !changed_keys.is_empty() {
                 let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
                 self.revalidate_other_open_loc_files(
@@ -2771,6 +2825,128 @@ mod info_revision_tests {
                 .get(&uri)
                 .is_some_and(|document| document.loc_cache.is_none())
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn superseded_loc_validation_cannot_replace_current_overlay() {
+        use crate::state::{HoldGate, HoldPoint};
+        let backend = idea_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let old: Arc<str> = Arc::from("l_english:\n old_key:0 \"Old\"\n");
+        let new: Arc<str> = Arc::from("l_english:\n new_key:0 \"New\"\n");
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::clone(&old),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let gate = HoldGate::new(HoldPoint::LocParsed);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let old_uri = uri.clone();
+        let stale = tokio::spawn(async move {
+            worker
+                .parse_and_validate_inner(
+                    &old_uri,
+                    &old,
+                    crate::ValidateTrigger::DidChange,
+                    Some(1),
+                    None,
+                    None,
+                )
+                .await
+        });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("older localisation parse did not reach the gate");
+        }
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::clone(&new))
+            .unwrap();
+        backend
+            .parse_and_validate(&uri, &new, crate::ValidateTrigger::DidChange, Some(2))
+            .await;
+        gate.release();
+        assert!(stale.await.unwrap().is_none());
+        let overlay = backend.loc_overlay_keys();
+        assert!(overlay.contains("new_key"));
+        assert!(!overlay.contains("old_key"));
+        let loc_text = backend.state.loc_text.read();
+        assert!(loc_text.get("new_key").is_some());
+        assert!(loc_text.get("old_key").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn watched_loc_parse_cannot_replace_a_newly_opened_buffer() {
+        use crate::state::{HoldGate, HoldPoint};
+        let backend = idea_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let disk = "l_english:\n disk_key:0 \"Disk\"\n";
+        let live: Arc<str> = Arc::from("l_english:\n live_key:0 \"Live\"\n");
+        let gate = HoldGate::new(HoldPoint::LocParsed);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let watched_uri = uri.clone();
+        let watched = tokio::spawn(async move {
+            worker
+                .parse_and_validate_watched_loc(&watched_uri, disk)
+                .await
+        });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("watched localisation parse did not reach the gate");
+        }
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::clone(&live),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        backend
+            .parse_and_validate(&uri, &live, crate::ValidateTrigger::DidChange, Some(1))
+            .await;
+        gate.release();
+        assert!(watched.await.unwrap().is_none());
+        assert!(backend.loc_overlay_keys().contains("live_key"));
+        assert!(!backend.loc_overlay_keys().contains("disk_key"));
+        assert!(!backend.state.loc_watched_overlay.read().contains_key(&uri));
+        assert!(backend.state.loc_text.read().get("disk_key").is_none());
+        assert!(backend.state.loc_locations.read().get("disk_key").is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
