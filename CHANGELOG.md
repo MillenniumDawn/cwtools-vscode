@@ -1,5 +1,7 @@
 ### Unreleased
 
+- Add regression coverage for stale ASTs in dependent validation sweeps.
+
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)

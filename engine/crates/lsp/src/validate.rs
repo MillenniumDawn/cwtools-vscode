@@ -1640,6 +1640,8 @@ impl Backend {
                 })
                 .collect()
         };
+        #[cfg(test)]
+        self.hold_from_async(crate::state::HoldPoint::DependentSnapshot);
         let stale_ast = stale_uris.iter().any(|uri| {
             !crate::paths::has_loc_ext(uri)
                 && !crate::paths::is_cwt_file(uri)
@@ -6921,6 +6923,132 @@ user = { uses = <thing> }
                 tokio::task::yield_now().await;
             }
         }).await.expect("dependent must receive the missing-type diagnostic after close");
+        drain.abort();
+    }
+
+    /// Snapshot the sweep while an edit has current text but only the old AST.
+    /// Let the document's own validation finish before releasing the sweep.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn stale_ast_sweep_cannot_publish_or_replace_newer_validation() {
+        use crate::state::{HoldGate, HoldPoint};
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let definitions = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let definitions_ast = parse_string("t2 = {}", &backend.state.string_table);
+        backend.index_parsed_file(&definitions, &definitions_ast, None);
+        Arc::make_mut(&mut backend.state.info_service.write().type_index).complete = true;
+
+        let old = "u = { uses = t1 }";
+        let current: Arc<str> = Arc::from("u = { uses = t2 }");
+        let old_ast = Arc::new(parse_string(old, &backend.state.string_table));
+        {
+            let mut docs = backend.state.documents.lock();
+            docs.open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(old),
+                    ast: Some(old_ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: old.len(),
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+            docs.change(&uri, 2, Arc::clone(&current)).unwrap();
+        }
+        let mut previous = UsedInstances::default();
+        previous.mark("thing", "t1");
+        backend.refresh_type_uses(&uri, previous);
+
+        let publications = Arc::new(Mutex::new(Vec::<PublishDiagnosticsParams>::new()));
+        let results = publications.clone();
+        let marker_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker_reader = marker_seen.clone();
+        let drain = tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    results.lock().push(
+                        serde_json::from_value(message.params().cloned().unwrap()).unwrap(),
+                    );
+                } else if message.method() == "window/logMessage"
+                    && message
+                        .params()
+                        .is_some_and(|params| params["message"] == "sweep finished")
+                {
+                    marker_reader.store(true, Ordering::Release);
+                }
+            }
+        });
+        let gate = HoldGate::new(HoldPoint::DependentSnapshot);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let sweep =
+            tokio::spawn(async move { worker.revalidate_open_dependents("", 0, None).await });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("dependent sweep did not reach its snapshot gate");
+        }
+        let cancel = CancelFlag::default();
+        let validated = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.debounced_validate(
+                uri.clone(),
+                2,
+                0,
+                crate::ValidateTrigger::DidChange,
+                &cancel,
+            ),
+        )
+        .await;
+        if validated.is_err() {
+            gate.release();
+            panic!("the current document validation did not finish");
+        }
+        gate.release();
+        assert!(
+            !sweep.await.unwrap(),
+            "the snapshot with a stale AST is incomplete"
+        );
+        assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+        backend
+            .client
+            .log_message(MessageType::LOG, "sweep finished")
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !marker_seen.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the publication stream must reach the marker");
+        let published = publications.lock();
+        let relevant: Vec<_> = published
+            .iter()
+            .filter(|p| p.uri.as_str() == uri)
+            .collect();
+        assert!(!relevant.is_empty(), "current validation must publish");
+        assert!(
+            relevant.iter().all(|p| p.version == Some(2)),
+            "{relevant:?}"
+        );
+        assert!(
+            relevant.iter().all(|p| !p.diagnostics.iter().any(|d| {
+                matches!(&d.code, Some(NumberOrString::String(code)) if code == "CW500")
+            })),
+            "{relevant:?}"
+        );
+        drop(published);
         drain.abort();
     }
 
