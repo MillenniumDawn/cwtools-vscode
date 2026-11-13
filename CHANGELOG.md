@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Run bounded scheduled fuzz discovery with retained corpora and replay metadata. (#1230)
+
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)

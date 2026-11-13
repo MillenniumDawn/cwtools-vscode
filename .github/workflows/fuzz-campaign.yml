@@ -1,0 +1,64 @@
+name: Fuzz discovery
+on:
+  schedule:
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_rules, parse_string, parse_loc_text, format_text, fix_edits, decode_capped, with_archived_file, read_errors_from_file, vanilla_cache_load]
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - timeout-minutes: 3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - timeout-minutes: 10
+        uses: ./.github/actions/setup-rust
+        id: rust-setup
+        with:
+          toolchain: nightly-2026-07-24
+          cache-prefix: cargo-fuzz-target
+          cache-target-path: engine/fuzz/target
+          cargo-tool: cargo-fuzz
+          cargo-tool-version: 0.13.2
+      - name: Install cargo-fuzz
+        timeout-minutes: 7
+        if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
+        run: cargo +nightly-2026-07-24 install cargo-fuzz --version 0.13.2 --locked
+      - name: Verify fuzz lockfile
+        timeout-minutes: 3
+        run: cargo +nightly-2026-07-24 metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml
+      - name: Prepare corpus
+        timeout-minutes: 5
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p fuzz-campaign/corpus
+          if [ "$TARGET" = parse_rules ]; then
+            cargo +nightly-2026-07-24 run --locked -p cwtools_test_support --example pinned_fuzz_corpus -- fuzz-campaign/corpus
+          else
+            cp -a "fuzz/seeds/$TARGET/." fuzz-campaign/corpus/
+          fi
+      - name: Discover inputs
+        timeout-minutes: 22
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python3 ../scripts/build/fuzz_campaign.py "$TARGET" fuzz-campaign/corpus fuzz-campaign
+      - name: Retain corpus, log, and reproducer
+        timeout-minutes: 5
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          path: engine/fuzz-campaign
+          if-no-files-found: warn
+          retention-days: 30
