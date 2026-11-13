@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shlex
@@ -29,19 +30,13 @@ LIMITS = ["-timeout=10", "-rss_limit_mb=2048", "-max_len=1048576"]
 
 def stop_group(process: subprocess.Popen[str]) -> None:
     """Stop the entire Linux process group, including a stuck fuzz child."""
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        pass
     # The leader may have exited while a child remains in its process group.
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
     process.wait()
 
 

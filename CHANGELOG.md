@@ -2,6 +2,7 @@
 
 #### Tooling
 
+* Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
 * Run bounded scheduled fuzz discovery with retained corpora and replay metadata. (#1230)
 
 #### Engine
