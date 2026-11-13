@@ -105,7 +105,9 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read
+      actions: read
     outputs:
       has_vsce: ${{ steps.tokens.outputs.has_vsce }}
       has_open_vsx: ${{ steps.tokens.outputs.has_open_vsx }}
@@ -118,6 +120,17 @@ jobs:
       VERSION: ${{ needs.check.outputs.version }}
       TAG: ${{ needs.check.outputs.tag }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require successful CI for the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100" |
+            python3 scripts/build/release_decisions.py
       - name: Check the publish tokens
         id: tokens
         run: |

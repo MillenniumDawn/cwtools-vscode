@@ -206,3 +206,20 @@ def test_release_failed_guards_every_job_it_waits_on() -> None:
         assert f"needs.{job}.result == 'failure'" in guard, f"{job} missing from if"
     # A run someone cancelled by hand is not a release that broke.
     assert "cancelled" not in guard
+
+
+def test_publish_requires_exact_source_ci_before_any_registry() -> None:
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    verify = job_scope(workflow, "verify")
+    assert "actions: read" in verify
+    assert "actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" in verify
+    assert "branch=main" in verify
+    assert "gh api --paginate --slurp" in verify
+    assert "scripts/build/release_decisions.py" in verify
+    assert verify.index("Require successful CI") < verify.index(
+        "Check the publish tokens"
+    )
+    assert "needs: verify" in job_scope(workflow, "build-server")
+    assert "needs: [check, verify, build-server]" in job_scope(workflow, "package")
+    for job in PUBLISH_JOBS:
+        assert "package" in job_scope(workflow, job).split("    steps:", maxsplit=1)[0]
