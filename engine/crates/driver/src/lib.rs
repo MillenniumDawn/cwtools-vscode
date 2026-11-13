@@ -496,6 +496,7 @@ impl Session {
             incomplete: &script_incomplete,
         };
 
+        let scan_budget = fm_config.scan_budget;
         let discovery = discover_workspace(WorkspaceDiscoveryRequest {
             roots: vec![directory.clone()],
             kinds: vec![FileKind::Script, FileKind::Localisation],
@@ -503,9 +504,11 @@ impl Session {
             policy: DiscoveryPolicy::Workspace,
         });
         let mut discovery_incomplete = false;
+        let mut primary_examined = 0;
         let (files, loc_paths, primary_scripts, primary_loc_paths, discovery_failed) =
             match discovery {
                 Ok(discovery) => {
+                    primary_examined = discovery.examined;
                     discovery_incomplete = !discovery.failures.is_empty();
                     for failure in discovery.failures {
                         eprintln!(
@@ -546,7 +549,7 @@ impl Session {
                     (Vec::new(), Vec::new(), Vec::new(), Vec::new(), true)
                 }
             };
-        let mut parent_status = ParentDiscoveryStatus::default();
+        let mut parent_status = ParentDiscoveryStatus::after_primary(scan_budget, primary_examined);
         let parent_scripts = discover_parent_script_files_inner(
             &parent_roots,
             &directory,
@@ -1680,30 +1683,34 @@ fn build_vanilla_cache_aux_with_budget(
     shadow: Option<&LayerShadow>,
     budget: ScanBudget,
 ) -> Result<cwtools_index::vanilla_cache::VanillaCacheAux, FileError> {
-    let loc_paths: Vec<_> = localisation_paths_with_budget(
-        &[vanilla_dir.to_path_buf()],
-        &[],
-        &[],
-        DiscoveryPolicy::Vanilla,
-        budget,
-    )?
-    .into_iter()
-    .filter(|path| !shadow.is_some_and(|shadow| shadow.hides_file_under(vanilla_dir, path)))
-    .collect();
+    // One walk so loc and file-index paths share this file cap.
+    let report = checked_discovery(discover_workspace(WorkspaceDiscoveryRequest {
+        roots: vec![vanilla_dir.to_path_buf()],
+        kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
+        config: FileManagerConfig {
+            include_dirs: vec![".".to_string()],
+            scan_budget: budget,
+            ..Default::default()
+        },
+        policy: DiscoveryPolicy::Vanilla,
+    })?)?;
+    let loc_paths: Vec<_> = report
+        .files
+        .iter()
+        .filter(|file| file.kind == FileKind::Localisation)
+        .map(|file| file.path.clone())
+        .filter(|path| !shadow.is_some_and(|shadow| shadow.hides_file_under(vanilla_dir, path)))
+        .collect();
     let loc_service = LocService::from_paths(loc_paths, ScanBudget::default(), None);
     let loc_keys = cwtools_localization::loc_index::per_language_keys(&loc_service);
     let mut file_index = cwtools_index::FileIndex::new();
     // Preserve disk spelling so a case-sensitive run can check vanilla references.
     file_index.set_case_sensitive(true);
-    let file_paths = discover_file_index_paths_with_budget(
-        vanilla_dir,
-        &[],
-        &[],
-        DiscoveryPolicy::Vanilla,
-        budget,
-    )?
-    .into_iter()
-    .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)));
+    let file_paths = report
+        .files
+        .iter()
+        .map(|file| file.root_relative_path.clone())
+        .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)));
     file_index.add_paths(file_paths);
     Ok(cwtools_index::vanilla_cache::VanillaCacheAux {
         loc_keys,
@@ -1835,14 +1842,22 @@ pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> Fil
 pub fn discover_workspace_files(
     config: FileManagerConfig,
 ) -> Result<Vec<DiscoveredFile>, FileError> {
-    let (files, failures, _) = discover_workspace_files_with_failures(config)?;
+    discover_workspace_files_with_usage(config).map(|(files, _)| files)
+}
+
+/// The files from [`discover_workspace_files`] plus how many eligible files the
+/// shared cap consumed, so a later parent walk can continue from the remainder.
+pub fn discover_workspace_files_with_usage(
+    config: FileManagerConfig,
+) -> Result<(Vec<DiscoveredFile>, usize), FileError> {
+    let (files, failures, examined) = discover_workspace_files_with_failures(config)?;
     if let Some(failure) = failures
         .iter()
         .find(|failure| failure.is_file_count_budget())
     {
         return Err(FileError::FileCountBudget(failure.path.clone()));
     }
-    Ok(files)
+    Ok((files, examined))
 }
 
 fn discover_workspace_files_with_failures(
@@ -1903,6 +1918,13 @@ pub fn visible_parent_files<T>(
     layers.into_iter().rev().flatten().collect()
 }
 
+/// File cap left after a primary walk consumed `examined` files.
+#[derive(Clone, Copy, Debug)]
+pub struct ContinuedScan {
+    pub budget: ScanBudget,
+    pub examined: usize,
+}
+
 /// [`visible_parent_files`] over script files, each parent discovered the
 /// way [`workspace_discovery_config`] discovers the primary.
 pub fn discover_parent_script_files(
@@ -1913,7 +1935,31 @@ pub fn discover_parent_script_files(
     ignore_files: &[String],
     ignore_dirs: &[String],
 ) -> Result<Vec<DiscoveredFile>, FileError> {
-    let mut status = ParentDiscoveryStatus::default();
+    discover_parent_script_files_sharing(
+        parent_roots,
+        primary_root,
+        primary_files,
+        ruleset,
+        ignore_files,
+        ignore_dirs,
+        ContinuedScan {
+            budget: ScanBudget::default(),
+            examined: 0,
+        },
+    )
+}
+
+/// Parent discovery continuing from [`ContinuedScan`].
+pub fn discover_parent_script_files_sharing(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_files: &[DiscoveredFile],
+    ruleset: Option<&RuleSet>,
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    prior: ContinuedScan,
+) -> Result<Vec<DiscoveredFile>, FileError> {
+    let mut status = ParentDiscoveryStatus::after_primary(prior.budget, prior.examined);
     let files = discover_parent_script_files_inner(
         parent_roots,
         primary_root,
@@ -1939,6 +1985,15 @@ impl ParentDiscoveryStatus {
             remaining: budget.files_remaining(),
             budget,
         }
+    }
+
+    /// Continue a scan whose primary walk already consumed `examined` files.
+    fn after_primary(budget: ScanBudget, examined: usize) -> Self {
+        let mut status = Self::new(budget);
+        if budget.max_files != 0 {
+            status.remaining = status.remaining.saturating_sub(examined);
+        }
+        status
     }
 
     fn next_budget(&self) -> ScanBudget {
@@ -2532,6 +2587,25 @@ mod tests {
         assert!(
             build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_err()
         );
+
+        std::fs::remove_file(root.join("localisation/b_l_english.yml")).unwrap();
+        std::fs::write(root.join("gfx/a.dds"), "").unwrap();
+        assert!(
+            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_err(),
+            "loc and resource files share one file cap"
+        );
+        assert!(
+            build_vanilla_cache_aux_with_budget(
+                &root,
+                &TypeIndex::new(),
+                None,
+                ScanBudget {
+                    max_files: 2,
+                    ..ScanBudget::default()
+                },
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -2635,6 +2709,48 @@ mod tests {
             &mut status,
         );
         assert!(parent_discovery_result(locs, status.incomplete).is_err());
+    }
+
+    #[test]
+    fn primary_examination_reduces_the_parent_file_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        let parent = tmp.path().join("parent");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(parent.join("common")).unwrap();
+        std::fs::write(parent.join("common/a.txt"), "x").unwrap();
+        let budget = ScanBudget {
+            max_files: 1,
+            ..ScanBudget::default()
+        };
+        let mut status = ParentDiscoveryStatus::after_primary(budget, 1);
+        let scripts = discover_parent_script_files_inner(
+            std::slice::from_ref(&parent),
+            &primary,
+            &[],
+            None,
+            &[],
+            &[],
+            &mut status,
+        );
+        assert!(parent_discovery_result(scripts, status.incomplete).is_err());
+
+        let mut status = ParentDiscoveryStatus::after_primary(budget, 0);
+        let scripts = discover_parent_script_files_inner(
+            std::slice::from_ref(&parent),
+            &primary,
+            &[],
+            None,
+            &[],
+            &[],
+            &mut status,
+        );
+        assert_eq!(
+            parent_discovery_result(scripts, status.incomplete)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

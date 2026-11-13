@@ -4,8 +4,8 @@
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
-* Share discovery file-count budgets across include directories and roots in a scan, enforce aggregate CLI script read budgets, and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)
-* Retry base-game file indexing after incomplete discovery, and retry workspace-folder scans only while another scan is busy.
+* Share discovery file-count budgets across include directories, parent mods, and base-game auxiliary walks in one scan, enforce aggregate CLI script read budgets, and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)
+* Retry base-game file indexing after incomplete discovery, and retry workspace-folder scans only while another scan is busy. A workspace scan that loses the vanilla publication race clears its quiet-scan fingerprint.
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)

@@ -328,6 +328,16 @@ impl Backend {
         *self.state.last_scan_fingerprint.lock() = None;
     }
 
+    /// Drop a stale quiet-scan fingerprint while holding `vanilla_state`.
+    fn publication_moved(&self, revision: u64) -> bool {
+        let vanilla = self.state.vanilla_state.lock();
+        if vanilla.publication_revision == revision {
+            return false;
+        }
+        *self.state.last_scan_fingerprint.lock() = None;
+        true
+    }
+
     async fn report_file_index_failure<F: std::future::Future<Output = ()>>(
         &self,
         notification: F,
@@ -448,10 +458,12 @@ impl Backend {
             fm_config
                 .exclude_dir_patterns
                 .extend(extra_dir_globs.iter().cloned());
-            cwtools_driver::discover_workspace_files(fm_config)
+            let scan_budget = fm_config.scan_budget;
+            cwtools_driver::discover_workspace_files_with_usage(fm_config)
+                .map(|(files, examined)| (files, examined, scan_budget))
         });
-        let primary_files = match discovery {
-            Ok(files) => files,
+        let (primary_files, primary_examined, scan_budget) = match discovery {
+            Ok(found) => found,
             Err(error) => {
                 tracing::error!(path = %root_path.display(), error = %error, "workspace discovery failed");
                 self.client
@@ -471,13 +483,17 @@ impl Backend {
             Vec::new()
         } else {
             match tokio::task::block_in_place(|| {
-                cwtools_driver::discover_parent_script_files(
+                cwtools_driver::discover_parent_script_files_sharing(
                     &parent_roots,
                     &root_path,
                     &primary_files,
                     ruleset.as_deref(),
                     &extra_file_globs,
                     &extra_dir_globs,
+                    cwtools_driver::ContinuedScan {
+                        budget: scan_budget,
+                        examined: primary_examined,
+                    },
                 )
             }) {
                 Ok(files) => files,
@@ -1320,7 +1336,7 @@ impl Backend {
         drop(parsed_files);
 
         self.end_phase(&mut phase).await;
-        if self.state.vanilla_state.lock().publication_revision != vanilla_revision {
+        if self.publication_moved(vanilla_revision) {
             return false;
         }
         self.client
@@ -1392,6 +1408,7 @@ impl Backend {
         // vanilla invalidation. There are no awaits after this check.
         let vanilla = self.state.vanilla_state.lock();
         if vanilla.publication_revision != vanilla_revision {
+            *self.state.last_scan_fingerprint.lock() = None;
             return false;
         }
         *self.state.last_scan_summary.lock() = Some(summary);
@@ -1815,6 +1832,30 @@ mod tests {
         assert!(backend.state.last_scan_fingerprint.lock().is_some());
         assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
         assert!(backend.state.info_service.read().type_index.complete);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_vanilla_publication_clears_the_quiet_scan_fingerprint() {
+        let gate = HoldGate::new(HoldPoint::ScanAfterVanilla);
+        let (backend, _workspace) = setup_workspace(Some(gate.clone()));
+        let scan_backend = clone_backend(&backend);
+        let scan = tokio::spawn(async move {
+            scan_backend
+                .validate_entire_workspace_tracked(false, None)
+                .await
+        });
+        wait_arrived(&gate, HoldPoint::ScanAfterVanilla).await;
+        {
+            let mut vanilla = backend.state.vanilla_state.lock();
+            vanilla.publication_revision = vanilla.publication_revision.wrapping_add(1);
+        }
+        gate.release();
+        let outcome = scan.await.expect("scan panicked");
+        assert_eq!(outcome, ScanOutcome::Cancelled);
+        assert!(
+            backend.state.last_scan_fingerprint.lock().is_none(),
+            "a fenced abort must not leave a fingerprint a quiet scan can skip"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
