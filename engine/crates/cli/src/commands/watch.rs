@@ -233,29 +233,37 @@ fn fingerprint_tree(
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
+            // `file_type` does not follow symlinks, matching the loaders.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() || !(file_type.is_dir() || file_type.is_file()) {
+                continue;
+            }
             let path = entry.path();
-            if !meta.is_dir() {
-                if root.role != RootRole::Rules || is_rules_input(&path) {
-                    total = total.wrapping_add(entry_digest(&path, &meta));
+            if file_type.is_dir() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !dir_skipped(
+                    root,
+                    dir == base,
+                    single_root,
+                    includes.is_some(),
+                    &name,
+                    &root_relative(base, &path),
+                ) {
+                    dirs.push(path);
+                } else if dir == base && base == root.path && (name == "mod" || name == "mods") {
+                    // Descriptor discovery bypasses the mod's directory exclusions.
+                    total = total.wrapping_add(fingerprint_descriptors(&path));
                 }
                 continue;
             }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if !dir_skipped(
-                root,
-                dir == base,
-                single_root,
-                includes.is_some(),
-                &name,
-                &root_relative(base, &path),
-            ) {
-                dirs.push(path);
-            } else if dir == base && base == root.path && (name == "mod" || name == "mods") {
-                // Descriptor discovery bypasses the mod's directory exclusions.
-                total = total.wrapping_add(fingerprint_descriptors(&path));
+            if root.role == RootRole::Rules && !is_rules_input(&path) {
+                continue;
             }
+            let Ok(meta) = entry.metadata() else { continue };
+            total = total.wrapping_add(entry_digest(&path, &meta));
         }
     }
     total
@@ -912,6 +920,32 @@ mod tests {
         fs::write(&patch, "types = { }\n").unwrap();
         assert_ne!(fingerprint(&roots, Some(&[])), before);
         fs::write(&patch, "types = {  }\n").unwrap();
+        assert_ne!(fingerprint(&roots, Some(&[])), before);
+    }
+
+    /// A hidden rules directory is now entered. A symlink there must not be
+    /// followed, or a link back to its parent hangs the poll.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_cycle_under_hidden_rules_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = dir.path().join(".patches");
+        fs::create_dir(&hidden).unwrap();
+        symlink(&hidden, hidden.join("loop")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_rule = outside.path().join("outside.cwt");
+        fs::write(&outside_rule, "types = { }\n").unwrap();
+        symlink(&outside_rule, hidden.join("link.cwt")).unwrap();
+        symlink(outside.path(), dir.path().join("linked-rules")).unwrap();
+
+        let roots = [rule_root(dir.path())];
+        let before = fingerprint(&roots, Some(&[]));
+        fs::write(&outside_rule, "types = {  }\n").unwrap();
+        assert_eq!(fingerprint(&roots, Some(&[])), before);
+
+        fs::write(hidden.join("real.cwt"), "types = { }\n").unwrap();
         assert_ne!(fingerprint(&roots, Some(&[])), before);
     }
 

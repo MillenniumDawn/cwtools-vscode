@@ -2,7 +2,7 @@
 
 #### Engine
 
-* Align CLI watch polling with rules and mod discovery, including hidden rules, explicit include folders, and multi-mod inputs. (#1210)
+* Align CLI watch polling with rules and mod discovery, including hidden rules, explicit include folders, and multi-mod inputs. Symlinked files and directories are not polled, matching the loaders. (#1210)
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
