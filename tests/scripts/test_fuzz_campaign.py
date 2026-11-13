@@ -20,7 +20,7 @@ def test_failure_retains_timeout_reproducer_and_limits(
     process = MagicMock(spec=subprocess.Popen)
     process.wait.return_value = 77
     spawn = MagicMock(return_value=process)
-    monkeypatch.setattr(fuzz_campaign.subprocess, "Popen", spawn)
+    monkeypatch.setattr(subprocess, "Popen", spawn)
     artifacts = output / "artifacts"
     artifacts.mkdir(parents=True)
     (artifacts / "timeout-deadbeef").write_bytes(b"exact input")
@@ -55,13 +55,13 @@ def test_wall_timeout_stops_group_and_preserves_partial_artifact(
     process.pid = 12345
     process.wait.side_effect = subprocess.TimeoutExpired("cargo", 1200)
     monkeypatch.setattr(
-        fuzz_campaign.subprocess, "Popen", MagicMock(return_value=process)
+        subprocess, "Popen", MagicMock(return_value=process)
     )
     stop = MagicMock()
     monkeypatch.setattr(fuzz_campaign, "stop_group", stop)
     # Finalization must work on hosts that have no POSIX process-group APIs.
-    monkeypatch.delattr(fuzz_campaign.os, "killpg", raising=False)
-    monkeypatch.delattr(fuzz_campaign.signal, "SIGKILL", raising=False)
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
 
     assert fuzz_campaign.run_campaign("fix_edits", tmp_path / "corpus", output) == 124
 
@@ -81,7 +81,7 @@ def test_stop_group_signals_process_group(monkeypatch: pytest.MonkeyPatch) -> No
     process.pid = 12345
     process.wait.return_value = 0
     kill = MagicMock()
-    monkeypatch.setattr(fuzz_campaign.os, "killpg", kill)
+    monkeypatch.setattr(os, "killpg", kill)
 
     fuzz_campaign.stop_group(process)
 
