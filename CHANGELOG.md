@@ -2,6 +2,7 @@
 
 #### Tooling
 
+* Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
 * Check GitHub Actions workflow semantics with pinned actionlint. (#1228)
 
 #### Engine
