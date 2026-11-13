@@ -9,7 +9,7 @@ function item(logicalpath: string, scope = "mod"): FileListItem {
 	return {
 		scope,
 		logicalpath: `${scope}/${logicalpath}`,
-		uri: `file:///ws/${scope}/${logicalpath}`,
+		uri: `file:///C:/ws/${scope}/${logicalpath}`,
 	};
 }
 
@@ -29,7 +29,7 @@ suite("filesToTreeNodes", () => {
 			mod.children.map((c) => [c.fileName, c.isDirectory, c.uri]),
 			[
 				["buildings", true, ""],
-				["technology.txt", false, "file:///ws/mod/technology.txt"],
+				["technology.txt", false, "file:///C:/ws/mod/technology.txt"],
 			],
 		);
 		assert.deepStrictEqual(
@@ -73,7 +73,7 @@ suite("filesToTreeNodes", () => {
 			],
 		);
 		assert.strictEqual(mod.children[1].children[0].fileName, "b.txt");
-		assert.strictEqual(mod.children[2].uri, "file:///ws/mod/toString");
+		assert.strictEqual(mod.children[2].uri, "file:///C:/ws/mod/toString");
 	});
 
 	test("keeps the server's order for integer-like names", () => {
@@ -97,7 +97,7 @@ suite("FilesProvider", () => {
 		const entry = JSON.parse(
 			readFileSync("extension/test/fixtures/file-list-entry.json", "utf8"),
 		) as Pick<FileListItem, "scope" | "logicalpath">;
-		const uri = "file:///ws/common/national_focus/f.txt";
+		const uri = "file:///C:/ws/common/national_focus/f.txt";
 		const files = new FilesProvider([{ ...entry, uri }]);
 		let node = files.getChildren()[0];
 		assert.strictEqual(node.fileName, "common");
@@ -139,10 +139,10 @@ suite("FilesProvider", () => {
 
 	test("findNodeByUri locates a leaf and follows a refresh", () => {
 		const files = provider();
-		const faction = Uri.parse("file:///ws/mod/events/irm_faction.txt");
+		const faction = Uri.parse("file:///C:/ws/mod/events/irm_faction.txt");
 		assert.strictEqual(files.findNodeByUri(faction)?.fileName, "irm_faction.txt");
 		assert.strictEqual(
-			files.findNodeByUri(Uri.parse("file:///ws/mod/events/missing.txt")),
+			files.findNodeByUri(Uri.parse("file:///C:/ws/mod/events/missing.txt")),
 			undefined,
 		);
 

@@ -35,7 +35,7 @@ suite("executable — existAndIsExe", () => {
 		["group-exec", 0o710, true],
 		["others-exec", 0o701, true],
 	])("a %s file with mode %o is executable: %s", async (name, mode, expected) => {
-		assert.strictEqual(await existAndIsExe(makeFile(name, mode)), expected);
+		assert.strictEqual(await existAndIsExe(makeFile(name, mode)), process.platform === "win32" || expected);
 	});
 
 	test("returns false for a missing path and for a directory", async () => {
@@ -49,7 +49,7 @@ suite("executable — existAndIsExe", () => {
 	])("follows a symlink to %s", async (name, mode, expected) => {
 		const link = path.join(tmpDir, `link-to-${name}`);
 		fs.symlinkSync(makeFile(name, mode), link);
-		assert.strictEqual(await existAndIsExe(link), expected);
+		assert.strictEqual(await existAndIsExe(link), process.platform === "win32" || expected);
 	});
 
 	test("returns false for a symlink to a missing target", async () => {
