@@ -33,7 +33,7 @@ def install_archive(
     download = MagicMock(return_value=io.BytesIO(payload))
     process = MagicMock(return_value=subprocess.CompletedProcess([], 2))
     monkeypatch.setattr(actionlint, "urlopen", download)
-    monkeypatch.setattr(actionlint.subprocess, "run", process)
+    monkeypatch.setattr(subprocess, "run", process)
     return download, process
 
 
@@ -54,7 +54,7 @@ def test_checksum_mismatch_prevents_execution(monkeypatch: pytest.MonkeyPatch) -
         actionlint, "urlopen", MagicMock(return_value=io.BytesIO(b"bad"))
     )
     process = MagicMock()
-    monkeypatch.setattr(actionlint.subprocess, "run", process)
+    monkeypatch.setattr(subprocess, "run", process)
     assert actionlint.main() == 1
     process.assert_not_called()
 
@@ -75,6 +75,6 @@ def test_network_error_prevents_execution(monkeypatch: pytest.MonkeyPatch) -> No
         actionlint, "urlopen", MagicMock(side_effect=OSError("offline"))
     )
     process = MagicMock()
-    monkeypatch.setattr(actionlint.subprocess, "run", process)
+    monkeypatch.setattr(subprocess, "run", process)
     assert actionlint.main() == 1
     process.assert_not_called()
