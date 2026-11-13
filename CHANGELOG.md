@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Check GitHub Actions workflow semantics with pinned actionlint. (#1228)
+
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
