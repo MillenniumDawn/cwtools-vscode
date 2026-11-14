@@ -2,11 +2,13 @@ use crate::commands::{Lang, LocFile};
 use crate::csv_parser::parse_csv_loc_per_lang;
 use crate::yaml_parser::{LocFileParseError, parse_loc_text};
 use cwtools_file_manager::{FileEncoding, ScanBudget, ScanBytes, read_text_capped_with_encoding};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub struct LocService {
     files: Vec<LocFile>,
     errors: Vec<(String, String)>,
+    source_texts: HashMap<String, String>,
 }
 
 impl LocService {
@@ -38,20 +40,42 @@ impl LocService {
         Self {
             files: parsed,
             errors,
+            source_texts: HashMap::new(),
         }
     }
 
     pub fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
+        Self::from_paths_impl(paths, budget, langs, false)
+    }
+
+    /// Retain the exact decoded input for callers that must reject stale edits.
+    pub fn from_paths_with_source_texts(
+        paths: Vec<PathBuf>,
+        budget: ScanBudget,
+        langs: Option<&[Lang]>,
+    ) -> Self {
+        Self::from_paths_impl(paths, budget, langs, true)
+    }
+
+    fn from_paths_impl(
+        paths: Vec<PathBuf>,
+        budget: ScanBudget,
+        langs: Option<&[Lang]>,
+        retain_source_texts: bool,
+    ) -> Self {
         use rayon::prelude::*;
         let bytes = ScanBytes::new();
-        let results: Vec<Result<Vec<LocFile>, (String, String)>> = paths
+        let results: Vec<_> = paths
             .into_par_iter()
             .map(|path| {
                 let path_str = path.to_string_lossy().to_string();
                 match read_text_capped_with_encoding(&path, budget.read_cap()) {
                     Ok((text, enc, n)) => {
                         if !bytes.try_reserve(n, budget.max_bytes) {
-                            return Err((path_str, "scan byte budget exceeded".to_string()));
+                            return (
+                                Err((path_str, "scan byte budget exceeded".to_string())),
+                                None,
+                            );
                         }
                         let is_csv = path
                             .extension()
@@ -61,20 +85,30 @@ impl LocService {
                             && let Some(lang) = loc_header_language(&text, &path_str)
                             && !langs.contains(&lang)
                         {
-                            return Ok(Vec::new());
+                            return (Ok(Vec::new()), None);
                         }
-                        parse_loc_file_entry(path_str, text, Some(enc))
+                        let source = retain_source_texts.then(|| (path_str.clone(), text.clone()));
+                        (parse_loc_file_entry(path_str, text, Some(enc)), source)
                     }
-                    Err(e) => Err((path_str, format!("IO error: {}", e))),
+                    Err(e) => (Err((path_str, format!("IO error: {}", e))), None),
                 }
             })
             .collect();
-        Self::from_results(results)
+        let (parsed, sources): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+        let mut service = Self::from_results(parsed);
+        service.source_texts = sources.into_iter().flatten().collect();
+        service
+    }
+
+    /// Text read during parsing, if retained by `from_paths_with_source_texts`.
+    pub fn source_text(&self, path: &str) -> Option<&str> {
+        self.source_texts.get(path).map(String::as_str)
     }
 
     pub fn merge_from(&mut self, mut other: Self) {
         self.files.append(&mut other.files);
         self.errors.append(&mut other.errors);
+        self.source_texts.extend(other.source_texts);
     }
 
     pub fn files(&self) -> &[LocFile] {

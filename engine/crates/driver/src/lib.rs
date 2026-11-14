@@ -433,6 +433,22 @@ impl Session {
         config: SessionConfig,
         parse_cache_dir: Option<PathBuf>,
     ) -> SessionWithFiles {
+        Self::load_impl(config, parse_cache_dir, false)
+    }
+
+    /// Load exact localization source text for safe fix application.
+    pub fn load_for_fix(
+        config: SessionConfig,
+        parse_cache_dir: Option<PathBuf>,
+    ) -> SessionWithFiles {
+        Self::load_impl(config, parse_cache_dir, true)
+    }
+
+    fn load_impl(
+        config: SessionConfig,
+        parse_cache_dir: Option<PathBuf>,
+        retain_loc_source_texts: bool,
+    ) -> SessionWithFiles {
         let SessionConfig {
             game,
             rules,
@@ -905,8 +921,15 @@ impl Session {
 
         let modifier_keys = build_modifier_keys(&ruleset, &type_index);
 
-        let mut loc_service =
-            LocService::from_paths(loc_paths, ScanBudget::default(), loc_languages.as_deref());
+        let mut loc_service = if retain_loc_source_texts {
+            LocService::from_paths_with_source_texts(
+                loc_paths,
+                ScanBudget::default(),
+                loc_languages.as_deref(),
+            )
+        } else {
+            LocService::from_paths(loc_paths, ScanBudget::default(), loc_languages.as_deref())
+        };
         let mut loc_index = LocIndex::build_scoped(&loc_service, loc_languages.as_deref());
         let parent_loc_service = LocService::from_paths(
             parent_loc_paths.into_iter().map(|file| file.path).collect(),
@@ -1091,6 +1114,23 @@ impl SessionWithFiles {
             self.validation_incomplete.store(true, Ordering::Relaxed);
         }
         result
+    }
+
+    /// Read localization only if it still matches the exact text parsed at load.
+    pub fn read_loc_source_utf8(&self, path: &Path) -> std::io::Result<String> {
+        let text = std::fs::read_to_string(path)?;
+        if self
+            .session
+            .loc_service
+            .source_text(&path.to_string_lossy())
+            != Some(text.as_str())
+        {
+            self.validation_incomplete.store(true, Ordering::Relaxed);
+            return Err(std::io::Error::other(
+                "localization source changed after indexing",
+            ));
+        }
+        Ok(text)
     }
 
     /// Read an indexed script for fix application without accepting changed
