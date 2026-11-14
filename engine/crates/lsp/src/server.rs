@@ -760,7 +760,16 @@ impl Backend {
         self.invalidate_semantic_tokens(&uri);
         tracing::debug!(%uri, "did_close");
         let publication = self.state.diagnostic_publication_lock.lock().await;
-        let closed_doc = self.state.documents.lock().remove(&uri);
+        let (closed_doc, loc_read) = {
+            let mut documents = self.state.documents.lock();
+            let closed_doc = documents.remove(&uri);
+            let loc_read = if closed_doc.is_some() && crate::paths::is_loc_file(&uri) {
+                documents.begin_loc_disk_read(&uri)
+            } else {
+                None
+            };
+            (closed_doc, loc_read)
+        };
         drop(publication);
         let Some(closed_doc) = closed_doc else {
             return;
@@ -849,7 +858,11 @@ impl Backend {
         let (exports_after, names_after, generation, changed_loc_keys) = {
             let mut doc_tokens = self.state.doc_tokens.write();
             let documents = self.state.documents.lock();
-            if documents.contains_key(&uri) {
+            if documents.contains_key(&uri)
+                || loc_read.as_ref().is_some_and(|read| {
+                    !documents.loc_disk_read_is_current(&uri, read)
+                })
+            {
                 return;
             }
 
@@ -952,21 +965,24 @@ impl Backend {
 
         cwtools_profiling::log_rss("did_close");
         if !self.state.documents.lock().contains_key(&uri) {
-            self.publish_if_closed(params.text_document.uri, vec![], None)
-                .await;
+            if let Some(read) = &loc_read {
+                self.publish_loc_disk_diagnostics(params.text_document.uri.clone(), vec![], None, read).await;
+            } else {
+                self.publish_if_closed(params.text_document.uri.clone(), vec![], None).await;
+            }
             if let Some(text) = disk_loc_text
-                && !self.state.documents.lock().contains_key(&uri)
+                && let Some(read) = &loc_read
             {
-                let (diagnostics, _) = self
-                    .parse_and_validate(&uri, &text, ValidateTrigger::DidClose, None)
-                    .await;
-                if !self.state.documents.lock().contains_key(&uri)
+                if let Some((diagnostics, _)) = self
+                    .parse_and_validate_disk_loc(&uri, &text, ValidateTrigger::DidClose, read)
+                    .await
                     && let Ok(uri_obj) = Url::parse(&uri)
                 {
-                    self.publish_gated_if_closed(
+                    self.publish_loc_disk_diagnostics(
                         uri_obj,
                         diagnostics,
                         Some(cwtools_cache::workspace::content_hash(&text)),
+                        read,
                     )
                     .await;
                 }

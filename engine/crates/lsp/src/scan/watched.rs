@@ -31,6 +31,7 @@ impl Backend {
         let mut enqueued = false;
         let mut baseline_changed = false;
         let baseline_files = self.state.baseline.lock().metadata_files();
+        let publication = self.state.diagnostic_publication_lock.lock().await;
         for event in params.changes {
             let event_path = event.uri.to_file_path().ok();
             if let Some(path) = event_path.as_ref() {
@@ -54,6 +55,11 @@ impl Backend {
                 .baseline
                 .lock()
                 .invalidate_capture(event_path.as_deref());
+            if crate::paths::is_loc_file(&uri)
+                && matches!(event.typ, FileChangeType::DELETED | FileChangeType::CREATED | FileChangeType::CHANGED)
+            {
+                self.state.documents.lock().invalidate_loc_disk_read(&uri);
+            }
             match event.typ {
                 FileChangeType::DELETED => {
                     tracing::debug!(%uri, "watched file deleted; queued");
@@ -78,6 +84,7 @@ impl Backend {
                 _ => {}
             }
         }
+        drop(publication);
         if baseline_changed {
             let setting = self.state.baseline.lock().setting.clone();
             if self.reload_baseline(setting).await {
@@ -285,6 +292,15 @@ impl Backend {
                     tracing::debug!(%uri, "watched file unchanged (stat match); skipping");
                     continue;
                 }
+                let loc_read = if crate::paths::is_loc_file(&uri) {
+                    let _publication = self.state.diagnostic_publication_lock.lock().await;
+                    let Some(read) = self.state.documents.lock().begin_loc_disk_read(&uri) else {
+                        continue;
+                    };
+                    Some(read)
+                } else {
+                    None
+                };
                 let read = tokio::task::spawn_blocking(move || {
                     crate::access::read_capped_text(&authorized, crate::access::MAX_URI_READ_BYTES)
                 })
@@ -294,9 +310,11 @@ impl Backend {
                         let Some(_permit) = self.validation_permit().await else {
                             return;
                         };
-                        let diagnostics = if crate::paths::is_loc_file(&uri) {
+                        let diagnostics = if let Some(read) = &loc_read {
                             let Some((diagnostics, changed)) =
-                                self.parse_and_validate_watched_loc(&uri, &text).await
+                                self.parse_and_validate_disk_loc(
+                                    &uri, &text, crate::ValidateTrigger::Watched, read,
+                                ).await
                             else {
                                 continue;
                             };
@@ -313,19 +331,27 @@ impl Backend {
                             .0
                         };
                         refresh_features = true;
-                        if let Some(sig) = sig {
-                            self.state
-                                .watched_signatures
-                                .lock()
-                                .insert(uri.clone(), sig);
+                        {
+                            let documents = self.state.documents.lock();
+                            if loc_read.as_ref().is_some_and(|read| {
+                                !documents.loc_disk_read_is_current(&uri, read)
+                            }) {
+                                continue;
+                            }
+                            if let Some(sig) = sig {
+                                self.state
+                                    .watched_signatures
+                                    .lock()
+                                    .insert(uri.clone(), sig);
+                            }
                         }
                         if let Ok(uri_obj) = Url::parse(&uri) {
-                            self.publish_gated_if_closed(
-                                uri_obj,
-                                diagnostics,
-                                Some(cwtools_cache::workspace::content_hash(&text)),
-                            )
-                            .await;
+                            let source_hash = Some(cwtools_cache::workspace::content_hash(&text));
+                            if let Some(read) = &loc_read {
+                                self.publish_loc_disk_diagnostics(uri_obj, diagnostics, source_hash, read).await;
+                            } else {
+                                self.publish_gated_if_closed(uri_obj, diagnostics, source_hash).await;
+                            }
                         }
                     }
                     Ok(None) => {
