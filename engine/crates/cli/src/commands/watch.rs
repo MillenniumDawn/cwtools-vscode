@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cwtools_driver::search_config_for;
-use cwtools_file_manager::file_manager::ignore_glob_match;
+use cwtools_file_manager::file_manager::{ignore_glob_match, is_ignored_logical_path};
 use cwtools_file_manager::{
     DirectoryType, classify_directory, expand_multiple_mods, is_excluded_dir, is_excluded_root_dir,
     path_identity,
@@ -45,6 +45,8 @@ pub(crate) struct Root {
     /// The workspace's `--ignore-dirs` globs, which discovery applies under
     /// this root (vanilla discovery resets them).
     ignore_dirs: Vec<String>,
+    /// User file exclusions; defaults are shared with discovery.
+    ignore_files: Vec<String>,
 }
 
 /// The roots a watch walks: the ruleset, the workspace, the parent roots, and
@@ -57,28 +59,42 @@ pub(crate) fn roots(
     parents: &[PathBuf],
     vanilla: Option<&Path>,
     workspace_ignore_dirs: &[String],
+    workspace_ignore_files: &[String],
 ) -> Vec<Root> {
-    let mut seen: HashSet<(String, Vec<String>)> = HashSet::new();
+    let mut seen: HashSet<(String, Vec<String>, Vec<String>)> = HashSet::new();
     let mut watched = vec![Root {
         path: rules.to_path_buf(),
         role: RootRole::Rules,
         ignore_dirs: Vec::new(),
+        ignore_files: Vec::new(),
     }];
-    let mut mod_roots: Vec<(&Path, Vec<String>)> =
-        vec![(directory, workspace_ignore_dirs.to_vec())];
+    let mut mod_roots = vec![(
+        directory,
+        workspace_ignore_dirs.to_vec(),
+        workspace_ignore_files.to_vec(),
+    )];
     for parent in parents {
-        mod_roots.push((parent.as_path(), workspace_ignore_dirs.to_vec()));
+        mod_roots.push((
+            parent.as_path(),
+            workspace_ignore_dirs.to_vec(),
+            workspace_ignore_files.to_vec(),
+        ));
     }
     if let Some(vanilla) = vanilla {
-        mod_roots.push((vanilla, Vec::new()));
+        mod_roots.push((vanilla, Vec::new(), Vec::new()));
     }
-    for (root, ignore_dirs) in mod_roots {
+    for (root, ignore_dirs, ignore_files) in mod_roots {
         let path = root.to_path_buf();
-        if seen.insert((path_identity(&path).into_owned(), ignore_dirs.clone())) {
+        if seen.insert((
+            path_identity(&path).into_owned(),
+            ignore_dirs.clone(),
+            ignore_files.clone(),
+        )) {
             watched.push(Root {
                 path,
                 role: RootRole::Mods,
                 ignore_dirs,
+                ignore_files,
             });
         }
     }
@@ -195,14 +211,18 @@ fn fingerprint(roots: &[Root], folders: Option<&[String]>) -> u64 {
         let mut policy = DefaultHasher::new();
         (&root.path, multi, configured).hash(&mut policy);
         total = total.wrapping_add(policy.finish());
-        total = total.wrapping_add(fingerprint_tree(
-            root,
-            &root.path,
-            !multi,
-            includes.as_deref(),
-        ));
+        if root.role == RootRole::Mods {
+            // Match the loader's filesystem lookup independently of file exclusions.
+            let descriptor = root.path.join("descriptor.mod");
+            if let Ok(meta) = fs::metadata(&descriptor) {
+                total = total.wrapping_add(entry_digest(&descriptor, &meta));
+            }
+        }
         if multi {
-            let mut seen = HashSet::from([path_identity(&root.path).into_owned()]);
+            // Walking the collection as well would apply a second, incorrect
+            // relative path to member files and bypass path-based exclusions.
+            total = total.wrapping_add(fingerprint_collection(&root.path));
+            let mut seen = HashSet::new();
             for member in expand_multiple_mods(&root.path) {
                 if seen.insert(path_identity(&member.root).into_owned()) {
                     total = total.wrapping_add(fingerprint_tree(
@@ -213,7 +233,22 @@ fn fingerprint(roots: &[Root], folders: Option<&[String]>) -> u64 {
                     ));
                 }
             }
+        } else {
+            total = total.wrapping_add(fingerprint_tree(
+                root,
+                &root.path,
+                true,
+                includes.as_deref(),
+            ));
         }
+    }
+    total
+}
+
+fn fingerprint_collection(base: &Path) -> u64 {
+    let mut total = 0u64;
+    for name in ["mod", "mods"] {
+        total = total.wrapping_add(fingerprint_descriptors(&base.join(name)));
     }
     total
 }
@@ -264,7 +299,13 @@ fn fingerprint_tree(
                 }
                 continue;
             }
-            if root.role == RootRole::Rules && !is_rules_input(&path) {
+            let accepted = match root.role {
+                RootRole::Rules => is_rules_input(&path),
+                RootRole::Mods => {
+                    !is_ignored_logical_path(&root_relative(base, &path), &root.ignore_files)
+                }
+            };
+            if !accepted {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -653,6 +694,7 @@ mod tests {
             path: path.to_path_buf(),
             role: RootRole::Mods,
             ignore_dirs: Vec::new(),
+            ignore_files: Vec::new(),
         }
     }
 
@@ -661,6 +703,7 @@ mod tests {
             path: path.to_path_buf(),
             role: RootRole::Rules,
             ignore_dirs: Vec::new(),
+            ignore_files: Vec::new(),
         }
     }
 
@@ -771,6 +814,260 @@ mod tests {
 
     fn folders<const N: usize>(list: [&str; N]) -> Option<Vec<String>> {
         Some(list.iter().map(|s| s.to_string()).collect())
+    }
+
+    fn edit_is_observed(watched: &[Root], folders: &[String], file: &Path, expected: bool) {
+        fs::write(file, "before").unwrap();
+        let before = fingerprint(watched, Some(folders));
+        fs::write(file, "after, with a different length").unwrap();
+        assert_eq!(
+            fingerprint(watched, Some(folders)) != before,
+            expected,
+            "{file:?}"
+        );
+    }
+
+    #[test]
+    fn file_ignores_match_discovery_for_scripts_localisation_and_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let ignore_files = vec![
+            "skip.txt".to_string(),
+            "common/path*.txt".to_string(),
+            "**/nested/no*.txt".to_string(),
+            "localisation/skip*.yml".to_string(),
+            "gfx/skip*.dds".to_string(),
+        ];
+        let mut root = mods_root(dir.path());
+        root.ignore_files = ignore_files.clone();
+        let watched = [root];
+        let cases = [
+            ("common/skip.txt", false),
+            ("common/path_match.txt", false),
+            ("common/nested/nope.txt", false),
+            ("localisation/skip_l_english.yml", false),
+            ("gfx/skip.dds", false),
+            ("common/keep.txt", true),
+            ("localisation/keep_l_english.yml", true),
+            ("gfx/keep.dds", true),
+        ];
+        for (relative, expected) in cases {
+            let file = dir.path().join(relative);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            edit_is_observed(&watched, &[], &file, expected);
+        }
+        let mut config = FileManagerConfig {
+            include_dirs: vec![".".to_string()],
+            ..Default::default()
+        };
+        config.exclude_patterns.extend(ignore_files);
+        let report = discover_paths(
+            &[dir.path()],
+            &config,
+            &[FileKind::Script, FileKind::Localisation, FileKind::Resource],
+        )
+        .unwrap();
+        for (relative, expected) in cases {
+            assert_eq!(
+                report
+                    .files
+                    .iter()
+                    .any(|file| file.path == dir.path().join(relative)),
+                expected,
+                "{relative}",
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_includes_still_apply_root_relative_file_ignores() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_dir = tempfile::tempdir().unwrap();
+        let include = "common/target";
+        fs::create_dir_all(dir.path().join(include)).unwrap();
+        let rules = write_rules(rules_dir.path(), &["common", include]);
+        let watched = roots(
+            rules_dir.path(),
+            dir.path(),
+            &[],
+            None,
+            &["target".to_string()],
+            &["common/target/skip.txt".to_string()],
+        );
+        edit_is_observed(
+            &watched,
+            &rules.folders,
+            &dir.path().join("common/target/skip.txt"),
+            false,
+        );
+        edit_is_observed(
+            &watched,
+            &rules.folders,
+            &dir.path().join("common/target/keep.txt"),
+            true,
+        );
+        let mut config = workspace_discovery_config(dir.path(), Some(&rules));
+        config.exclude_dir_patterns.push("target".to_string());
+        config
+            .exclude_patterns
+            .push("common/target/skip.txt".to_string());
+        let loaded = FileManager::new(config).discover_files().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].path, dir.path().join("common/target/keep.txt"));
+    }
+
+    #[test]
+    fn overlapping_roots_and_vanilla_keep_independent_file_policies() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_dir = tempfile::tempdir().unwrap();
+        let common = dir.path().join("common");
+        fs::create_dir(&common).unwrap();
+        let file = common.join("skip.txt");
+        let ignores = ["common/skip.txt".to_string()];
+        let workspace = roots(rules_dir.path(), dir.path(), &[], None, &[], &ignores);
+        edit_is_observed(&workspace, &[], &file, false);
+        let overlapping = roots(rules_dir.path(), dir.path(), &[common], None, &[], &ignores);
+        edit_is_observed(&overlapping, &[], &file, true);
+        let vanilla = roots(
+            rules_dir.path(),
+            dir.path(),
+            &[],
+            Some(dir.path()),
+            &[],
+            &ignores,
+        );
+        assert_eq!(vanilla.len(), 3);
+        assert!(vanilla[2].ignore_files.is_empty());
+        edit_is_observed(&vanilla, &[], &file, true);
+    }
+
+    #[test]
+    fn collection_members_apply_file_ignores_relative_to_each_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("mods")).unwrap();
+        fs::create_dir_all(root.join("alpha/common")).unwrap();
+        fs::create_dir_all(root.join("alpha/localisation")).unwrap();
+        fs::create_dir_all(root.join("alpha/gfx")).unwrap();
+        fs::write(root.join("mods/alpha.mod"), "name = Alpha\npath = alpha\n").unwrap();
+        let mut watched_root = mods_root(root);
+        watched_root.ignore_files = vec!["common/skip.txt".to_string(), "*.mod".to_string()];
+        let watched = [watched_root];
+        edit_is_observed(&watched, &[], &root.join("alpha/common/skip.txt"), false);
+        edit_is_observed(&watched, &[], &root.join("alpha/common/keep.txt"), true);
+        edit_is_observed(
+            &watched,
+            &[],
+            &root.join("alpha/localisation/a_l_english.yml"),
+            true,
+        );
+        edit_is_observed(&watched, &[], &root.join("alpha/gfx/icon.dds"), true);
+        edit_is_observed(&watched, &[], &root.join("alpha/common/nested.mod"), false);
+        edit_is_observed(&watched, &[], &root.join("unowned.txt"), false);
+        // A second member loads the same file using a different logical path.
+        fs::write(
+            root.join("mods/common.mod"),
+            "name = Common\npath = alpha/common\n",
+        )
+        .unwrap();
+        edit_is_observed(&watched, &[], &root.join("alpha/common/skip.txt"), true);
+    }
+
+    #[test]
+    fn file_ignores_do_not_hide_rules_or_structural_descriptors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("common")).unwrap();
+        fs::create_dir_all(dir.path().join("logs")).unwrap();
+        let watched = roots(dir.path(), dir.path(), &[], None, &[], &["*".to_string()]);
+        edit_is_observed(&watched, &[], &dir.path().join("hidden.cwt"), true);
+        edit_is_observed(&watched, &[], &dir.path().join("logs/modifiers.log"), true);
+        edit_is_observed(&watched, &[], &dir.path().join("descriptor.mod"), true);
+        edit_is_observed(&watched, &[], &dir.path().join("common/ignored.txt"), false);
+        let collection = tempfile::tempdir().unwrap();
+        fs::create_dir(collection.path().join("mods")).unwrap();
+        fs::create_dir(collection.path().join("member")).unwrap();
+        let descriptor = collection.path().join("mods/member.mod");
+        fs::write(&descriptor, "name = Member\npath = member\n").unwrap();
+        let mut root = mods_root(collection.path());
+        root.ignore_files = vec!["*.mod".to_string()];
+        root.ignore_dirs = vec!["mods".to_string()];
+        let watched = [root];
+        let before = fingerprint(&watched, Some(&[]));
+        fs::write(
+            &descriptor,
+            "name = Member\npath = member\nreplace_path = common\n",
+        )
+        .unwrap();
+        assert_ne!(fingerprint(&watched, Some(&[])), before);
+        edit_is_observed(
+            &watched,
+            &[],
+            &collection.path().join("descriptor.mod"),
+            true,
+        );
+    }
+
+    #[test]
+    fn a_collection_can_resolve_itself_without_bypassing_file_ignores() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("mods")).unwrap();
+        fs::create_dir(dir.path().join("custom")).unwrap();
+        fs::write(dir.path().join("mods/self.mod"), "name = Self\npath = .\n").unwrap();
+        let mut root = mods_root(dir.path());
+        root.ignore_files = vec!["custom/skip.txt".to_string()];
+        let watched = [root];
+        assert_eq!(classify_directory(dir.path()), DirectoryType::MultipleMod);
+        edit_is_observed(&watched, &[], &dir.path().join("custom/skip.txt"), false);
+        edit_is_observed(&watched, &[], &dir.path().join("custom/keep.txt"), true);
+    }
+
+    #[test]
+    fn root_descriptor_observability_matches_filesystem_case_lookup() {
+        use cwtools_file_manager::file_manager::read_root_descriptor;
+
+        let dir = tempfile::tempdir().unwrap();
+        let descriptor = dir.path().join("Descriptor.MOD");
+        fs::write(&descriptor, "replace_path = common\n").unwrap();
+        let loaded = read_root_descriptor(dir.path()).is_some();
+        let mut root = mods_root(dir.path());
+        root.ignore_files = vec!["*".to_string()];
+        edit_is_observed(&[root], &[], &descriptor, loaded);
+    }
+
+    #[test]
+    fn empty_directory_classification_changes_are_observed() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("mods")).unwrap();
+        fs::create_dir(dir.path().join("member")).unwrap();
+        fs::write(
+            dir.path().join("mods/member.mod"),
+            "name = Member\npath = member\n",
+        )
+        .unwrap();
+        let watched = [mods_root(dir.path())];
+        assert_eq!(classify_directory(dir.path()), DirectoryType::MultipleMod);
+        let before = fingerprint(&watched, Some(&[]));
+        fs::create_dir(dir.path().join("common")).unwrap();
+        assert_eq!(classify_directory(dir.path()), DirectoryType::Mod);
+        assert_ne!(fingerprint(&watched, Some(&[])), before);
+        fs::remove_dir(dir.path().join("common")).unwrap();
+        assert_eq!(fingerprint(&watched, Some(&[])), before);
+    }
+
+    #[test]
+    fn default_file_exclusions_do_not_trigger_watch_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("common")).unwrap();
+        let watched = [mods_root(dir.path())];
+        for name in ["README.txt", "Changelog.txt", "LICENSE.txt", "notes.md"] {
+            let file = dir.path().join("common").join(name);
+            let before = fingerprint(&watched, Some(&[]));
+            fs::write(&file, "ignored").unwrap();
+            assert_eq!(fingerprint(&watched, Some(&[])), before, "{name}");
+            fs::write(&file, "ignored edit with a different length").unwrap();
+            assert_eq!(fingerprint(&watched, Some(&[])), before, "{name}");
+            fs::remove_file(file).unwrap();
+            assert_eq!(fingerprint(&watched, Some(&[])), before, "{name}");
+        }
     }
 
     #[test]
@@ -930,7 +1227,7 @@ mod tests {
         let rules_dir = tempfile::tempdir().unwrap();
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("common")).unwrap();
-        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[], &[]);
         let mut poller = Poller::new(watched);
         let unknown = fingerprint(&poller.roots, None);
         fs::write(dir.path().join("common").join("x.txt"), "x = 1 with more\n").unwrap();
@@ -1127,7 +1424,7 @@ mod tests {
 
     #[test]
     fn roots_preserve_dot_paths_used_by_cli_defaults() {
-        let watched = roots(Path::new("."), Path::new("."), &[], None, &[]);
+        let watched = roots(Path::new("."), Path::new("."), &[], None, &[], &[]);
 
         assert_eq!(watched[0].path, Path::new("."));
         assert_eq!(watched[1].path, Path::new("."));
@@ -1163,6 +1460,7 @@ mod tests {
             &[],
             None,
             &["target".to_string()],
+            &[],
         );
         let folders = rules.folders.clone();
         let before = fingerprint(&watched, Some(&folders));
@@ -1202,7 +1500,7 @@ mod tests {
             "{scripts:?}"
         );
 
-        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[], &[]);
         let before = fingerprint(
             &watched,
             folders(["resources", "gfx/deep", "target/deep"]).as_deref(),
@@ -1272,6 +1570,7 @@ mod tests {
             &[],
             None,
             &["archived".to_string()],
+            &[],
         );
         let before = fingerprint(&watched, folders(["archived"]).as_deref());
         fs::write(dir.path().join("archived").join("included.txt"), "x = 12\n").unwrap();
@@ -1296,7 +1595,7 @@ mod tests {
             "{loaded:?}"
         );
 
-        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[], &[]);
         let before = fingerprint(&watched, Some(&[]));
         fs::write(dir.path().join("resources").join("sprite.png"), "img 2").unwrap();
         assert_eq!(fingerprint(&watched, Some(&[])), before);
@@ -1385,7 +1684,7 @@ mod tests {
             assert!(loaded.contains(&file), "{loaded:?}");
         }
 
-        let watched = roots(rules_dir.path(), &collection, &[], None, &[]);
+        let watched = roots(rules_dir.path(), &collection, &[], None, &[], &[]);
         let before = fingerprint(&watched, Some(&[]));
         fs::write(
             collection.join("alpha").join("resources").join("r.png"),
@@ -1445,6 +1744,7 @@ mod tests {
             &[],
             None,
             &["alpha".to_string()],
+            &[],
         );
         let before = fingerprint(&watched, Some(&[]));
         fs::write(
@@ -1467,7 +1767,7 @@ mod tests {
         .unwrap();
         let _rules = write_rules(&rules_dir, &[]);
 
-        let watched = roots(rules_dir.path(), collection.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), collection.path(), &[], None, &[], &[]);
         let before = fingerprint(&watched, Some(&[]));
         fs::write(
             collection.path().join("mods").join("gamma.mod"),
@@ -1503,7 +1803,7 @@ mod tests {
             .join("x.txt");
         assert!(!discovered_single_all(dir.path(), &rules).contains(&member_file));
 
-        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[], &[]);
         let before = fingerprint(&watched, Some(&[]));
         fs::write(&member_file, "x = 2\n").unwrap();
         assert_eq!(fingerprint(&watched, Some(&[])), before);
@@ -1556,6 +1856,7 @@ mod tests {
             workspace.path(),
             &[],
             Some(vanilla.path()),
+            &[],
             &[],
         );
         let vanilla_root = watched.iter().find(|r| r.path == vanilla.path()).unwrap();
@@ -1630,6 +1931,7 @@ mod tests {
             &[],
             Some(collection.path()),
             &["alpha".to_string()],
+            &[],
         );
         let same_path: Vec<&Root> = watched
             .iter()
@@ -1673,7 +1975,7 @@ mod tests {
             "{scripts:?}"
         );
 
-        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[], &[]);
         let folders = ["./target".to_string(), "target/../resources".to_string()];
         let before = fingerprint(&watched, Some(&folders));
         fs::write(dir.path().join("target").join("in.txt"), "t = 12\n").unwrap();
@@ -1712,6 +2014,7 @@ mod tests {
             &[],
             None,
             &["mods".to_string()],
+            &[],
         );
         let before = fingerprint(&watched, Some(&[]));
         fs::write(
@@ -1744,7 +2047,7 @@ mod tests {
             "the folder is not applied while it does not exist"
         );
 
-        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), dir.path(), &[], None, &[], &[]);
         let before = fingerprint(&watched, folders(["target"]).as_deref());
         fs::create_dir_all(dir.path().join("target")).unwrap();
         fs::write(dir.path().join("target").join("in.txt"), "t = 1\n").unwrap();
@@ -1777,6 +2080,7 @@ mod tests {
             &[],
             Some(vanilla.path()),
             &[],
+            &[],
         );
         let poller = Poller::new(watched);
         let before = poller.seen;
@@ -1804,6 +2108,7 @@ mod tests {
             &[workspace.path().to_path_buf()],
             None,
             &[],
+            &[],
         );
         let mod_paths: Vec<PathBuf> = watched[1..].iter().map(|r| r.path.clone()).collect();
         assert_eq!(mod_paths, vec![workspace.path().to_path_buf()]);
@@ -1815,6 +2120,7 @@ mod tests {
             &[],
             Some(workspace.path()),
             &["ignored".to_string()],
+            &[],
         );
         let same_path: Vec<&Root> = watched[1..]
             .iter()
@@ -1823,7 +2129,7 @@ mod tests {
         assert_eq!(same_path.len(), 2);
 
         // The rules root never merges into a mod root.
-        let watched = roots(rules_dir.path(), rules_dir.path(), &[], None, &[]);
+        let watched = roots(rules_dir.path(), rules_dir.path(), &[], None, &[], &[]);
         assert_eq!(watched.len(), 2);
         assert_eq!(watched[0].role, RootRole::Rules);
         assert_eq!(watched[1].role, RootRole::Mods);
@@ -1835,7 +2141,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("events")).unwrap();
         fs::write(dir.path().join("events").join("x.txt"), "x = 1\n").unwrap();
-        let watched = roots(dir.path(), dir.path(), &[], None, &[]);
+        let watched = roots(dir.path(), dir.path(), &[], None, &[], &[]);
         assert_eq!(watched.len(), 2);
         let before = fingerprint(&watched, Some(&[]));
 
@@ -1859,6 +2165,7 @@ mod tests {
             workspace.path(),
             &[workspace.path().to_path_buf()],
             None,
+            &[],
             &[],
         );
         let paths: Vec<PathBuf> = watched.iter().map(|r| r.path.clone()).collect();
@@ -1890,6 +2197,7 @@ mod tests {
             &[parent.path().to_path_buf()],
             Some(vanilla.path()),
             &[],
+            &[],
         );
 
         let before = fingerprint(&watched, Some(&[]));
@@ -1916,6 +2224,7 @@ mod tests {
             &[],
             Some(vanilla.path()),
             &["ignored".to_string()],
+            &[],
         );
         let watched_dir = watched.iter().find(|r| r.path == dir.path()).unwrap();
         assert!(watched_dir.ignore_dirs == ["ignored"]);
@@ -1950,6 +2259,7 @@ mod tests {
             &[],
             None,
             &["docs/tmp".to_string()],
+            &[],
         );
         let before = fingerprint(&watched, Some(&[]));
         fs::write(dir.path().join("docs").join("tmp").join("a.txt"), "x").unwrap();

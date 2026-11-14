@@ -138,6 +138,7 @@ pub(super) fn run(args: ValidateArgs) {
             &parent_roots,
             vanilla.as_deref(),
             &ignore_dirs,
+            &ignore_files,
         ))
     });
 
