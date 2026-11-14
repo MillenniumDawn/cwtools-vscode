@@ -1023,13 +1023,14 @@ mod tests {
 
     #[test]
     fn root_descriptor_observability_matches_filesystem_case_lookup() {
+        use cwtools_file_manager::file_manager::read_root_descriptor;
+
         let dir = tempfile::tempdir().unwrap();
         let descriptor = dir.path().join("Descriptor.MOD");
         fs::write(&descriptor, "replace_path = common\n").unwrap();
-        let loaded =
-            cwtools_file_manager::file_manager::read_root_descriptor(dir.path()).is_some();
+        let loaded = read_root_descriptor(dir.path()).is_some();
         let mut root = mods_root(dir.path());
-        root.ignore_files = vec!["*.mod".to_string()];
+        root.ignore_files = vec!["*".to_string()];
         edit_is_observed(&[root], &[], &descriptor, loaded);
     }
 
