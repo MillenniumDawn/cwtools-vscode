@@ -18,18 +18,7 @@ use cwtools_validation::{
 use crate::Backend;
 use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, uri_to_path_str};
-use crate::state::{LocDiskRead, LocDocumentCache};
-
-enum PublicationGuard<'a> {
-    Any,
-    Closed,
-    LocDisk(&'a LocDiskRead),
-}
-
-struct LocDiskAcceptance<'a> {
-    read: &'a LocDiskRead,
-    changed: &'a mut HashSet<String>,
-}
+use crate::state::LocDocumentCache;
 
 pub(crate) struct ValidatedScript {
     pub(crate) ast: Arc<ParsedFile>,
@@ -1313,10 +1302,8 @@ impl Backend {
         version: Option<i32>,
         source_hash: Option<u64>,
     ) {
-        self.publish_filtered_with_closed_state(
-            uri, diagnostics, version, source_hash, PublicationGuard::Any,
-        )
-        .await;
+        self.publish_filtered_with_closed_state(uri, diagnostics, version, source_hash, false)
+            .await;
     }
 
     pub(crate) async fn publish_if_closed(
@@ -1325,25 +1312,8 @@ impl Backend {
         diagnostics: Vec<Diagnostic>,
         source_hash: Option<u64>,
     ) {
-        self.publish_filtered_with_closed_state(
-            uri, diagnostics, None, source_hash, PublicationGuard::Closed,
-        )
-        .await;
-    }
-
-    pub(crate) async fn publish_loc_disk_diagnostics(
-        &self,
-        uri: Url,
-        diagnostics: Vec<Diagnostic>,
-        source_hash: Option<u64>,
-        read: &LocDiskRead,
-    ) {
-        let ready = self.state.index_ready.load(std::sync::atomic::Ordering::Relaxed);
-        let diagnostics = if ready { diagnostics } else { Vec::new() };
-        self.publish_filtered_with_closed_state(
-            uri, diagnostics, None, source_hash, PublicationGuard::LocDisk(read),
-        )
-        .await;
+        self.publish_filtered_with_closed_state(uri, diagnostics, None, source_hash, true)
+            .await;
     }
 
     async fn publish_filtered_with_closed_state(
@@ -1352,7 +1322,7 @@ impl Backend {
         mut diagnostics: Vec<Diagnostic>,
         version: Option<i32>,
         source_hash: Option<u64>,
-        guard: PublicationGuard<'_>,
+        require_closed: bool,
     ) {
         let prepared = self
             .prepare_baseline(&uri, &diagnostics, version, source_hash)
@@ -1363,11 +1333,8 @@ impl Backend {
         }
         {
             let docs = self.state.documents.lock();
-            match guard {
-                PublicationGuard::Closed if docs.contains_key(uri.as_str()) => return,
-                PublicationGuard::LocDisk(read)
-                    if !docs.loc_disk_read_is_current(uri.as_str(), read) => return,
-                _ => {}
+            if require_closed && docs.contains_key(uri.as_str()) {
+                return;
             }
             if let Some(version) = version {
                 let Some(document) = docs.get(uri.as_str()) else {
@@ -2140,24 +2107,22 @@ impl Backend {
         (!cancel.is_cancelled()).then_some(outcome)
     }
 
-    /// Accept disk state only for the read captured before I/O, not merely
-    /// because the document happens to be closed again after parsing.
-    pub(crate) async fn parse_and_validate_disk_loc(
+    /// Validate a watched localisation file and return its key changes to the
+    /// batch, or reject it if an open buffer took ownership while it was read.
+    pub(crate) async fn parse_and_validate_watched_loc(
         &self,
         uri: &str,
         text: &str,
-        trigger: crate::ValidateTrigger,
-        read: &LocDiskRead,
     ) -> Option<(Vec<Diagnostic>, HashSet<String>)> {
         let mut changed = HashSet::new();
         let (diagnostics, _) = self
             .parse_and_validate_inner(
                 uri,
                 text,
-                trigger,
+                crate::ValidateTrigger::Watched,
                 None,
                 None,
-                Some(LocDiskAcceptance { read, changed: &mut changed }),
+                Some(&mut changed),
             )
             .await?;
         Some((diagnostics, changed))
@@ -2170,7 +2135,7 @@ impl Backend {
         trigger: crate::ValidateTrigger,
         parsed_version: Option<i32>,
         cancel: Option<&CancelFlag>,
-        disk_loc: Option<LocDiskAcceptance<'_>>,
+        watched_changed: Option<&mut HashSet<String>>,
     ) -> Option<(Vec<Diagnostic>, Option<ValidatedScript>)> {
         if self.is_ignored_uri(uri) {
             self.clear_ignored_file_state(uri);
@@ -2203,9 +2168,6 @@ impl Backend {
                     // between the check and the writes.
                     let docs = self.state.documents.lock();
                     if cancel.is_some_and(CancelFlag::is_cancelled)
-                        || disk_loc.as_ref().is_some_and(|work| {
-                            !docs.loc_disk_read_is_current(uri, work.read)
-                        })
                         || (matches!(
                             trigger,
                             crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
@@ -2282,8 +2244,8 @@ impl Backend {
             }
             // A changed key can fix or break CW100/CW122 on open files, so re-validate those
             // without a full rescan (#36), scoped to docs whose tokens mention a changed key.
-            if let Some(work) = disk_loc {
-                work.changed.extend(changed_keys);
+            if let Some(batch) = watched_changed {
+                batch.extend(changed_keys);
             } else if !changed_keys.is_empty() {
                 let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
@@ -2954,10 +2916,9 @@ mod info_revision_tests {
         *backend.state.hold_gate.lock() = Some(gate.clone());
         let worker = backend.clone();
         let watched_uri = uri.clone();
-        let read = backend.state.documents.lock().begin_loc_disk_read(&uri).unwrap();
         let watched = tokio::spawn(async move {
             worker
-                .parse_and_validate_disk_loc(&watched_uri, disk, crate::ValidateTrigger::Watched, &read)
+                .parse_and_validate_watched_loc(&watched_uri, disk)
                 .await
         });
         let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -2996,53 +2957,6 @@ mod info_revision_tests {
         assert!(!backend.state.loc_watched_overlay.read().contains_key(&uri));
         assert!(backend.state.loc_text.read().get("disk_key").is_none());
         assert!(backend.state.loc_locations.read().get("disk_key").is_none());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn superseded_disk_loc_parse_cannot_replace_newer_closed_state() {
-        use crate::state::{HoldGate, HoldPoint};
-        for trigger in [crate::ValidateTrigger::Watched, crate::ValidateTrigger::DidClose] {
-            for reopen in [false, true] {
-                let backend = idea_backend();
-                let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
-                let old = "l_english:\n old_disk:0 \"Old\"\n";
-                let new = "l_english:\n new_disk:0 \"New\"\n";
-                let read = backend.state.documents.lock().begin_loc_disk_read(&uri).unwrap();
-                let gate = HoldGate::new(HoldPoint::LocParsed);
-                *backend.state.hold_gate.lock() = Some(gate.clone());
-                let worker = backend.clone();
-                let old_uri = uri.clone();
-                let stale = tokio::spawn(async move {
-                    worker.parse_and_validate_disk_loc(&old_uri, old, trigger, &read).await
-                });
-                let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    while !gate.has_arrived() {
-                        tokio::task::yield_now().await;
-                    }
-                }).await;
-                if arrived.is_err() {
-                    gate.release();
-                    panic!("disk localisation parse did not reach the gate");
-                }
-                if reopen {
-                    open_loc_doc(&backend, &uri, "l_english:\n live:0 \"Live\"\n");
-                    backend.state.documents.lock().remove(&uri).unwrap();
-                }
-                let newer = backend.state.documents.lock().begin_loc_disk_read(&uri).unwrap();
-                assert!(backend.parse_and_validate_disk_loc(
-                    &uri, new, crate::ValidateTrigger::Watched, &newer,
-                ).await.is_some());
-                gate.release();
-                assert!(stale.await.unwrap().is_none());
-                let overlay = backend.loc_overlay_keys();
-                assert!(overlay.contains("new_disk"));
-                assert!(!overlay.contains("old_disk"));
-                assert!(backend.state.loc_text.read().get("new_disk").is_some());
-                assert!(backend.state.loc_text.read().get("old_disk").is_none());
-                assert!(backend.state.loc_locations.read().get("new_disk").is_some());
-                assert!(backend.state.loc_locations.read().get("old_disk").is_none());
-            }
-        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4553,31 +4467,6 @@ mod ignored_tests {
             published.is_err(),
             "stale diagnostics must not publish after the target changes"
         );
-    }
-
-    #[tokio::test]
-    async fn stale_loc_disk_publication_is_rejected_after_a_new_read_or_event() {
-        let uri = stale_publication_uri();
-        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
-        let old = backend.state.documents.lock().begin_loc_disk_read(&uri).unwrap();
-        let current = backend.state.documents.lock().begin_loc_disk_read(&uri).unwrap();
-        backend.publish_loc_disk_diagnostics(
-            uri.parse().unwrap(), Vec::new(), None, &current,
-        ).await;
-        assert_eq!(
-            socket.next().await.unwrap().method(),
-            "textDocument/publishDiagnostics"
-        );
-        backend.publish_loc_disk_diagnostics(
-            uri.parse().unwrap(), Vec::new(), None, &old,
-        ).await;
-        backend.state.documents.lock().invalidate_loc_disk_read(&uri);
-        backend.publish_loc_disk_diagnostics(
-            uri.parse().unwrap(), Vec::new(), None, &current,
-        ).await;
-        assert!(tokio::time::timeout(
-            std::time::Duration::from_millis(50), socket.next(),
-        ).await.is_err());
     }
 
     #[tokio::test]

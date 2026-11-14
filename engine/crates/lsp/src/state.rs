@@ -2,7 +2,7 @@
 use parking_lot::Condvar;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tower_lsp::Client;
@@ -440,16 +440,11 @@ const MAX_CONCURRENT_VALIDATIONS: usize = 2;
 pub(crate) struct DocumentStore {
     documents: HashMap<String, ParsedDoc>,
     content_hashes: HashMap<String, u64>,
-    loc_disk_reads: HashMap<String, Weak<()>>,
     validated: HashSet<String>,
     open_use_sites: OpenUseSiteIndex,
     line_indices: HashMap<String, Arc<LineIndex>>,
     pub(crate) retained_text_bytes: usize,
 }
-
-/// Identity of one in-flight localisation disk read. The store keeps only a
-/// weak reference so completed reads do not leave permanent URI tombstones.
-pub(crate) struct LocDiskRead(Arc<()>);
 
 #[derive(Default)]
 struct OpenUseSiteIndex {
@@ -753,7 +748,6 @@ impl DocumentStore {
         Self {
             documents: HashMap::new(),
             content_hashes: HashMap::new(),
-            loc_disk_reads: HashMap::new(),
             validated: HashSet::new(),
             open_use_sites: OpenUseSiteIndex::default(),
             line_indices: HashMap::new(),
@@ -763,30 +757,6 @@ impl DocumentStore {
 
     pub(crate) fn content_hash(&self, uri: &str) -> Option<u64> {
         self.content_hashes.get(uri).copied()
-    }
-
-    /// Capture before I/O, under the diagnostic publication and document locks.
-    pub(crate) fn begin_loc_disk_read(&mut self, uri: &str) -> Option<LocDiskRead> {
-        if self.documents.contains_key(uri) {
-            return None;
-        }
-        self.loc_disk_reads.retain(|_, read| read.strong_count() > 0);
-        let read = LocDiskRead(Arc::new(()));
-        self.loc_disk_reads
-            .insert(uri.to_string(), Arc::downgrade(&read.0));
-        Some(read)
-    }
-
-    pub(crate) fn loc_disk_read_is_current(&self, uri: &str, read: &LocDiskRead) -> bool {
-        !self.documents.contains_key(uri)
-            && self
-                .loc_disk_reads
-                .get(uri)
-                .is_some_and(|current| current.ptr_eq(&Arc::downgrade(&read.0)))
-    }
-
-    pub(crate) fn invalidate_loc_disk_read(&mut self, uri: &str) {
-        self.loc_disk_reads.remove(uri);
     }
 
     pub(crate) fn is_validated(&self, uri: &str) -> bool {
@@ -885,7 +855,6 @@ impl DocumentStore {
         self.open_use_sites.remove_file(&uri);
         let new_index_bytes = self.open_use_sites.capacity_bytes();
         self.validated.remove(&uri);
-        self.invalidate_loc_disk_read(&uri);
         self.documents.insert(uri.clone(), document);
         self.line_indices.insert(uri.clone(), line_index);
         self.content_hashes.insert(uri, content_hash);
@@ -1107,7 +1076,6 @@ impl DocumentStore {
 
     pub(crate) fn remove(&mut self, uri: &str) -> Option<ParsedDoc> {
         let document = self.documents.remove(uri)?;
-        self.invalidate_loc_disk_read(uri);
         let old_index_bytes = self
             .open_use_sites
             .file_bytes(uri)
@@ -1230,28 +1198,6 @@ mod semantic_line_index_tests {
                 assert_eq!(index.line(text, text.lines().count() as u32), "");
             }
         }
-    }
-
-    #[test]
-    fn localisation_disk_read_identity_survives_neither_replacement_nor_lifecycle_aba() {
-        let mut docs = DocumentStore::new();
-        let uri = "file:///localisation/test_l_english.yml";
-        let old = docs.begin_loc_disk_read(uri).unwrap();
-        let newer = docs.begin_loc_disk_read(uri).unwrap();
-        assert!(!docs.loc_disk_read_is_current(uri, &old));
-        assert!(docs.loc_disk_read_is_current(uri, &newer));
-        docs.open(uri.to_string(), document("live")).unwrap();
-        assert!(docs.begin_loc_disk_read(uri).is_none());
-        docs.remove(uri).unwrap();
-        assert!(!docs.loc_disk_read_is_current(uri, &newer));
-        let closed = docs.begin_loc_disk_read(uri).unwrap();
-        docs.invalidate_loc_disk_read(uri);
-        assert!(!docs.loc_disk_read_is_current(uri, &closed));
-        let completed = docs.begin_loc_disk_read(uri).unwrap();
-        drop(completed);
-        let other = docs.begin_loc_disk_read("file:///localisation/other_l_english.yml").unwrap();
-        assert_eq!(docs.loc_disk_reads.len(), 1);
-        drop(other);
     }
 
     #[test]
