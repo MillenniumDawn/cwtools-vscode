@@ -283,7 +283,8 @@ impl Backend {
                     })
                     .collect()
             };
-            let open_uris: HashSet<&str> = open_loc.iter().map(|(uri, _, _)| uri.as_str()).collect();
+            let open_uris: HashSet<&str> =
+                open_loc.iter().map(|(uri, _, _)| uri.as_str()).collect();
             {
                 let locations = self.state.loc_locations.read();
                 for key in keys {
@@ -516,7 +517,9 @@ impl Backend {
             })
             .await?;
         tokio::task::block_in_place(|| {
-            out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
+            out.sort_by(|a, b| {
+                (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start))
+            });
         });
         Ok(out)
     }

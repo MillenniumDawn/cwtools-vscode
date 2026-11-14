@@ -94,21 +94,19 @@ impl Backend {
         });
         if let Some(info) = rule_info {
             let locations = match &info.hint {
-                ReferenceHint::TypeRef { type_name, value } => {
-                    tokio::task::block_in_place(|| {
-                        let value = unquote(value);
-                        let defs = {
-                            let svc = self.state.info_service.read();
-                            svc.type_index
-                                .instances(type_name)
-                                .iter()
-                                .filter(|(_, inst)| inst.name == value)
-                                .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
-                                .collect::<Vec<_>>()
-                        };
-                        locations_at(self, defs, value, fallback)
-                    })
-                }
+                ReferenceHint::TypeRef { type_name, value } => tokio::task::block_in_place(|| {
+                    let value = unquote(value);
+                    let defs = {
+                        let svc = self.state.info_service.read();
+                        svc.type_index
+                            .instances(type_name)
+                            .iter()
+                            .filter(|(_, inst)| inst.name == value)
+                            .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
+                            .collect::<Vec<_>>()
+                    };
+                    locations_at(self, defs, value, fallback)
+                }),
                 ReferenceHint::Variable { name, .. } => tokio::task::block_in_place(|| {
                     let defs = {
                         let svc = self.state.info_service.read();
