@@ -18,6 +18,7 @@ def test_failure_retains_timeout_reproducer_and_limits(
     output = tmp_path / "result"
     monkeypatch.setenv("GITHUB_SHA", "abc123")
     process = MagicMock(spec=subprocess.Popen)
+    process.__enter__.return_value = process
     process.wait.return_value = 77
     spawn = MagicMock(return_value=process)
     monkeypatch.setattr(subprocess, "Popen", spawn)
@@ -52,6 +53,7 @@ def test_wall_timeout_stops_group_and_preserves_partial_artifact(
     (artifacts / "crash-partial").write_bytes(b"partial")
     monkeypatch.setenv("GITHUB_SHA", "abc123")
     process = MagicMock(spec=subprocess.Popen)
+    process.__enter__.return_value = process
     process.pid = 12345
     process.wait.side_effect = subprocess.TimeoutExpired("cargo", 1200)
     monkeypatch.setattr(subprocess, "Popen", MagicMock(return_value=process))
@@ -76,6 +78,7 @@ def test_wall_timeout_stops_group_and_preserves_partial_artifact(
 )
 def test_stop_group_signals_process_group(monkeypatch: pytest.MonkeyPatch) -> None:
     process = MagicMock(spec=subprocess.Popen)
+    process.__enter__.return_value = process
     process.pid = 12345
     process.wait.return_value = 0
     kill = MagicMock()
