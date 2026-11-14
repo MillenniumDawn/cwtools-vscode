@@ -314,7 +314,12 @@ fn fingerprint_tree(
 
 /// These structural inputs are read independently of file ignore globs.
 fn is_mod_descriptor(root: &Root, path: &Path) -> bool {
-    path == root.path.join("descriptor.mod")
+    let root_descriptor = path.parent() == Some(root.path.as_path())
+        && path.file_name().is_some_and(|name| {
+            name == "descriptor.mod"
+                || (cfg!(windows) && name.eq_ignore_ascii_case("descriptor.mod"))
+        });
+    root_descriptor
         || (path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mod"))
@@ -1026,6 +1031,18 @@ mod tests {
         assert_eq!(classify_directory(dir.path()), DirectoryType::MultipleMod);
         edit_is_observed(&watched, &[], &dir.path().join("custom/skip.txt"), false);
         edit_is_observed(&watched, &[], &dir.path().join("custom/keep.txt"), true);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn case_variant_root_descriptor_bypasses_file_ignores_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let descriptor = dir.path().join("Descriptor.MOD");
+        fs::write(&descriptor, "replace_path = common\n").unwrap();
+        assert!(cwtools_file_manager::file_manager::read_root_descriptor(dir.path()).is_some());
+        let mut root = mods_root(dir.path());
+        root.ignore_files = vec!["*.mod".to_string()];
+        edit_is_observed(&[root], &[], &descriptor, true);
     }
 
     #[test]
