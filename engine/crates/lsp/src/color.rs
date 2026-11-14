@@ -581,9 +581,15 @@ mod tests {
             HoldPoint::PrepareRenameWalk,
             HoldPoint::GotoWalk,
             HoldPoint::ReferencesWalk,
+            HoldPoint::LocCursorTextWalk,
+            HoldPoint::LocCursorRuleWalk,
+            HoldPoint::LocRenameScanWalk,
         ] {
             let (backend, workspace) = crate::testing::workspace_backend();
-            let is_loc = point == HoldPoint::LocSymbolWalk;
+            let is_loc = matches!(
+                point,
+                HoldPoint::LocSymbolWalk | HoldPoint::LocCursorTextWalk
+            );
             let path = if is_loc {
                 "localisation/test_l_english.yml"
             } else {
@@ -592,9 +598,17 @@ mod tests {
             let uri = crate::paths::path_to_uri(&workspace.path().join(path));
             let text = if is_loc {
                 "l_english:\n test_key:0 \"Test\"\n"
+            } else if point == HoldPoint::LocRenameScanWalk {
+                "test_key"
             } else {
                 "test = { color = { 1 1 1 } }"
             };
+            if point == HoldPoint::LocRenameScanWalk {
+                backend.state.loc_live_overlay.write().insert(
+                    "fixture".to_string(),
+                    std::collections::HashSet::from(["test_key".to_string()]),
+                );
+            }
             backend
                 .state
                 .hierarchical_symbols
@@ -655,6 +669,13 @@ mod tests {
                     let params =
                         serde_json::from_value(serde_json::json!({ "query": "test" })).unwrap();
                     worker.symbol_request_impl(params).await.unwrap();
+                } else if matches!(
+                    point,
+                    HoldPoint::LocCursorTextWalk | HoldPoint::LocCursorRuleWalk
+                ) {
+                    let _ = worker
+                        .loc_key_at_cursor(&request_uri, Position::new(0, 0), "common/test.txt")
+                        .await;
                 } else if point == HoldPoint::GotoWalk {
                     let params = serde_json::from_value(serde_json::json!({
                         "textDocument": { "uri": request_uri },
@@ -670,7 +691,10 @@ mod tests {
                     }))
                     .unwrap();
                     worker.references_impl(params).await.unwrap();
-                } else if point == HoldPoint::PrepareRenameWalk {
+                } else if matches!(
+                    point,
+                    HoldPoint::PrepareRenameWalk | HoldPoint::LocRenameScanWalk
+                ) {
                     let params = serde_json::from_value(serde_json::json!({
                         "textDocument": { "uri": request_uri },
                         "position": { "line": 0, "character": 0 }

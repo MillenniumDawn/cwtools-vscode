@@ -116,51 +116,62 @@ impl Backend {
     ) -> Option<String> {
         if crate::paths::is_loc_file(uri) {
             let text = self.file_text_for(uri).await?;
-            let encoding = self.state.config.read().position_encoding.clone();
-            let line = text.lines().nth(pos.line as usize).unwrap_or("");
-            if let Some((key, _, _)) =
-                loc_ref_at_cursor_with_encoding(line, pos.character, &encoding)
-            {
-                return Some(key.to_lowercase());
-            }
-            // `line` above is already `text.lines().nth(pos.line)`, which is all
-            // `lsp_pos_to_source_in_text` and `word_at_position` would each go
-            // and find again (#471).
-            let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
-            let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
-            let word = word_in_line(line, col)?;
-            let lower = word.to_lowercase();
-            if self.is_known_loc_key(&lower) {
-                return Some(lower);
-            }
-            if let Some(colon) = line.find(':')
-                && let Some(word_col) = line.find(&word)
-                && word_col < colon
-            {
-                return Some(lower);
-            }
-            return None;
+            return tokio::task::block_in_place(|| {
+                #[cfg(test)]
+                self.hold(crate::state::HoldPoint::LocCursorTextWalk);
+                let encoding = self.state.config.read().position_encoding.clone();
+                let line = text.lines().nth(pos.line as usize).unwrap_or("");
+                if let Some((key, _, _)) =
+                    loc_ref_at_cursor_with_encoding(line, pos.character, &encoding)
+                {
+                    return Some(key.to_lowercase());
+                }
+                // `line` above is already `text.lines().nth(pos.line)`, which is all
+                // `lsp_pos_to_source_in_text` and `word_at_position` would each go
+                // and find again (#471).
+                let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+                let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+                let word = word_in_line(line, col)?;
+                let lower = word.to_lowercase();
+                if self.is_known_loc_key(&lower) {
+                    return Some(lower);
+                }
+                if let Some(colon) = line.find(':')
+                    && let Some(word_col) = line.find(&word)
+                    && word_col < colon
+                {
+                    return Some(lower);
+                }
+                None
+            });
         }
-        if let Some(info) = self.rule_info_at_cursor(uri, pos, logical_path)
+        let info = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::LocCursorRuleWalk);
+            self.rule_info_at_cursor(uri, pos, logical_path)
+        });
+        if let Some(info) = info
             && let ReferenceHint::LocRef { key } = info.hint
         {
             return Some(key.trim_matches('"').to_lowercase());
         }
         let text = self.file_text_for(uri).await?;
-        let encoding = self.state.config.read().position_encoding.clone();
-        // One scan for the line, then both the column and the word off it; the
-        // pair used to walk the document twice over (#471). A missing line
-        // returns None here instead of at `word_at_position`'s own `?`.
-        let line = text.lines().nth(pos.line as usize)?;
-        let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
-        let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
-        let word = word_in_line(line, col)?;
-        let lower = word.to_lowercase();
-        if self.is_known_loc_key(&lower) {
-            Some(lower)
-        } else {
-            None
-        }
+        tokio::task::block_in_place(|| {
+            let encoding = self.state.config.read().position_encoding.clone();
+            // One scan for the line, then both the column and the word off it; the
+            // pair used to walk the document twice over (#471). A missing line
+            // returns None here instead of at `word_at_position`'s own `?`.
+            let line = text.lines().nth(pos.line as usize)?;
+            let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+            let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+            let word = word_in_line(line, col)?;
+            let lower = word.to_lowercase();
+            if self.is_known_loc_key(&lower) {
+                Some(lower)
+            } else {
+                None
+            }
+        })
     }
 
     pub(crate) async fn loc_file_uris(&self) -> Vec<String> {
@@ -544,24 +555,28 @@ impl Backend {
                 .collect();
             text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
             let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
-            let indexed = index_snapshots(&texts, &self.position_encoding());
-            let mut all_locs: Vec<Location> =
-                locations_at_with_lines(self, definitions, &instance_name, fallback, &indexed);
-            for (file_uri, line0, col, _) in
-                self.resolve_value_sites(&sites, &instance_name, &texts)
-            {
-                all_locs.push(Location {
-                    uri: parse_uri(&file_uri, fallback),
-                    range: self.source_range_with_lines(
-                        indexed.get(file_uri.as_str()),
-                        line0,
-                        col,
-                        &instance_name,
-                    ),
-                });
-            }
+            let all_locs = tokio::task::block_in_place(|| {
+                #[cfg(test)]
+                self.hold(crate::state::HoldPoint::ReferencesResultWalk);
+                let indexed = index_snapshots(&texts, &self.position_encoding());
+                let mut all_locs: Vec<Location> =
+                    locations_at_with_lines(self, definitions, &instance_name, fallback, &indexed);
+                for (file_uri, line0, col, _) in
+                    self.resolve_value_sites(&sites, &instance_name, &texts)
+                {
+                    all_locs.push(Location {
+                        uri: parse_uri(&file_uri, fallback),
+                        range: self.source_range_with_lines(
+                            indexed.get(file_uri.as_str()),
+                            line0,
+                            col,
+                            &instance_name,
+                        ),
+                    });
+                }
 
-            let all_locs = dedup_locations(all_locs);
+                dedup_locations(all_locs)
+            });
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
             }
@@ -590,8 +605,10 @@ impl Backend {
             let text_uris: Vec<String> =
                 pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
             let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
-            let indexed = index_snapshots(&texts, &self.position_encoding());
-            let all_locs = locations_at_with_lines(self, pairs, &symbol, fallback, &indexed);
+            let all_locs = tokio::task::block_in_place(|| {
+                let indexed = index_snapshots(&texts, &self.position_encoding());
+                locations_at_with_lines(self, pairs, &symbol, fallback, &indexed)
+            });
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
             }
@@ -1477,6 +1494,50 @@ mod tests {
         assert_eq!(texts, vec!["ÿ\n", "😀\n"]);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn reference_result_walk_releases_async_worker() {
+        use crate::state::{HoldGate, HoldPoint};
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        let fixture = indexed_type_navigation_fixture(2);
+        let gate = HoldGate::new(HoldPoint::ReferencesResultWalk);
+        *fixture.state.hold_gate.lock() = Some(gate.clone());
+        let watchdog_gate = gate.clone();
+        let watchdog_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watchdog_flag = watchdog_fired.clone();
+        let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if watchdog_rx.recv_timeout(Duration::from_secs(15)).is_err() {
+                watchdog_flag.store(true, Ordering::Release);
+                watchdog_gate.release();
+            }
+        });
+        let backend = fixture.backend.clone();
+        let params = fixture.references_params(false);
+        let task = tokio::spawn(async move { backend.references_impl(params).await });
+        let arrived = tokio::time::timeout(Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            let _ = watchdog_tx.send(());
+            watchdog.join().unwrap();
+            panic!("reference result walk did not reach its gate");
+        }
+        let progress =
+            tokio::time::timeout(Duration::from_secs(5), tokio::spawn(async { 42 })).await;
+        gate.release();
+        let _ = watchdog_tx.send(());
+        watchdog.join().unwrap();
+        task.await.unwrap().unwrap();
+        assert!(!watchdog_fired.load(Ordering::Acquire));
+        assert_eq!(progress.unwrap().unwrap(), 42);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn references_impl_returns_complete_results_or_budget_error() {
         let fixture = indexed_type_navigation_fixture(20);
@@ -1550,7 +1611,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn rename_impl_returns_complete_edits_or_budget_error() {
         let fixture = indexed_type_navigation_fixture(20);
         let edit = fixture
@@ -1601,7 +1662,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn rename_impl_refuses_unresolvable_references_with_request_failed() {
         let fixture = indexed_type_navigation_fixture(1);
         let use_path = Url::parse(&fixture.use_uris[0])
@@ -1627,7 +1688,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn rename_impl_refuses_edits_outside_the_editable_roots_with_request_failed() {
         let fixture = indexed_type_navigation_fixture(1);
         fixture.state.config.write().editable_roots = Arc::from([]);

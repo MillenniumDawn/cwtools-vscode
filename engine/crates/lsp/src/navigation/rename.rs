@@ -517,14 +517,18 @@ impl Backend {
         let Some(text) = self.file_text_for(uri).await else {
             return Ok(None);
         };
-        let scan =
-            self.scan_loc_rename_file(uri, &text, &HashMap::from([(key.clone(), key.clone())]))?;
-        Ok(scan
-            .edits
-            .iter()
-            .flat_map(|(_, edits)| edits)
-            .any(|edit| edit.range.start <= pos && pos <= edit.range.end)
-            .then_some(key))
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::LocRenameScanWalk);
+            let scan =
+                self.scan_loc_rename_file(uri, &text, &HashMap::from([(key.clone(), key.clone())]))?;
+            Ok(scan
+                .edits
+                .iter()
+                .flat_map(|(_, edits)| edits)
+                .any(|edit| edit.range.start <= pos && pos <= edit.range.end)
+                .then_some(key))
+        })
     }
 
     async fn collect_loc_rename_usages(

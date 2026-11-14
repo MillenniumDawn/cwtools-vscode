@@ -50,6 +50,10 @@ pub(crate) enum HoldPoint {
     PrepareRenameWalk,
     GotoWalk,
     ReferencesWalk,
+    LocCursorTextWalk,
+    LocCursorRuleWalk,
+    ReferencesResultWalk,
+    LocRenameScanWalk,
     ExportSweepSnapshot,
     LoadingBarActiveChecked,
 }
