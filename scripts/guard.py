@@ -473,7 +473,7 @@ def run_guard(config: Config) -> int:
     if config.build:
         print("guard: cargo build --release -p cwtools_cli")
         built = subprocess.run(
-            ["cargo", "build", "--release", "-p", "cwtools_cli"],
+            ["cargo", "build", "--locked", "--release", "-p", "cwtools_cli"],
             cwd=config.repo_root / "engine",
             check=False,
         )
@@ -548,7 +548,7 @@ def run_guard(config: Config) -> int:
                 f"guard: cargo build --release -p cwtools_cli ({comparison_revision})"
             )
             comparison_build = subprocess.run(
-                ["cargo", "build", "--release", "-p", "cwtools_cli"],
+                ["cargo", "build", "--locked", "--release", "-p", "cwtools_cli"],
                 cwd=compare_worktree / "engine",
                 check=False,
             )
