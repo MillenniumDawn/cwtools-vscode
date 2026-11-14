@@ -162,7 +162,9 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
         "GITHUB_SHA": SHA,
     }
     for succeed_at, fail_code, expected, attempts in [
-        (3, 2, 0, 3), (999, 2, 1, 90), (999, 1, 1, 1)
+        (3, 2, 0, 3),
+        (999, 2, 1, 90),
+        (999, 1, 1, 1),
     ]:
         state.unlink(missing_ok=True)
         result = subprocess.run(
