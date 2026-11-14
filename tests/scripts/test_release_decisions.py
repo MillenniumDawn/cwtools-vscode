@@ -129,13 +129,14 @@ def test_ci_gate_applies_to_both_channels(channel: str) -> None:
     assert "needs: [check, verify, build-server]" in job_scope(workflow, "package")
 
 
-
 def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
     """Run the actual workflow shell with fake API, checker, and clock."""
     workflow = (
         Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
     ).read_text(encoding="utf-8")
-    section = workflow.split("- name: Require successful CI for the source commit", 1)[1]
+    section = workflow.split(
+        "- name: Require successful CI for the source commit", 1
+    )[1]
     script = section.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     script = textwrap.dedent(script)
     bindir = tmp_path / "bin"
