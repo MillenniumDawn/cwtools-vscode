@@ -3261,4 +3261,3 @@ mod tests {
         assert_eq!(vanilla.files.len(), 1);
     }
 }
-

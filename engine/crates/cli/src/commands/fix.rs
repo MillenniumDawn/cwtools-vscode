@@ -555,4 +555,3 @@ mod tests {
         assert_eq!(cwtools_parser::fix::apply_edits(text, &kept), "Xbbb\n");
     }
 }
-
