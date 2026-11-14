@@ -315,7 +315,9 @@ fn fingerprint_tree(
 /// These structural inputs are read independently of file ignore globs.
 fn is_mod_descriptor(root: &Root, path: &Path) -> bool {
     path == root.path.join("descriptor.mod")
-        || (path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mod"))
+        || (path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mod"))
             && ["mod", "mods"]
                 .iter()
                 .any(|name| path.parent() == Some(root.path.join(name).as_path())))
@@ -826,7 +828,11 @@ mod tests {
         fs::write(file, "before").unwrap();
         let before = fingerprint(watched, Some(folders));
         fs::write(file, "after, with a different length").unwrap();
-        assert_eq!(fingerprint(watched, Some(folders)) != before, expected, "{file:?}");
+        assert_eq!(
+            fingerprint(watched, Some(folders)) != before,
+            expected,
+            "{file:?}"
+        );
     }
 
     #[test]
@@ -870,7 +876,10 @@ mod tests {
         .unwrap();
         for (relative, expected) in cases {
             assert_eq!(
-                report.files.iter().any(|file| file.path == dir.path().join(relative)),
+                report
+                    .files
+                    .iter()
+                    .any(|file| file.path == dir.path().join(relative)),
                 expected,
                 "{relative}",
             );
@@ -892,11 +901,23 @@ mod tests {
             &["target".to_string()],
             &["common/target/skip.txt".to_string()],
         );
-        edit_is_observed(&watched, &rules.folders, &dir.path().join("common/target/skip.txt"), false);
-        edit_is_observed(&watched, &rules.folders, &dir.path().join("common/target/keep.txt"), true);
+        edit_is_observed(
+            &watched,
+            &rules.folders,
+            &dir.path().join("common/target/skip.txt"),
+            false,
+        );
+        edit_is_observed(
+            &watched,
+            &rules.folders,
+            &dir.path().join("common/target/keep.txt"),
+            true,
+        );
         let mut config = workspace_discovery_config(dir.path(), Some(&rules));
         config.exclude_dir_patterns.push("target".to_string());
-        config.exclude_patterns.push("common/target/skip.txt".to_string());
+        config
+            .exclude_patterns
+            .push("common/target/skip.txt".to_string());
         let loaded = FileManager::new(config).discover_files().unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].path, dir.path().join("common/target/keep.txt"));
@@ -912,12 +933,15 @@ mod tests {
         let ignores = ["common/skip.txt".to_string()];
         let workspace = roots(rules_dir.path(), dir.path(), &[], None, &[], &ignores);
         edit_is_observed(&workspace, &[], &file, false);
-        let overlapping = roots(
-            rules_dir.path(), dir.path(), &[common], None, &[], &ignores,
-        );
+        let overlapping = roots(rules_dir.path(), dir.path(), &[common], None, &[], &ignores);
         edit_is_observed(&overlapping, &[], &file, true);
         let vanilla = roots(
-            rules_dir.path(), dir.path(), &[], Some(dir.path()), &[], &ignores,
+            rules_dir.path(),
+            dir.path(),
+            &[],
+            Some(dir.path()),
+            &[],
+            &ignores,
         );
         assert_eq!(vanilla.len(), 3);
         assert!(vanilla[2].ignore_files.is_empty());
@@ -938,12 +962,21 @@ mod tests {
         let watched = [watched_root];
         edit_is_observed(&watched, &[], &root.join("alpha/common/skip.txt"), false);
         edit_is_observed(&watched, &[], &root.join("alpha/common/keep.txt"), true);
-        edit_is_observed(&watched, &[], &root.join("alpha/localisation/a_l_english.yml"), true);
+        edit_is_observed(
+            &watched,
+            &[],
+            &root.join("alpha/localisation/a_l_english.yml"),
+            true,
+        );
         edit_is_observed(&watched, &[], &root.join("alpha/gfx/icon.dds"), true);
         edit_is_observed(&watched, &[], &root.join("alpha/common/nested.mod"), false);
         edit_is_observed(&watched, &[], &root.join("unowned.txt"), false);
         // A second member loads the same file using a different logical path.
-        fs::write(root.join("mods/common.mod"), "name = Common\npath = alpha/common\n").unwrap();
+        fs::write(
+            root.join("mods/common.mod"),
+            "name = Common\npath = alpha/common\n",
+        )
+        .unwrap();
         edit_is_observed(&watched, &[], &root.join("alpha/common/skip.txt"), true);
     }
 
@@ -967,9 +1000,18 @@ mod tests {
         root.ignore_dirs = vec!["mods".to_string()];
         let watched = [root];
         let before = fingerprint(&watched, Some(&[]));
-        fs::write(&descriptor, "name = Member\npath = member\nreplace_path = common\n").unwrap();
+        fs::write(
+            &descriptor,
+            "name = Member\npath = member\nreplace_path = common\n",
+        )
+        .unwrap();
         assert_ne!(fingerprint(&watched, Some(&[])), before);
-        edit_is_observed(&watched, &[], &collection.path().join("descriptor.mod"), true);
+        edit_is_observed(
+            &watched,
+            &[],
+            &collection.path().join("descriptor.mod"),
+            true,
+        );
     }
 
     #[test]
@@ -991,7 +1033,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("mods")).unwrap();
         fs::create_dir(dir.path().join("member")).unwrap();
-        fs::write(dir.path().join("mods/member.mod"), "name = Member\npath = member\n").unwrap();
+        fs::write(
+            dir.path().join("mods/member.mod"),
+            "name = Member\npath = member\n",
+        )
+        .unwrap();
         let watched = [mods_root(dir.path())];
         assert_eq!(classify_directory(dir.path()), DirectoryType::MultipleMod);
         let before = fingerprint(&watched, Some(&[]));
