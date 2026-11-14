@@ -260,7 +260,7 @@ jobs:
       # artifact also validate their artifact-level digest, while this gives
       # publishers an explicit check of the exact archives they upload.
       - name: Record packaged VSIX digests
-        run: cd artifacts/vsix && sha256sum *.vsix > SHA256SUMS
+        run: cd artifacts/vsix && sha256sum -- *.vsix > SHA256SUMS
       # The single hand-off to the three publish jobs. They all publish these
       # bytes, so a failed target can be re-run from the artifact rather than
       # rebuilt -- and every target ships identical files.
