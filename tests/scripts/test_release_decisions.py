@@ -146,7 +146,8 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
         "gh": '#!/bin/sh\ncat "$STATE" 2>/dev/null || echo 0\n',
         "python3": (
             '#!/bin/sh\nread n\nn=$((n+1))\necho "$n" > "$STATE"\n'
-            '[ "$n" -ge "$SUCCEED_AT" ]\n'
+            'if [ "$n" -ge "$SUCCEED_AT" ]; then exit 0; fi\n'
+            'exit "${FAIL_CODE:-2}"\n'
         ),
         "sleep": "#!/bin/sh\nexit 0\n",
     }.items():
@@ -160,13 +161,28 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
         "GITHUB_REPOSITORY": "test/repo",
         "GITHUB_SHA": SHA,
     }
-    for succeed_at, expected, attempts in [(3, 0, 3), (999, 1, 90)]:
+    for succeed_at, fail_code, expected, attempts in [
+        (3, 2, 0, 3), (999, 2, 1, 90), (999, 1, 1, 1)
+    ]:
         state.unlink(missing_ok=True)
         result = subprocess.run(
             ["bash", "-o", "pipefail", "-c", script],
-            env={**env, "SUCCEED_AT": str(succeed_at)},
+            env={**env, "SUCCEED_AT": str(succeed_at), "FAIL_CODE": str(fail_code)},
             capture_output=True,
             check=False,
         )
         assert result.returncode == expected, result.stderr
         assert int(state.read_text(encoding="utf-8")) == attempts
+
+
+def test_ci_status_distinguishes_pending_from_terminal_and_invalid() -> None:
+    assert release_decisions.ci_status(_pages(), SHA) == "pending"
+    assert release_decisions.ci_status(
+        _pages(_run(status="in_progress", conclusion=None)), SHA
+    ) == "pending"
+    assert (
+        release_decisions.ci_status(_pages(_run(conclusion="failure")), SHA)
+        == "failure"
+    )
+    assert release_decisions.ci_status([{"message": "API error"}], SHA) == "failure"
+    assert release_decisions.ci_status(_pages(_run()), SHA) == "success"
