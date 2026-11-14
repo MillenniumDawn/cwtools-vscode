@@ -15,6 +15,7 @@ use tower_lsp::{LspService, Server};
 mod access;
 mod baseline;
 mod baseline_runtime;
+mod build_identity;
 mod cache_purge;
 mod call_hierarchy;
 mod code_action;
@@ -44,6 +45,7 @@ mod testing;
 mod transport;
 mod validate;
 
+pub use build_identity::server_version;
 pub(crate) use cursor::{RuleCursorInfo, hint_from_rule_right};
 pub(crate) use server::{LoadingBar, UpdateFileList};
 pub(crate) use state::{
