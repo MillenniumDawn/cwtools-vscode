@@ -38,7 +38,32 @@ def run() -> int:
         executable = Path(directory) / "actionlint"
         executable.write_bytes(binary)
         executable.chmod(0o755)
-        return subprocess.run([str(executable)], check=False).returncode
+        result = subprocess.run([str(executable)], check=False).returncode
+        if result:
+            return result
+        return check_fixtures(executable, Path(directory))
+
+
+def check_fixtures(executable: Path, directory: Path) -> int:
+    """Check that representative semantic failures are actually detected."""
+    fixtures = {
+        "expression": ("    if: ${{ github.no_such_property }}\n    steps:\n      - run: echo ok\n", "no_such_property"),
+        "dependency": ("    needs: missing_job\n    steps:\n      - run: echo ok\n", "missing_job"),
+        "input": ("    steps:\n      - uses: actions/checkout@v4\n        with:\n          invalid_fixture_input: true\n", "invalid_fixture_input"),
+    }
+    for name, (body, expected) in fixtures.items():
+        fixture = directory / f"{name}.yml"
+        fixture.write_text("on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n" + body)
+        result = subprocess.run(
+            [str(executable), "-no-color", str(fixture)],
+            check=False, capture_output=True, text=True,
+        )
+        output = result.stdout + result.stderr
+        if result.returncode == 0 or expected not in output:
+            print(f"actionlint fixture {name} did not produce its expected diagnostic:\n{output}", file=sys.stderr)
+            return 1
+        print(f"actionlint fixture {name}: detected")
+    return 0
 
 
 def main() -> int:
