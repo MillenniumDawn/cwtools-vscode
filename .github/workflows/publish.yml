@@ -130,13 +130,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # CI can still be queued, running, or not yet visible when Publish starts.
-          # Retry failures as well as transient API errors, but never publish
-          # without a complete successful result for this exact commit.
+          # Retry only missing or pending CI, never errors or failed CI.
           for attempt in $(seq 1 90); do
-            if gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100" |
-              python3 scripts/build/release_decisions.py; then
+            if ! response=$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100"); then
+              echo "::error::Unable to retrieve CI results."
+              exit 1
+            fi
+            if printf '%s' "$response" | python3 scripts/build/release_decisions.py; then
               exit 0
+            else
+              result=$?
+            fi
+            if [ "$result" -ne 2 ]; then
+              echo "::error::CI failed or returned invalid results."
+              exit 1
             fi
             if [ "$attempt" -lt 90 ]; then
               echo "CI not yet successful; retrying in 60 seconds ($attempt/90)."
