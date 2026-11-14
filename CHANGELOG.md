@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.9
+
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
