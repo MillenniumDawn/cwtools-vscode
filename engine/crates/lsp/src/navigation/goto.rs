@@ -49,17 +49,19 @@ impl Backend {
             return Vec::new();
         };
         let text = self.file_text_for(file_uri.as_ref()).await;
-        let lines = text
-            .as_deref()
-            .map(|text| DocLines::new(text, self.position_encoding()));
-        vec![self.source_location_with_lines(
-            file_uri.as_ref(),
-            line,
-            0,
-            key,
-            fallback,
-            lines.as_ref(),
-        )]
+        tokio::task::block_in_place(|| {
+            let lines = text
+                .as_deref()
+                .map(|text| DocLines::new(text, self.position_encoding()));
+            vec![self.source_location_with_lines(
+                file_uri.as_ref(),
+                line,
+                0,
+                key,
+                fallback,
+                lines.as_ref(),
+            )]
+        })
     }
 
     pub(crate) async fn goto_definition_impl(
@@ -85,9 +87,14 @@ impl Backend {
             return Ok(self.cwt_goto(&uri, pos, fallback).await);
         }
 
-        if let Some(info) = self.rule_info_at_cursor(&uri, pos, &logical_path) {
+        let rule_info = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::GotoWalk);
+            self.rule_info_at_cursor(&uri, pos, &logical_path)
+        });
+        if let Some(info) = rule_info {
             let locations = match &info.hint {
-                ReferenceHint::TypeRef { type_name, value } => {
+                ReferenceHint::TypeRef { type_name, value } => tokio::task::block_in_place(|| {
                     let value = unquote(value);
                     let defs = {
                         let svc = self.state.info_service.read();
@@ -99,14 +106,14 @@ impl Backend {
                             .collect::<Vec<_>>()
                     };
                     locations_at(self, defs, value, fallback)
-                }
-                ReferenceHint::Variable { name, .. } => {
+                }),
+                ReferenceHint::Variable { name, .. } => tokio::task::block_in_place(|| {
                     let defs = {
                         let svc = self.state.info_service.read();
                         svc.find_variable_definitions(name)
                     };
                     locations_at(self, defs, name, fallback)
-                }
+                }),
                 ReferenceHint::LocRef { key } => {
                     self.loc_key_locations(&key.to_lowercase(), fallback).await
                 }
@@ -123,7 +130,7 @@ impl Backend {
                     .collect(),
                 _ => Vec::new(),
             };
-            let locations = dedup_locations(locations);
+            let locations = tokio::task::block_in_place(|| dedup_locations(locations));
             if !locations.is_empty() {
                 return Ok(Some(GotoDefinitionResponse::Array(locations)));
             }
@@ -132,7 +139,8 @@ impl Backend {
         // Fallback: try the leaf VALUE before the key, since an event reference like
         // `id = some.1` resolves by its dotted id; the key is second so a definition node
         // (e.g. `decision = { … }`) still resolves (#39).
-        if let Some(element) = self.element_at_cursor(&uri, pos) {
+        let element = tokio::task::block_in_place(|| self.element_at_cursor(&uri, pos));
+        if let Some(element) = element {
             // HOI4 scripted loc files are often untyped (#725).
             if let PositionElement::Leaf { key, value } = &element
                 && is_localization_key_field(key)
@@ -152,7 +160,7 @@ impl Backend {
                 PositionElement::Leaf { key, .. } => vec![key.clone()],
                 PositionElement::LeafValue { value } => vec![unquote(value).to_string()],
             };
-            let candidates_with_locations = {
+            let candidates_with_locations = tokio::task::block_in_place(|| {
                 let info = self.state.info_service.read();
                 candidates
                     .iter()
@@ -171,18 +179,22 @@ impl Backend {
                         (symbol.clone(), instances, definitions)
                     })
                     .collect::<Vec<_>>()
-            };
-            for (symbol, instances, definitions) in candidates_with_locations {
-                let pairs = if instances.is_empty() {
-                    definitions
-                } else {
-                    instances
-                };
-                let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback));
-                if !locations.is_empty() {
-                    return Ok(Some(GotoDefinitionResponse::Array(locations)));
+            });
+            let result = tokio::task::block_in_place(|| {
+                for (symbol, instances, definitions) in candidates_with_locations {
+                    let pairs = if instances.is_empty() {
+                        definitions
+                    } else {
+                        instances
+                    };
+                    let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback));
+                    if !locations.is_empty() {
+                        return Ok(Some(GotoDefinitionResponse::Array(locations)));
+                    }
                 }
-            }
+                Ok(None)
+            });
+            return result;
         }
         Ok(None)
     }
@@ -204,14 +216,18 @@ impl Backend {
         pos: Position,
     ) -> Option<(cwtools_rules::rules_types::CwtDefKind, String)> {
         let text = self.file_text_for(uri).await?;
-        let encoding = self.state.config.read().position_encoding.clone();
-        // One scan for the line, then the column off that line.
-        // `lsp_pos_to_source_in_text` would walk the document to find the same
-        // line a second time (#471).
-        let line = text.lines().nth(pos.line as usize)?;
-        let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
-        let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
-        cwt_ref_at(line, col)
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::CwtCursorWalk);
+            let encoding = self.state.config.read().position_encoding.clone();
+            // One scan for the line, then the column off that line.
+            // `lsp_pos_to_source_in_text` would walk the document to find the same
+            // line a second time (#471).
+            let line = text.lines().nth(pos.line as usize)?;
+            let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+            let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+            cwt_ref_at(line, col)
+        })
     }
 
     async fn cwt_goto(
@@ -232,35 +248,37 @@ impl Backend {
         member: Option<&str>,
         fallback: &Url,
     ) -> Option<Location> {
-        let def = {
+        let def = tokio::task::block_in_place(|| {
             let rules = self.state.rules.read();
             let rs = rules.ruleset.as_ref()?;
             rs.def_positions
                 .iter()
                 .find(|d| d.kind == kind && d.name == name)
                 .cloned()
-        }?;
+        })?;
         let target_uri = crate::paths::path_to_uri(&def.file);
         let text = self.file_text_for(&target_uri).await;
-        let line0 = def.line.saturating_sub(1);
-        let (line0, col, token) = member
-            .zip(text.as_deref())
-            .and_then(|(m, text)| {
-                let (line, col) = member_pos_in_block(text, line0, def.col as u32, m)?;
-                Some((line, col, m))
-            })
-            .unwrap_or((line0, def.col as u32, name));
-        let lines = text
-            .as_deref()
-            .map(|text| DocLines::new(text, self.position_encoding()));
-        Some(self.source_location_with_lines(
-            &target_uri,
-            line0,
-            col,
-            token,
-            fallback,
-            lines.as_ref(),
-        ))
+        tokio::task::block_in_place(|| {
+            let line0 = def.line.saturating_sub(1);
+            let (line0, col, token) = member
+                .zip(text.as_deref())
+                .and_then(|(m, text)| {
+                    let (line, col) = member_pos_in_block(text, line0, def.col as u32, m)?;
+                    Some((line, col, m))
+                })
+                .unwrap_or((line0, def.col as u32, name));
+            let lines = text
+                .as_deref()
+                .map(|text| DocLines::new(text, self.position_encoding()));
+            Some(self.source_location_with_lines(
+                &target_uri,
+                line0,
+                col,
+                token,
+                fallback,
+                lines.as_ref(),
+            ))
+        })
     }
 
     pub(crate) fn search_roots(&self) -> Vec<std::path::PathBuf> {
