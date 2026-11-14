@@ -108,6 +108,33 @@ jobs:
       - name: pytest
         run: pytest
 
+  # Native non-UI coverage supplements the Linux check and Python jobs.
+  non-ui-native:
+    if: github.event_name != 'schedule'
+    name: Non-UI tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install Python checks
+        run: python -m pip install -r requirements-dev.txt
+      - name: Node unit tests
+        run: npm run test:node
+      - name: Python helper tests
+        run: python -m pytest
+
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
   # the engine's Cargo.lock.

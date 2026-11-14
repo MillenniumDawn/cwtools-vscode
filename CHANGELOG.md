@@ -28,6 +28,7 @@
 
 #### Tooling
 
+* Run non-UI client and Python helper tests on Windows and macOS as well as Linux. (#1227)
 * Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
 * Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
 * Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
