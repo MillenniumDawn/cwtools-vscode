@@ -175,12 +175,15 @@ impl Backend {
     }
 
     pub(crate) async fn loc_file_uris(&self) -> Vec<String> {
-        let mut uris: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for uri in self.state.documents.lock().keys() {
-            if crate::paths::is_loc_file(uri) {
-                uris.insert(uri.clone());
-            }
-        }
+        let mut uris = tokio::task::block_in_place(|| {
+            self.state
+                .documents
+                .lock()
+                .keys()
+                .filter(|uri| crate::paths::is_loc_file(uri))
+                .cloned()
+                .collect::<std::collections::HashSet<String>>()
+        });
         let (roots, ignore_files, ignore_dirs): (
             Vec<std::path::PathBuf>,
             Vec<String>,
@@ -237,11 +240,13 @@ impl Backend {
                     }
                 }
             });
-            for path in discovered {
-                uris.insert(crate::paths::path_to_uri(&path));
-            }
+            tokio::task::block_in_place(|| {
+                for path in discovered {
+                    uris.insert(crate::paths::path_to_uri(&path));
+                }
+            });
         }
-        uris.into_iter().collect()
+        tokio::task::block_in_place(|| uris.into_iter().collect())
     }
 
     /// Where `keys` are defined: closed files from `loc_locations`, open loc
@@ -257,72 +262,83 @@ impl Backend {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let mut sites: Vec<(String, u32, String)> = Vec::new();
-        let open_loc: Vec<(
-            String,
-            Arc<str>,
-            Option<Arc<crate::state::LocDocumentCache>>,
-        )> = {
-            let docs = self.state.documents.lock();
-            docs.iter()
-                .filter(|(uri, _)| crate::paths::is_loc_file(uri))
-                .map(|(uri, doc)| {
-                    let cache = doc
-                        .loc_cache
-                        .clone()
-                        .filter(|cache| cache.version == doc.version);
-                    (uri.clone(), Arc::clone(&doc.text), cache)
-                })
-                .collect()
-        };
-        let open_uris: HashSet<&str> = open_loc.iter().map(|(uri, _, _)| uri.as_str()).collect();
-        {
-            let locations = self.state.loc_locations.read();
-            for key in keys {
-                for (uri, line0) in locations.workspace_sites(key) {
-                    if !open_uris.contains(uri.as_ref()) {
-                        sites.push((uri.to_string(), line0, key.clone()));
+        let sites = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::LocDefinitionsWalk);
+            let mut sites: Vec<(String, u32, String)> = Vec::new();
+            let open_loc: Vec<(
+                String,
+                Arc<str>,
+                Option<Arc<crate::state::LocDocumentCache>>,
+            )> = {
+                let docs = self.state.documents.lock();
+                docs.iter()
+                    .filter(|(uri, _)| crate::paths::is_loc_file(uri))
+                    .map(|(uri, doc)| {
+                        let cache = doc
+                            .loc_cache
+                            .clone()
+                            .filter(|cache| cache.version == doc.version);
+                        (uri.clone(), Arc::clone(&doc.text), cache)
+                    })
+                    .collect()
+            };
+            let open_uris: HashSet<&str> = open_loc.iter().map(|(uri, _, _)| uri.as_str()).collect();
+            {
+                let locations = self.state.loc_locations.read();
+                for key in keys {
+                    for (uri, line0) in locations.workspace_sites(key) {
+                        if !open_uris.contains(uri.as_ref()) {
+                            sites.push((uri.to_string(), line0, key.clone()));
+                        }
                     }
                 }
             }
-        }
-        for (uri, text, cache) in &open_loc {
-            let parsed;
-            let files = match cache {
-                Some(cache) => cache.files.as_slice(),
-                None => {
-                    let path = crate::paths::uri_to_path_str(uri);
-                    parsed = cwtools_localization::parse_loc_files(&path, text, None)
-                        .unwrap_or_default();
-                    parsed.as_slice()
-                }
-            };
-            for entry in files.iter().flat_map(|file| &file.entries) {
-                let lower = entry.key.to_lowercase();
-                if keys.contains(&lower) {
-                    let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    sites.push((uri.clone(), line0, lower));
+            for (uri, text, cache) in &open_loc {
+                let parsed;
+                let files = match cache {
+                    Some(cache) => cache.files.as_slice(),
+                    None => {
+                        let path = crate::paths::uri_to_path_str(uri);
+                        parsed = cwtools_localization::parse_loc_files(&path, text, None)
+                            .unwrap_or_default();
+                        parsed.as_slice()
+                    }
+                };
+                for entry in files.iter().flat_map(|file| &file.entries) {
+                    let lower = entry.key.to_lowercase();
+                    if keys.contains(&lower) {
+                        let line0 = (entry.position.line.saturating_sub(1)) as u32;
+                        sites.push((uri.clone(), line0, lower));
+                    }
                 }
             }
-        }
+            sites
+        });
         if sites.is_empty() {
             return Ok(Vec::new());
         }
-        let text_uris: Vec<String> = sites.iter().map(|(uri, _, _)| uri.clone()).collect();
+        let text_uris: Vec<String> =
+            tokio::task::block_in_place(|| sites.iter().map(|(uri, _, _)| uri.clone()).collect());
         let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
-        let indexed = index_snapshots(&texts, &self.position_encoding());
-        sites.sort();
-        let locations = sites
-            .into_iter()
-            .filter_map(|(uri, line0, key_lower)| {
-                let lines = indexed.get(uri.as_str())?;
-                let (line0, col) = loc_def_site(lines, line0, &key_lower)?;
-                Some(Location {
-                    uri: parse_uri(&uri, fallback),
-                    range: lines.token_range(line0, col, &key_lower),
+        let locations = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::LocDefinitionsResultWalk);
+            let indexed = index_snapshots(&texts, &self.position_encoding());
+            let mut sites = sites;
+            sites.sort();
+            sites
+                .into_iter()
+                .filter_map(|(uri, line0, key_lower)| {
+                    let lines = indexed.get(uri.as_str())?;
+                    let (line0, col) = loc_def_site(lines, line0, &key_lower)?;
+                    Some(Location {
+                        uri: parse_uri(&uri, fallback),
+                        range: lines.token_range(line0, col, &key_lower),
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        });
         Ok(locations)
     }
 
@@ -372,31 +388,36 @@ impl Backend {
                 crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES
             }
         };
-        let mut open = Vec::new();
-        let mut closed = Vec::new();
-        let mut seen = HashSet::with_capacity(uris.len());
-        {
-            let docs = self.state.documents.lock();
-            for uri in uris {
-                if !seen.insert(uri.clone()) {
-                    continue;
-                }
-                if let Some(doc) = docs.get(&uri) {
-                    open.push((
-                        uri.clone(),
-                        Arc::clone(&doc.text),
-                        doc.version,
-                        docs.content_hash(&uri),
-                    ));
-                } else {
-                    closed.push(uri);
+        let (open, closed, open_versions) = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::NavigationSnapshotWalk);
+            let mut open = Vec::new();
+            let mut closed = Vec::new();
+            let mut seen = HashSet::with_capacity(uris.len());
+            {
+                let docs = self.state.documents.lock();
+                for uri in uris {
+                    if !seen.insert(uri.clone()) {
+                        continue;
+                    }
+                    if let Some(doc) = docs.get(&uri) {
+                        open.push((
+                            uri.clone(),
+                            Arc::clone(&doc.text),
+                            doc.version,
+                            docs.content_hash(&uri),
+                        ));
+                    } else {
+                        closed.push(uri);
+                    }
                 }
             }
-        }
-        let open_versions = open
-            .iter()
-            .map(|(uri, _, version, hash)| (uri.clone(), *version, *hash))
-            .collect::<Vec<_>>();
+            let open_versions = open
+                .iter()
+                .map(|(uri, _, version, hash)| (uri.clone(), *version, *hash))
+                .collect::<Vec<_>>();
+            (open, closed, open_versions)
+        });
         let budget = crate::access::ReadBudget::new(limit);
         crate::scan::hold_for_tests(
             "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
@@ -431,13 +452,13 @@ impl Backend {
         })
         .await
         .map_err(|_| navigation_snapshot_read_error())??;
-        let unchanged = {
+        let unchanged = tokio::task::block_in_place(|| {
             let docs = self.state.documents.lock();
             open_versions.iter().all(|(uri, version, hash)| {
                 docs.get(uri)
                     .is_some_and(|doc| doc.version == *version && docs.content_hash(uri) == *hash)
             })
-        };
+        });
         if !unchanged {
             return Err(navigation_snapshot_changed_error());
         }
@@ -453,7 +474,7 @@ impl Backend {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let script_uris = self.script_uris();
+        let script_uris = tokio::task::block_in_place(|| self.script_uris());
         if script_uris.is_empty() {
             return Ok(Vec::new());
         }
@@ -494,7 +515,9 @@ impl Backend {
                 hits
             })
             .await?;
-        out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
+        tokio::task::block_in_place(|| {
+            out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
+        });
         Ok(out)
     }
 
@@ -518,7 +541,7 @@ impl Backend {
                 all_locs.extend(self.collect_loc_definitions(&keys, fallback).await?);
             }
             all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await?);
-            let all_locs = dedup_locations(all_locs);
+            let all_locs = tokio::task::block_in_place(|| dedup_locations(all_locs));
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
             }
@@ -534,7 +557,10 @@ impl Backend {
 
         if let Some((type_name, instance_name)) = type_ref {
             let fallback = &params.text_document_position.text_document.uri;
-            let definitions = if include_declaration {
+            let definitions = tokio::task::block_in_place(|| {
+                if !include_declaration {
+                    return Vec::new();
+                }
                 let info = self.state.info_service.read();
                 info.type_index
                     .instances(&type_name)
@@ -542,18 +568,19 @@ impl Backend {
                     .filter(|(_, inst)| inst.name == instance_name)
                     .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
                     .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            });
 
             let sites = tokio::task::block_in_place(|| {
                 key_sites(self.collect_use_sites(&type_name, &instance_name))
             });
-            let mut text_uris: Vec<String> = definitions
-                .iter()
-                .map(|(file_uri, _)| file_uri.clone())
-                .collect();
-            text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
+            let text_uris: Vec<String> = tokio::task::block_in_place(|| {
+                let mut text_uris: Vec<String> = definitions
+                    .iter()
+                    .map(|(file_uri, _)| file_uri.clone())
+                    .collect();
+                text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
+                text_uris
+            });
             let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let all_locs = tokio::task::block_in_place(|| {
                 #[cfg(test)]
@@ -589,7 +616,7 @@ impl Backend {
                 PositionElement::LeafValue { value } => value.clone(),
             };
             let fallback = &params.text_document_position.text_document.uri;
-            let (definitions, references) = {
+            let (definitions, references) = tokio::task::block_in_place(|| {
                 let info = self.state.info_service.read();
                 (
                     if include_declaration {
@@ -599,11 +626,13 @@ impl Backend {
                     },
                     info.find_references(&symbol).unwrap_or_default(),
                 )
-            };
-            let mut pairs = definitions;
-            pairs.extend(references);
-            let text_uris: Vec<String> =
-                pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
+            });
+            let (pairs, text_uris): (Vec<_>, Vec<String>) = tokio::task::block_in_place(|| {
+                let mut pairs = definitions;
+                pairs.extend(references);
+                let text_uris = pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
+                (pairs, text_uris)
+            });
             let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let all_locs = tokio::task::block_in_place(|| {
                 let indexed = index_snapshots(&texts, &self.position_encoding());
@@ -837,25 +866,30 @@ impl Backend {
         limit: usize,
     ) -> Result<HashMap<String, FileTextSnapshot>> {
         let budget = crate::access::ReadBudget::new(limit);
-        let mut snapshots = HashMap::new();
-        let mut closed = Vec::new();
-        let mut seen = HashSet::with_capacity(uris.len());
-        {
-            let docs = self.state.documents.lock();
-            for uri in uris {
-                if !seen.insert(uri.as_str()) {
-                    continue;
-                }
-                if let Some(snapshot) = docs.text_snapshot(uri) {
-                    if !budget.reserve_retained(snapshot.text.len()) {
-                        return Err(navigation_snapshot_budget_error());
+        let (mut snapshots, closed) = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::NavigationTextSnapshotWalk);
+            let mut snapshots = HashMap::new();
+            let mut closed = Vec::new();
+            let mut seen = HashSet::with_capacity(uris.len());
+            {
+                let docs = self.state.documents.lock();
+                for uri in uris {
+                    if !seen.insert(uri.as_str()) {
+                        continue;
                     }
-                    snapshots.insert(uri.clone(), snapshot);
-                } else {
-                    closed.push(uri.clone());
+                    if let Some(snapshot) = docs.text_snapshot(uri) {
+                        if !budget.reserve_retained(snapshot.text.len()) {
+                            return Err(navigation_snapshot_budget_error());
+                        }
+                        snapshots.insert(uri.clone(), snapshot);
+                    } else {
+                        closed.push(uri.clone());
+                    }
                 }
             }
-        }
+            Ok::<_, tower_lsp::jsonrpc::Error>((snapshots, closed))
+        })?;
         crate::scan::hold_for_tests(
             "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
             Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
@@ -892,7 +926,7 @@ impl Backend {
         })
         .await
         .map_err(|_| navigation_snapshot_read_error())??;
-        snapshots.extend(read.into_iter().flatten());
+        tokio::task::block_in_place(|| snapshots.extend(read.into_iter().flatten()));
         Ok(snapshots)
     }
 
@@ -1269,7 +1303,7 @@ mod tests {
     /// `inlay_hint`, `code_lens` and the semantic-token fast paths all call
     /// this on a cursor move, so a copy here is a document-sized allocation
     /// per request; pointer identity is the proof there isn't one (#473).
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn file_text_for_open_doc_shares_the_buffer() {
         let (backend, state) = backend();
         let stored: Arc<str> = Arc::from("focus_tree = {\n\tid = tree\n}\n");
@@ -1307,7 +1341,7 @@ mod tests {
 
     /// The closed-file path still reads through the access boundary, and a
     /// path outside every authorized root still reads as absent.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn file_text_for_reads_a_closed_file_under_an_authorized_root() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -1336,7 +1370,7 @@ mod tests {
     /// The streamed scan sees an open buffer as the editor has it, a closed
     /// file as it is on disk, and nothing outside the access boundary; each
     /// hit names the file it came from (#474).
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn scan_workspace_texts_covers_open_and_closed_files() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -1397,7 +1431,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn workspace_text_scan_streams_over_peak_budget_and_refuses_quota_exhaustion() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -1456,7 +1490,7 @@ mod tests {
         assert!(error.message.contains("total text read budget exceeded"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn workspace_text_scan_releases_multibyte_reservations() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -1718,7 +1752,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn navigation_snapshots_deduplicate_and_allow_exact_budget_boundary() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -1807,7 +1841,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn open_snapshots_share_the_buffer_and_take_the_stored_hash() {
         use cwtools_cache::workspace::content_hash;
 
@@ -1860,7 +1894,7 @@ mod tests {
         assert_eq!(snapshot.version, Some(4));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn navigation_snapshot_budget_covers_many_closed_files() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -1895,7 +1929,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn navigation_snapshot_budget_does_not_refuse_overlapping_reads_that_fit_in_turn() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("tmpdir");

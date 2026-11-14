@@ -54,6 +54,11 @@ pub(crate) enum HoldPoint {
     LocCursorRuleWalk,
     ReferencesResultWalk,
     LocRenameScanWalk,
+    LocDefinitionsWalk,
+    LocDefinitionsResultWalk,
+    CwtCursorWalk,
+    NavigationSnapshotWalk,
+    NavigationTextSnapshotWalk,
     ExportSweepSnapshot,
     LoadingBarActiveChecked,
 }

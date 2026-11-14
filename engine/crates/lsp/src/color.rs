@@ -584,11 +584,19 @@ mod tests {
             HoldPoint::LocCursorTextWalk,
             HoldPoint::LocCursorRuleWalk,
             HoldPoint::LocRenameScanWalk,
+            HoldPoint::LocDefinitionsWalk,
+            HoldPoint::LocDefinitionsResultWalk,
+            HoldPoint::CwtCursorWalk,
+            HoldPoint::NavigationSnapshotWalk,
+            HoldPoint::NavigationTextSnapshotWalk,
         ] {
             let (backend, workspace) = crate::testing::workspace_backend();
             let is_loc = matches!(
                 point,
-                HoldPoint::LocSymbolWalk | HoldPoint::LocCursorTextWalk
+                HoldPoint::LocSymbolWalk
+                    | HoldPoint::LocCursorTextWalk
+                    | HoldPoint::LocDefinitionsWalk
+                    | HoldPoint::LocDefinitionsResultWalk
             );
             let path = if is_loc {
                 "localisation/test_l_english.yml"
@@ -676,6 +684,20 @@ mod tests {
                     let _ = worker
                         .loc_key_at_cursor(&request_uri, Position::new(0, 0), "common/test.txt")
                         .await;
+                } else if point == HoldPoint::NavigationSnapshotWalk {
+                    worker
+                        .scan_workspace_texts(vec![request_uri], |_, _| Vec::<String>::new())
+                        .await
+                        .unwrap();
+                } else if point == HoldPoint::NavigationTextSnapshotWalk {
+                    let _ = worker
+                        .file_text_snapshots_for_navigation(&[request_uri])
+                        .await
+                        .unwrap();
+                } else if point == HoldPoint::CwtCursorWalk {
+                    let _ = worker
+                        .cwt_ref_at_cursor(&request_uri, Position::new(0, 0))
+                        .await;
                 } else if point == HoldPoint::GotoWalk {
                     let params = serde_json::from_value(serde_json::json!({
                         "textDocument": { "uri": request_uri },
@@ -683,6 +705,17 @@ mod tests {
                     }))
                     .unwrap();
                     worker.goto_definition_impl(params).await.unwrap();
+                } else if matches!(
+                    point,
+                    HoldPoint::LocDefinitionsWalk | HoldPoint::LocDefinitionsResultWalk
+                ) {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri },
+                        "position": { "line": 1, "character": 2 },
+                        "context": { "includeDeclaration": true }
+                    }))
+                    .unwrap();
+                    worker.references_impl(params).await.unwrap();
                 } else if point == HoldPoint::ReferencesWalk {
                     let params = serde_json::from_value(serde_json::json!({
                         "textDocument": { "uri": request_uri },
