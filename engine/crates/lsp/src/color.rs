@@ -564,13 +564,18 @@ mod tests {
     /// synchronous editor walk is held. A watchdog releases the gate if a
     /// regression blocks the runtime itself.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn color_and_inlay_walks_release_the_async_worker() {
+    async fn editor_and_navigation_walks_release_the_async_worker() {
         use crate::state::{HoldGate, HoldPoint};
         use std::sync::Arc;
         use std::sync::atomic::Ordering;
         use std::time::Duration;
 
-        for point in [HoldPoint::ColorWalk, HoldPoint::InlayWalk] {
+        for point in [
+            HoldPoint::ColorWalk,
+            HoldPoint::InlayWalk,
+            HoldPoint::HighlightWalk,
+            HoldPoint::WorkspaceSymbolWalk,
+        ] {
             let (backend, workspace) = crate::testing::workspace_backend();
             let uri = crate::paths::path_to_uri(&workspace.path().join("common/test.txt"));
             let text = "test = { color = { 1 1 1 } }";
@@ -606,7 +611,7 @@ mod tests {
                     }))
                     .unwrap();
                     worker.document_color_impl(params).await.unwrap();
-                } else {
+                } else if point == HoldPoint::InlayWalk {
                     let params = serde_json::from_value(serde_json::json!({
                         "textDocument": { "uri": request_uri },
                         "range": {
@@ -616,6 +621,17 @@ mod tests {
                     }))
                     .unwrap();
                     worker.inlay_hint_impl(params).await.unwrap();
+                } else if point == HoldPoint::HighlightWalk {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri },
+                        "position": { "line": 0, "character": 0 }
+                    }))
+                    .unwrap();
+                    worker.document_highlight_impl(params).await.unwrap();
+                } else {
+                    let params = serde_json::from_value(serde_json::json!({ "query": "test" }))
+                        .unwrap();
+                    worker.symbol_request_impl(params).await.unwrap();
                 }
             });
             let arrived = tokio::time::timeout(Duration::from_secs(5), async {

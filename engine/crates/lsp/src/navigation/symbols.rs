@@ -7,6 +7,17 @@ use super::helpers::{SymbolCandidate, WORKSPACE_SYMBOL_LIMIT};
 use super::{TopSymbols, make_symbol, symbol_rank};
 
 impl Backend {
+    pub(crate) async fn symbol_request_impl(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::WorkspaceSymbolWalk);
+            self.symbol_impl(params)
+        })
+    }
+
     pub(crate) fn symbol_impl(
         &self,
         params: WorkspaceSymbolParams,

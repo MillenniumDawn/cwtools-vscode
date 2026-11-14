@@ -84,41 +84,45 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(None);
         };
-        let (ws_prefix, position_encoding) = {
-            let cfg = self.state.config.read();
-            (cfg.workspace_prefix.clone(), cfg.position_encoding.clone())
-        };
-        let logical_path = logical_path_from_uri(&uri, &ws_prefix);
-        // Built before the symbol lookup rather than after it, so the cursor's
-        // own column comes out of the index too (#471).
-        let lines = DocLines::new(&text, position_encoding);
-        let source_col = lines.source_column(pos);
-        let symbol = self
-            .type_ref_at_cursor(&uri, pos, &logical_path)
-            .map(|(_, name)| name)
-            .or_else(|| word_at_position(&text, pos.line, source_col as u32))
-            .filter(|s| !s.is_empty());
-        let Some(symbol) = symbol else {
-            return Ok(None);
-        };
-        let symbol = symbol.as_str();
-        let lines = &lines;
-        let highlights: Vec<DocumentHighlight> = lines
-            .iter()
-            .flat_map(|(line0, line)| {
-                code_token_cols_in_line(line, symbol, TokenCase::Sensitive)
-                    .into_iter()
-                    .map(move |col| DocumentHighlight {
-                        range: lines.token_range(line0, col, symbol),
-                        kind: Some(highlight_kind(line, col, symbol)),
-                    })
-            })
-            .collect();
-        if highlights.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(highlights))
-        }
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::HighlightWalk);
+            let (ws_prefix, position_encoding) = {
+                let cfg = self.state.config.read();
+                (cfg.workspace_prefix.clone(), cfg.position_encoding.clone())
+            };
+            let logical_path = logical_path_from_uri(&uri, &ws_prefix);
+            // Built before the symbol lookup rather than after it, so the cursor's
+            // own column comes out of the index too (#471).
+            let lines = DocLines::new(&text, position_encoding);
+            let source_col = lines.source_column(pos);
+            let symbol = self
+                .type_ref_at_cursor(&uri, pos, &logical_path)
+                .map(|(_, name)| name)
+                .or_else(|| word_at_position(&text, pos.line, source_col as u32))
+                .filter(|s| !s.is_empty());
+            let Some(symbol) = symbol else {
+                return Ok(None);
+            };
+            let symbol = symbol.as_str();
+            let lines = &lines;
+            let highlights: Vec<DocumentHighlight> = lines
+                .iter()
+                .flat_map(|(line0, line)| {
+                    code_token_cols_in_line(line, symbol, TokenCase::Sensitive)
+                        .into_iter()
+                        .map(move |col| DocumentHighlight {
+                            range: lines.token_range(line0, col, symbol),
+                            kind: Some(highlight_kind(line, col, symbol)),
+                        })
+                })
+                .collect();
+            if highlights.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(highlights))
+            }
+        })
     }
 
     pub(crate) async fn document_symbol_impl(
