@@ -104,8 +104,11 @@ jobs:
     name: Verify publish inputs
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
+    # CI and Publish start together. Allow up to 90 minutes for CI.
+    timeout-minutes: 95
+    permissions:
+      contents: read
+      actions: read
     outputs:
       has_vsce: ${{ steps.tokens.outputs.has_vsce }}
       has_open_vsx: ${{ steps.tokens.outputs.has_open_vsx }}
@@ -118,6 +121,38 @@ jobs:
       VERSION: ${{ needs.check.outputs.version }}
       TAG: ${{ needs.check.outputs.tag }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require successful CI for the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # CI can still be queued, running, or not yet visible when Publish starts.
+          # Retry only missing or pending CI, never errors or failed CI.
+          for attempt in $(seq 1 90); do
+            if ! response=$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100"); then
+              echo "::error::Unable to retrieve CI results."
+              exit 1
+            fi
+            if printf '%s' "$response" | python3 scripts/build/release_decisions.py; then
+              exit 0
+            else
+              result=$?
+            fi
+            if [ "$result" -ne 2 ]; then
+              echo "::error::CI failed or returned invalid results."
+              exit 1
+            fi
+            if [ "$attempt" -lt 90 ]; then
+              echo "CI not yet successful; retrying in 60 seconds ($attempt/90)."
+              sleep 60
+            fi
+          done
+          echo "::error::CI did not succeed within the polling window; retry publishing."
+          exit 1
       - name: Check the publish tokens
         id: tokens
         run: |
@@ -527,3 +562,4 @@ jobs:
             gh pr create --draft --repo "$REPO" --base main --head "$BRANCH" \
               --title "$title" --body-file "$body_file"
           fi
+
