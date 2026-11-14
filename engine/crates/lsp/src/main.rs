@@ -8,7 +8,7 @@
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("cwtools-server {}", env!("CARGO_PKG_VERSION"));
+        eprintln!("{}", cwtools_lsp::server_version());
         eprintln!();
         eprintln!("CWTools language server for Paradox game scripts.");
         eprintln!("Communicates over stdin/stdout using the Language Server Protocol.");
@@ -20,7 +20,7 @@ fn main() {
         std::process::exit(0);
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("cwtools-server {}", env!("CARGO_PKG_VERSION"));
+        println!("{}", cwtools_lsp::server_version());
         std::process::exit(0);
     }
 

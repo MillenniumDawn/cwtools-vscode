@@ -6,7 +6,7 @@ Text assertions rather than a YAML parse: PyYAML is not a dev dependency.
 
 from pathlib import Path
 
-from workflow_helpers import job_scope
+from workflow_helpers import job_scope, workflow_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -206,3 +206,12 @@ def test_release_failed_guards_every_job_it_waits_on() -> None:
         assert f"needs.{job}.result == 'failure'" in guard, f"{job} missing from if"
     # A run someone cancelled by hand is not a release that broke.
     assert "cancelled" not in guard
+
+
+def test_published_binary_identity_is_checked_before_compilation() -> None:
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    step = workflow_step(workflow, "Build server")
+    assert "CWTOOLS_BUILD_COMMIT: ${{ github.sha }}" in step
+    assert 'test "$(git rev-parse HEAD)" = "$CWTOOLS_BUILD_COMMIT"' in step
+    assert "cargo build --locked --release -p cwtools_lsp" in step
+    assert step.index("git rev-parse HEAD") < step.index("cargo build")
