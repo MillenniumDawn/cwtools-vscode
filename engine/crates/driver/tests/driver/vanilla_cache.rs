@@ -88,7 +88,7 @@ fn vanilla_cache_aux_preserves_original_case_file_paths() {
     // The cache must store on-disk case so a later case-sensitive run can enforce
     // it against base-game files too.
     let tmp = write_tree(&[("gfx/test/Icon.DDS", "")]);
-    let aux = build_vanilla_cache_aux(tmp.path(), &cwtools_index::TypeIndex::default());
+    let aux = build_vanilla_cache_aux(tmp.path(), &cwtools_index::TypeIndex::default()).unwrap();
     assert!(
         aux.file_paths.contains(&"gfx/test/Icon.DDS".to_string()),
         "cache must store original on-disk case, got: {:?}",

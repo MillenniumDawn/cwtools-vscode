@@ -107,6 +107,18 @@ pub fn read_text_capped(path: &Path, max_bytes: u64) -> Result<(String, u64), Fi
     read_text_capped_with_encoding(path, max_bytes).map(|(s, _, n)| (s, n))
 }
 
+/// Read at most an already-reserved number of source bytes. The caller must
+/// verify that the source still matches its pre-read metadata snapshot.
+pub fn read_text_reserved(path: &Path, reserved: u64) -> Result<(String, u64), FileError> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(reserved)
+        .read_to_end(&mut bytes)?;
+    let len = bytes.len() as u64;
+    Ok((decode_bytes(bytes).0, len))
+}
+
 /// Like [`read_text_capped`], but also reports the detected encoding.
 pub fn read_text_capped_with_encoding(
     path: &Path,
@@ -258,6 +270,8 @@ pub enum FileError {
     Io(#[from] std::io::Error),
     #[error("directory does not exist: {0}")]
     MissingRoot(PathBuf),
+    #[error("file-count budget exhausted at {0}")]
+    FileCountBudget(PathBuf),
     /// A file exceeded the hard read cap for a scan. Distinct from a parse error: a
     /// special file that reports length 0 (e.g. `/dev/zero`) is refused, not read to EOF.
     #[error("file exceeds the {limit} byte read cap: {path}")]
@@ -283,10 +297,25 @@ pub struct DiscoveryFailure {
     pub error: String,
 }
 
+impl DiscoveryFailure {
+    pub fn file_count_budget(path: PathBuf) -> Self {
+        Self {
+            path,
+            error: FILE_COUNT_BUDGET_ERROR.to_string(),
+        }
+    }
+
+    pub fn is_file_count_budget(&self) -> bool {
+        self.error == FILE_COUNT_BUDGET_ERROR
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DiscoveryReport {
     pub files: Vec<DiscoveredPath>,
     pub failures: Vec<DiscoveryFailure>,
+    /// Eligible files consumed before layer shadowing, for a shared scan budget.
+    pub examined: usize,
 }
 
 pub struct ParsedFile {
@@ -464,7 +493,11 @@ impl FileManager {
     }
 
     pub fn discover_files(&self) -> Result<Vec<DiscoveredFile>, FileError> {
-        self.discover_files_with_failures().map(|(files, _)| files)
+        let (files, failures) = self.discover_files_with_failures()?;
+        if let Some(failure) = failures.iter().find(|f| f.is_file_count_budget()) {
+            return Err(FileError::FileCountBudget(failure.path.clone()));
+        }
+        Ok(files)
     }
 
     pub fn discover_files_with_failures(
@@ -486,7 +519,9 @@ impl FileManager {
             if !dir.exists() {
                 continue;
             }
-            self.collect_paths(&dir, &mut paths, &mut failures)?;
+            if self.collect_paths(&dir, &mut paths, &mut failures)? {
+                break;
+            }
         }
 
         Ok((
@@ -549,7 +584,7 @@ impl FileManager {
         dir: &Path,
         out: &mut Vec<(PathBuf, String)>,
         failures: &mut Vec<DiscoveryFailure>,
-    ) -> Result<(), FileError> {
+    ) -> Result<bool, FileError> {
         let root_prefix = normalize_root_prefix(&self.config.root);
         let is_root_level = dir == self.config.root.as_path();
         let cfg = &self.config;
@@ -572,7 +607,12 @@ impl FileManager {
         };
         let mut state = WalkState {
             out: Vec::new(),
-            remaining_files: self.config.scan_budget.files_remaining(),
+            remaining_files: self
+                .config
+                .scan_budget
+                .files_remaining()
+                .saturating_sub(out.len()),
+            exhausted: false,
         };
         walk_dir_generic(
             dir,
@@ -588,23 +628,35 @@ impl FileManager {
         )
         .map_err(FileError::from)?;
         out.extend(state.out);
-        Ok(())
+        Ok(state.exhausted)
     }
 
-    pub fn discover_files_multi_mod(&self) -> Vec<DiscoveredFile> {
-        self.discover_files_multi_mod_with_failures().0
+    pub fn discover_files_multi_mod(&self) -> Result<Vec<DiscoveredFile>, FileError> {
+        let (files, failures) = self.discover_files_multi_mod_with_failures();
+        if let Some(failure) = failures.iter().find(|f| f.is_file_count_budget()) {
+            return Err(FileError::FileCountBudget(failure.path.clone()));
+        }
+        Ok(files)
     }
 
     pub fn discover_files_multi_mod_with_failures(
         &self,
     ) -> (Vec<DiscoveredFile>, Vec<DiscoveryFailure>) {
+        let (files, failures, _) = self.discover_files_multi_mod_with_usage();
+        (files, failures)
+    }
+
+    pub fn discover_files_multi_mod_with_usage(
+        &self,
+    ) -> (Vec<DiscoveredFile>, Vec<DiscoveryFailure>, usize) {
         let (mods, mut failures) = expand_multiple_mods_with_failures(&self.config.root);
-        let (files, walk_failures) = discover_files_multi_mod_with_failures(
+        let (files, walk_failures, examined) = discover_files_multi_mod_with_failures(
             None,
             &mods,
             &self.config.include_dirs,
             &self.config.exclude_dir_patterns,
             self.config.scan_budget,
+            &|path, logical| accept_script_file(&self.config, path, logical),
         );
         failures.extend(walk_failures);
         (
@@ -614,11 +666,12 @@ impl FileManager {
                 .map(|(path, logical_path)| DiscoveredFile { path, logical_path })
                 .collect(),
             failures,
+            examined,
         )
     }
 
     pub fn discover_and_parse_multi_mod(&mut self) -> Result<Vec<ParsedFile>, FileError> {
-        Ok(self.parse_files(self.discover_files_multi_mod()))
+        Ok(self.parse_files(self.discover_files_multi_mod()?))
     }
 
     pub fn parse_single_file(&mut self, path: &Path) -> Result<ParsedFile, FileError> {
@@ -641,6 +694,11 @@ pub fn discover_paths(
     kinds: &[FileKind],
 ) -> Result<DiscoveryReport, FileError> {
     let mut report = DiscoveryReport::default();
+    let mut state = WalkState {
+        out: Vec::new(),
+        remaining_files: config.scan_budget.files_remaining(),
+        exhausted: false,
+    };
 
     for root in roots {
         if !root.is_dir() {
@@ -657,10 +715,6 @@ pub fn discover_paths(
                 error: error.to_string(),
             });
         };
-        let mut state = WalkState {
-            out: Vec::new(),
-            remaining_files: config.scan_budget.files_remaining(),
-        };
         walk_dir_generic(
             root,
             WalkRoot {
@@ -674,20 +728,25 @@ pub fn discover_paths(
             &mut state,
         )
         .map_err(FileError::from)?;
-        report.files.extend(state.out);
+        if state.exhausted {
+            break;
+        }
     }
+    report.examined = config.scan_budget.files_remaining() - state.remaining_files;
+    report.files = state.out;
     Ok(report)
 }
 
 pub fn discover_paths_multi_mod(config: &FileManagerConfig, kinds: &[FileKind]) -> DiscoveryReport {
     let include_dirs = [".".to_string()];
     let (mods, mut failures) = expand_multiple_mods_with_failures(&config.root);
-    let (files, walk_failures) = discover_files_multi_mod_with_failures(
+    let (files, walk_failures, examined) = discover_files_multi_mod_with_failures(
         None,
         &mods,
         &include_dirs,
         &config.exclude_dir_patterns,
         config.scan_budget,
+        &|path, logical| accept_discovered_path(config, kinds, path, logical.to_string()).is_some(),
     );
     failures.extend(walk_failures);
     DiscoveryReport {
@@ -698,6 +757,7 @@ pub fn discover_paths_multi_mod(config: &FileManagerConfig, kinds: &[FileKind]) 
             })
             .collect(),
         failures,
+        examined,
     }
 }
 
@@ -947,15 +1007,19 @@ pub fn discover_files_multi_mod(
     include_dirs: &[String],
     exclude_dir_patterns: &[String],
     budget: ScanBudget,
-) -> Vec<(PathBuf, String)> {
-    discover_files_multi_mod_with_failures(
+) -> Result<Vec<(PathBuf, String)>, FileError> {
+    let (files, failures, _) = discover_files_multi_mod_with_failures(
         vanilla_root,
         mods,
         include_dirs,
         exclude_dir_patterns,
         budget,
-    )
-    .0
+        &|_, _| true,
+    );
+    if let Some(failure) = failures.iter().find(|f| f.is_file_count_budget()) {
+        return Err(FileError::FileCountBudget(failure.path.clone()));
+    }
+    Ok(files)
 }
 
 fn discover_files_multi_mod_with_failures(
@@ -964,11 +1028,13 @@ fn discover_files_multi_mod_with_failures(
     include_dirs: &[String],
     exclude_dir_patterns: &[String],
     budget: ScanBudget,
-) -> (Vec<(PathBuf, String)>, Vec<DiscoveryFailure>) {
+    eligible: &dyn Fn(&Path, &str) -> bool,
+) -> (Vec<(PathBuf, String)>, Vec<DiscoveryFailure>, usize) {
     use std::collections::HashMap;
 
     let mut best: HashMap<String, (PathBuf, usize)> = HashMap::new();
     let mut remaining = budget.files_remaining();
+    let mut exhausted = false;
     let mut failures = Vec::new();
 
     let mut sources: Vec<(usize, &Path, &[String])> = Vec::new();
@@ -983,6 +1049,9 @@ fn discover_files_multi_mod_with_failures(
     for (priority, root, dirs) in &sources {
         let root_prefix = normalize_root_prefix(root);
         for include_dir in *dirs {
+            if exhausted {
+                break;
+            }
             let dir = if *include_dir == "." {
                 root.to_path_buf()
             } else {
@@ -1005,9 +1074,13 @@ fn discover_files_multi_mod_with_failures(
                 &root_prefix,
                 *priority,
                 exclude_dir_patterns,
-                &mut best,
-                &mut remaining,
-                &mut failures,
+                &mut MultiWalkState {
+                    out: &mut best,
+                    remaining_files: &mut remaining,
+                    exhausted: &mut exhausted,
+                    failures: &mut failures,
+                    eligible,
+                },
             );
         }
     }
@@ -1032,7 +1105,7 @@ fn discover_files_multi_mod_with_failures(
         .map(|(logical, (abs_path, _prio))| (abs_path, logical))
         .collect();
     result.sort_by(|a, b| a.1.cmp(&b.1));
-    (result, failures)
+    (result, failures, budget.files_remaining() - remaining)
 }
 
 /// Normalize a descriptor `replace_path` for matching: backslash → slash
@@ -1151,44 +1224,51 @@ impl LayerShadow {
     }
 }
 
+struct MultiWalkState<'a> {
+    out: &'a mut std::collections::HashMap<String, (PathBuf, usize)>,
+    remaining_files: &'a mut usize,
+    exhausted: &'a mut bool,
+    failures: &'a mut Vec<DiscoveryFailure>,
+    eligible: &'a dyn Fn(&Path, &str) -> bool,
+}
+
 fn collect_files_recursive(
     dir: &Path,
     root_prefix: &str,
     priority: usize,
     exclude_dir_patterns: &[String],
-    out: &mut std::collections::HashMap<String, (PathBuf, usize)>,
-    remaining_files: &mut usize,
-    failures: &mut Vec<DiscoveryFailure>,
+    state: &mut MultiWalkState<'_>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
-            failures.push(DiscoveryFailure {
+            state.failures.push(DiscoveryFailure {
                 path: dir.to_path_buf(),
                 error: e.to_string(),
             });
             return;
         }
     };
+    let mut sorted = Vec::new();
     for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                failures.push(DiscoveryFailure {
-                    path: dir.to_path_buf(),
-                    error: e.to_string(),
-                });
-                continue;
-            }
-        };
-        if *remaining_files == 0 {
+        match entry {
+            Ok(entry) => sorted.push(entry),
+            Err(error) => state.failures.push(DiscoveryFailure {
+                path: dir.to_path_buf(),
+                error: error.to_string(),
+            }),
+        }
+    }
+    sorted.sort_by_key(|entry| entry.file_name());
+    for entry in sorted {
+        if *state.exhausted {
             break;
         }
         let path = entry.path();
         let ft = match entry.file_type() {
             Ok(ft) => ft,
             Err(e) => {
-                failures.push(DiscoveryFailure {
+                state.failures.push(DiscoveryFailure {
                     path,
                     error: e.to_string(),
                 });
@@ -1213,19 +1293,30 @@ fn collect_files_recursive(
             if skip {
                 continue;
             }
-            collect_files_recursive(
-                &path,
-                root_prefix,
-                priority,
-                exclude_dir_patterns,
-                out,
-                remaining_files,
-                failures,
-            );
+            collect_files_recursive(&path, root_prefix, priority, exclude_dir_patterns, state);
         } else {
-            *remaining_files -= 1;
             let logical = compute_logical_path_with_root(&path, root_prefix);
-            let entry = out.entry(logical).or_insert((path.clone(), priority));
+            if !(state.eligible)(&path, &logical) {
+                // A rejected higher-priority file still shadows the lower layer.
+                if state
+                    .out
+                    .get(&logical)
+                    .is_some_and(|(_, old_priority)| priority > *old_priority)
+                {
+                    state.out.remove(&logical);
+                }
+                continue;
+            }
+            if *state.remaining_files == 0 {
+                *state.exhausted = true;
+                state.failures.push(DiscoveryFailure {
+                    path,
+                    error: FILE_COUNT_BUDGET_ERROR.to_string(),
+                });
+                break;
+            }
+            *state.remaining_files -= 1;
+            let entry = state.out.entry(logical).or_insert((path.clone(), priority));
             if priority > entry.1 {
                 *entry = (path, priority);
             }
@@ -1236,9 +1327,12 @@ fn collect_files_recursive(
 /// `state.out`. Symlinks and non-regular files (fifos, sockets, devices) are
 /// rejected outright: a symlink can point outside the root or into a cycle,
 /// and the remaining per-scan file budget.
+const FILE_COUNT_BUDGET_ERROR: &str = "file-count budget exhausted";
+
 struct WalkState<T> {
     out: Vec<T>,
     remaining_files: usize,
+    exhausted: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1273,7 +1367,7 @@ fn walk_dir_generic<T>(
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (_name, path, ft) in entries {
-        if state.remaining_files == 0 {
+        if state.exhausted {
             break;
         }
         // `file_type()` from `read_dir` doesn't follow symlinks, so this is a
@@ -1324,6 +1418,11 @@ fn walk_dir_generic<T>(
         }
 
         if let Some(item) = accept(&path) {
+            if state.remaining_files == 0 {
+                state.exhausted = true;
+                on_dir_err(&path, std::io::Error::other(FILE_COUNT_BUDGET_ERROR));
+                break;
+            }
             state.remaining_files -= 1;
             state.out.push(item);
         }
@@ -1892,6 +1991,7 @@ mod tests {
         });
         let names: Vec<String> = fm
             .discover_files_multi_mod()
+            .unwrap()
             .into_iter()
             .map(|f| f.logical_path)
             .collect();
@@ -2258,7 +2358,8 @@ replace_path = "COMMON/ideas"
             &include_dirs,
             &[],
             ScanBudget::default(),
-        );
+        )
+        .unwrap();
 
         let by_logical: HashMap<String, String> = files
             .iter()
@@ -2568,6 +2669,51 @@ replace_path = "COMMON/ideas"
     }
 
     #[test]
+    fn discovery_shares_budget_and_reports_only_omitted_eligible_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        std::fs::write(root.join("a/one.txt"), "x").unwrap();
+        std::fs::write(root.join("b/two.txt"), "x").unwrap();
+        std::fs::write(root.join("b/ignored.txt"), "x").unwrap();
+        let config = FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec!["a".into(), "b".into()],
+            exclude_patterns: vec!["ignored.txt".into()],
+            scan_budget: ScanBudget {
+                max_files: 2,
+                max_bytes: 0,
+                max_file_size: 0,
+            },
+            ..Default::default()
+        };
+        let fm = FileManager::new(config);
+        let (files, failures) = fm.discover_files_with_failures().unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| f.logical_path.as_str())
+                .collect::<Vec<_>>(),
+            ["a/one.txt", "b/two.txt"]
+        );
+        assert!(
+            failures.is_empty(),
+            "an exact cap and excluded files are complete"
+        );
+
+        std::fs::write(root.join("b/three.txt"), "x").unwrap();
+        let (files, failures) = fm.discover_files_with_failures().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].logical_path, "a/one.txt");
+        assert!(failures.iter().any(DiscoveryFailure::is_file_count_budget));
+        assert!(matches!(
+            fm.discover_files(),
+            Err(FileError::FileCountBudget(_))
+        ));
+    }
+
+    #[test]
     fn collect_paths_treats_a_zero_file_budget_as_unlimited() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
@@ -2623,13 +2769,79 @@ replace_path = "COMMON/ideas"
             &["common".to_string()],
             &[],
             ScanBudget::default(),
-        );
+        )
+        .unwrap();
         let names: Vec<String> = files.iter().map(|(_, lp)| lp.clone()).collect();
         assert!(names.iter().any(|n| n.ends_with("real.txt")));
         assert!(
             !names.iter().any(|n| n.ends_with("link.txt")),
             "multi-mod walk must reject file symlinks: {names:?}"
         );
+    }
+
+    #[test]
+    fn multi_mod_budget_ignores_excluded_files_and_keeps_shadowing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = [tmp.path().join("a"), tmp.path().join("b")];
+        for root in &roots {
+            std::fs::create_dir_all(root.join("common")).unwrap();
+        }
+        std::fs::write(roots[0].join("common/shared.txt"), "x").unwrap();
+        std::fs::write(roots[1].join("common/shared.txt"), "too large").unwrap();
+        std::fs::write(roots[1].join("common/ignored.txt"), "x").unwrap();
+        let mods: Vec<_> = roots
+            .iter()
+            .enumerate()
+            .map(|(i, root)| ResolvedMod {
+                descriptor: ModDescriptor {
+                    name: i.to_string(),
+                    path: None,
+                    replace_paths: vec![],
+                },
+                root: root.clone(),
+            })
+            .collect();
+        let config = FileManagerConfig {
+            include_dirs: vec!["common".into()],
+            max_file_size: 1,
+            exclude_patterns: vec!["ignored.txt".into()],
+            ..Default::default()
+        };
+        let (files, failures, _) = discover_files_multi_mod_with_failures(
+            None,
+            &mods,
+            &config.include_dirs,
+            &[],
+            ScanBudget {
+                max_files: 1,
+                max_bytes: 0,
+                max_file_size: 0,
+            },
+            &|path, logical| accept_script_file(&config, path, logical),
+        );
+        assert!(
+            files.is_empty(),
+            "the rejected higher layer still shadows the lower one"
+        );
+        assert!(
+            failures.is_empty(),
+            "excluded files do not exhaust an exact budget"
+        );
+
+        std::fs::write(roots[1].join("common/extra.txt"), "x").unwrap();
+        let (_, failures, _) = discover_files_multi_mod_with_failures(
+            None,
+            &mods,
+            &config.include_dirs,
+            &[],
+            ScanBudget {
+                max_files: 1,
+                max_bytes: 0,
+                max_file_size: 0,
+            },
+            &|path, logical| accept_script_file(&config, path, logical),
+        );
+        assert!(failures.iter().any(DiscoveryFailure::is_file_count_budget));
     }
 
     #[test]
@@ -2657,7 +2869,8 @@ replace_path = "COMMON/ideas"
                 max_files: 0,
                 ..ScanBudget::default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(
             files.len(),
             2,
@@ -3082,7 +3295,7 @@ replace_path = "COMMON/ideas"
     }
 
     #[test]
-    fn discover_paths_enforces_the_budget_per_root() {
+    fn discover_paths_shares_the_budget_across_roots() {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         for root in [first.path(), second.path()] {
@@ -3106,9 +3319,11 @@ replace_path = "COMMON/ideas"
         )
         .unwrap();
 
-        assert_eq!(report.files.len(), 2);
+        assert_eq!(report.files.len(), 1);
         assert!(report.files[0].path.starts_with(first.path()));
-        assert!(report.files[1].path.starts_with(second.path()));
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0].is_file_count_budget());
+        assert!(report.failures[0].path.starts_with(second.path()));
     }
 
     #[test]

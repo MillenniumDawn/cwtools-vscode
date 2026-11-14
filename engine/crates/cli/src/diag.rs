@@ -31,25 +31,28 @@ impl SourceLines {
 
     fn trimmed_from(&mut self, key: &str, path: &Path, line: u32) -> &str {
         if self.file != key {
-            self.lines = cwtools_file_manager::read_text(path)
-                .map(|text| text.lines().map(|l| l.trim().to_string()).collect())
-                .unwrap_or_default();
-            self.file = key.to_string();
-            // Built from the same trimmed lines the hash path reads, so a
-            // directive costs nothing extra; trimming cannot hide one (it
-            // only strips leading/trailing whitespace around the line).
-            self.inline_ignored.clear();
-            for (i, line) in self.lines.iter().enumerate() {
-                if let Some(codes) = cwtools_validation::inline_ignore::inline_directive_codes(line)
-                {
-                    self.inline_ignored
-                        .insert(i as u32 + 1, codes.into_iter().collect());
-                }
-            }
+            let text = cwtools_file_manager::read_text(path).ok();
+            self.set_text(key, text.as_deref());
         }
         line.checked_sub(1)
             .and_then(|i| self.lines.get(i as usize))
             .map_or("", String::as_str)
+    }
+
+    /// Seed a source read through its indexed snapshot. A failed read is
+    /// memoized as empty so reporting never falls back to an unbounded read.
+    pub(crate) fn set_text(&mut self, key: &str, text: Option<&str>) {
+        self.lines = text
+            .map(|text| text.lines().map(|line| line.trim().to_string()).collect())
+            .unwrap_or_default();
+        self.file = key.to_string();
+        self.inline_ignored.clear();
+        for (i, line) in self.lines.iter().enumerate() {
+            if let Some(codes) = cwtools_validation::inline_ignore::inline_directive_codes(line) {
+                self.inline_ignored
+                    .insert(i as u32 + 1, codes.into_iter().collect());
+            }
+        }
     }
 
     /// Whether a `# cwtools-ignore` directive in `file` suppresses a

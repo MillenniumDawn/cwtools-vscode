@@ -246,7 +246,9 @@ impl Backend {
         let game = self.state.config.read().game();
         let registry = build_scope_registry_arc(&ruleset, game);
         let var_effects = cwtools_info::variable_defining_effects(&ruleset);
-        // Lock order: rules -> info_service.
+        // Serialize the rules update and generation bump with vanilla publication.
+        // Lock order: vanilla_state -> rules -> info_service.
+        let vanilla = self.state.vanilla_state.lock();
         let mut rules = self.state.rules.write();
         rules.ruleset = Some(Arc::new(ruleset));
         rules.scope_registry = registry;
@@ -255,8 +257,16 @@ impl Backend {
             .write()
             .update_ruleset_data(var_effects);
         drop(rules);
+        self.state
+            .settings_generation
+            .fetch_add(1, Ordering::SeqCst);
+        drop(vanilla);
         self.refresh_open_reference_sites();
         self.bump_info_revision();
+    }
+
+    fn bump_settings_generation(&self) {
+        let _vanilla = self.state.vanilla_state.lock();
         self.state
             .settings_generation
             .fetch_add(1, Ordering::SeqCst);
@@ -1019,20 +1029,18 @@ impl Backend {
         if next.is_none() {
             return;
         }
-        self.state
-            .settings_generation
-            .fetch_add(1, Ordering::SeqCst);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let mut rescanned = self.validate_entire_workspace(false).await;
-        while !rescanned && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            rescanned = self.validate_entire_workspace(false).await;
-        }
-        if !rescanned {
+        self.bump_settings_generation();
+        let outcome = self
+            .wait_for_scan(
+                std::time::Instant::now() + std::time::Duration::from_secs(60),
+                None,
+            )
+            .await;
+        if outcome != ScanOutcome::Ran {
             self.client
                 .log_message(
                     MessageType::WARNING,
-                    "workspace folders changed but a scan stayed in progress; index still points at the previous folder",
+                    "workspace folders changed but the scan did not complete; the index may be incomplete",
                 )
                 .await;
         }
@@ -1211,9 +1219,7 @@ impl Backend {
             *self.state.loc_discovery_cache.lock() = None;
         }
         if rescan {
-            self.state
-                .settings_generation
-                .fetch_add(1, Ordering::SeqCst);
+            self.bump_settings_generation();
         }
         let (n_files, n_dirs, n_codes) = counts;
         tracing::info!(
@@ -1288,26 +1294,34 @@ impl Backend {
     }
 
     fn clear_vanilla_state(&self) {
+        self.clear_vanilla_state_with(|| {});
+    }
+
+    fn clear_vanilla_state_with<F: FnOnce()>(&self, before_info_cleanup: F) {
+        // Keep the payload and its auxiliary names under one publication fence.
+        // A new stage/merge must not be cleared by an older clear operation.
+        let mut vanilla = self.state.vanilla_state.lock();
+        vanilla.publication_revision = vanilla.publication_revision.wrapping_add(1);
+        *self.state.last_scan_fingerprint.lock() = None;
         self.state.vanilla_merged.store(false, Ordering::SeqCst);
-        {
-            let mut vanilla = self.state.vanilla_state.lock();
-            vanilla.index = None;
-            vanilla.loc_keys = None;
-            vanilla.file_paths = None;
-            vanilla.var_names = None;
-            vanilla.scripted_loc_names = None;
-            vanilla.scripted_gui_names = None;
-            // The next merge uses this to remove pre-clear base-game entries.
-            // Clearing it here would leave their old provenance in the index.
-        }
+        vanilla.index = None;
+        vanilla.loc_keys = None;
+        vanilla.file_paths = None;
+        vanilla.var_names = None;
+        vanilla.scripted_loc_names = None;
+        vanilla.scripted_gui_names = None;
+        // Keep merged_uris: the next merge uses it to remove old provenance.
         *self.state.vanilla_loc.lock() = None;
+        before_info_cleanup();
         {
             let mut info = self.state.info_service.write();
             let type_index = Arc::make_mut(&mut info.type_index);
+            type_index.complete = false;
             type_index.var_index.clear_vanilla_names();
             type_index.scripted_loc_index.set_vanilla_names(&[]);
             type_index.scripted_gui_index.set_vanilla_names(&[]);
         }
+        drop(vanilla);
         self.bump_info_revision();
     }
 
@@ -1317,6 +1331,27 @@ impl Backend {
     }
 
     async fn cache_vanilla_command(&self, token: Option<ProgressToken>) -> Result<Option<Value>> {
+        self.cache_vanilla_command_with(
+            token,
+            |backend| backend.merge_pending_vanilla_index(),
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn cache_vanilla_command_with<F>(
+        &self,
+        token: Option<ProgressToken>,
+        merge_vanilla: F,
+        loader: Option<crate::scan::VanillaLoader>,
+    ) -> Result<Option<Value>>
+    where
+        F: FnOnce(
+                &Backend,
+            )
+                -> std::result::Result<(), cwtools_file_manager::file_manager::FileError>
+            + Send,
+    {
         let progress =
             CommandProgress::begin(self, token, "CWTools: Rebuild base-game cache", false).await;
         if progress.is_cancelled() {
@@ -1330,12 +1365,31 @@ impl Backend {
         // this command never reaches the code that turns it off. The guard covers both
         // exits: the normal one below, and the client cancelling the command mid-index (#204).
         let guard = crate::scan::ScanGuard::for_command(self);
-        self.ensure_vanilla_index(Some(&progress), true, false)
-            .await;
-        tokio::task::block_in_place(|| self.merge_pending_vanilla_index());
-        self.rebuild_modifier_keys();
+        let ensured = match loader {
+            Some(loader) => {
+                self.ensure_vanilla_index_with_loader(Some(&progress), true, false, Some(loader))
+                    .await
+            }
+            None => {
+                self.ensure_vanilla_index(Some(&progress), true, false)
+                    .await
+            }
+        };
+        let result = match ensured {
+            Ok(()) => tokio::task::block_in_place(|| merge_vanilla(self)),
+            Err(error) => Err(error),
+        };
+        if result.is_ok() {
+            self.rebuild_modifier_keys();
+        } else {
+            // Do not let an earlier workspace fingerprint skip the next retry.
+            self.invalidate_vanilla_scan();
+        }
         guard.finish().await;
-        let msg = "Vanilla cache rebuilt.".to_string();
+        let msg = match result {
+            Ok(()) => "Vanilla cache rebuilt.".to_string(),
+            Err(error) => format!("Vanilla cache rebuild failed: {error}"),
+        };
         progress.finish(Some(msg.clone())).await;
         Ok(Some(Value::String(msg)))
     }
@@ -1585,6 +1639,109 @@ mod tests {
     use serde_json::json;
 
     use crate::testing::test_backend;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vanilla_rebuild_reports_auxiliary_index_failure() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        backend.state.config.write().vanilla_dir = Some(tmp.path().join("missing"));
+        *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
+        backend
+            .state
+            .loading_bar_active
+            .store(true, Ordering::SeqCst);
+        let path = std::path::PathBuf::from("budget-exceeded");
+        let outcome = backend
+            .cache_vanilla_command_with(
+                None,
+                |_| Err(cwtools_file_manager::file_manager::FileError::FileCountBudget(path)),
+                None,
+            )
+            .await
+            .unwrap();
+        let Some(Value::String(message)) = outcome else {
+            panic!("rebuild must return a status message");
+        };
+        assert!(
+            message.starts_with("Vanilla cache rebuild failed:"),
+            "{message}"
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vanilla_rebuild_reports_cold_loader_failure() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla = tmp.path().join("vanilla");
+        let resources = vanilla.join("gfx");
+        std::fs::create_dir_all(&resources).unwrap();
+        for name in ["one.dds", "two.dds"] {
+            std::fs::write(resources.join(name), b"").unwrap();
+        }
+        {
+            let mut config = backend.state.config.write();
+            config.vanilla_dir = Some(vanilla);
+            config.cache_dir = Some(tmp.path().join("cache"));
+        }
+        backend.set_ruleset(RuleSet::new());
+        *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
+        let failed = backend
+            .cache_vanilla_command_with(
+                None,
+                |backend| backend.merge_pending_vanilla_index(),
+                Some(crate::scan::test_capped_vanilla_loader),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(failed, Some(Value::String(message))
+            if message.starts_with("Vanilla cache rebuild failed:")));
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(backend.state.vanilla_state.lock().index.is_none());
+        assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
+        assert!(!backend.state.info_service.read().type_index.complete);
+        assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
+        std::fs::remove_file(resources.join("two.dds")).unwrap();
+        let recovered = backend
+            .cache_vanilla_command_with(
+                None,
+                |backend| backend.merge_pending_vanilla_index(),
+                Some(crate::scan::test_capped_vanilla_loader),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered,
+            Some(Value::String("Vanilla cache rebuilt.".into()))
+        );
+        assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_folder_change_does_not_retry_discovery_failure() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-workspace");
+        let uri = Url::from_file_path(&missing).unwrap();
+        let change = DidChangeWorkspaceFoldersParams {
+            event: WorkspaceFoldersChangeEvent {
+                added: vec![WorkspaceFolder {
+                    uri,
+                    name: "missing".to_string(),
+                }],
+                removed: Vec::new(),
+            },
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.did_change_workspace_folders_impl(change),
+        )
+        .await
+        .expect("failed discovery must not retry as though a scan were busy");
+        assert!(!backend.state.scan_in_progress.load(Ordering::SeqCst));
+        assert!(backend.state.last_scan_summary.lock().is_none());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn did_change_configuration_reloads_rules_and_changes_rule_diagnostics() {
@@ -2181,6 +2338,53 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_clear_cannot_erase_newly_merged_auxiliary_names() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla_dir = tmp.path().join("vanilla");
+        std::fs::create_dir_all(&vanilla_dir).unwrap();
+        let path = vanilla_dir.join("new.txt");
+        std::fs::write(&path, "").unwrap();
+        backend.state.config.write().vanilla_dir = Some(vanilla_dir);
+        let (start_stage, stage_started) = std::sync::mpsc::channel();
+        let (ack_stage, stage_acknowledged) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let backend_ref = &backend;
+            let path_ref = &path;
+            scope.spawn(move || {
+                stage_started.recv().unwrap();
+                ack_stage.send(()).unwrap();
+                backend_ref.stage_vanilla_payload(vanilla_data(
+                    path_ref,
+                    "new_instance",
+                    "new_var",
+                    "new_loc",
+                    "new_gui",
+                ));
+                backend_ref.merge_pending_vanilla_index().unwrap();
+            });
+            backend.clear_vanilla_state_with(|| {
+                start_stage.send(()).unwrap();
+                // Wait only until the stage thread starts, never for its merge while
+                // this thread owns the publication fence.
+                stage_acknowledged
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                assert!(
+                    backend.state.vanilla_state.try_lock().is_none(),
+                    "the publication fence must cover auxiliary cleanup"
+                );
+            });
+        });
+        let index = backend.state.info_service.read();
+        assert!(index.type_index.var_index.contains("new_var"));
+        assert!(index.type_index.scripted_loc_index.contains("new_loc"));
+        assert!(index.type_index.scripted_gui_index.contains("new_gui"));
+        assert!(index.type_index.complete);
+        assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn clear_then_restage_removes_old_uris_and_replaces_auxiliary_names() {
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
@@ -2203,7 +2407,7 @@ mod tests {
             "old_scripted_loc",
             "old_scripted_gui",
         ));
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
         let old_uri: Arc<str> =
             crate::paths::path_to_uri(&std::fs::canonicalize(&old_file).unwrap()).into();
         {
@@ -2241,7 +2445,7 @@ mod tests {
             "new_scripted_loc",
             "new_scripted_gui",
         ));
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
         let new_uri: Arc<str> =
             crate::paths::path_to_uri(&std::fs::canonicalize(&new_file).unwrap()).into();
         let index = backend.state.info_service.read();

@@ -189,7 +189,9 @@ fn discover_files_budget_follows_sorted_order() {
         },
         ..FileManagerConfig::default()
     };
-    let files = localisation_paths(&[tmp.path()], &config);
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].file_name().unwrap(), "alpha.yml");
+    let report = discover_paths(&[tmp.path()], &config, &[FileKind::Localisation]).unwrap();
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files[0].path.file_name().unwrap(), "alpha.yml");
+    assert_eq!(report.failures.len(), 1);
+    assert!(report.failures[0].is_file_count_budget());
 }

@@ -121,6 +121,7 @@ fn build(primary: &Path, parents: &[PathBuf], case: &Case) -> FileIndex {
             primary, parents,
         )),
     )
+    .unwrap()
 }
 
 #[test]
@@ -156,7 +157,8 @@ fn case_sensitive_build_keeps_the_workspace_spelling() {
         VanillaFiles::Cached(Cow::Borrowed(&["gfx/shared.dds".to_string()])),
         true,
         None,
-    );
+    )
+    .unwrap();
     assert!(index.contains("gfx/Shared.DDS"));
     assert!(!index.contains("gfx/shared.dds"));
 }
@@ -169,6 +171,7 @@ fn case_sensitive_build_keeps_the_workspace_spelling() {
 #[test]
 fn owned_cached_spellings_move_without_copying() {
     let tmp = write_tree(&[]);
+    std::fs::create_dir_all(tmp.path().join("mod")).unwrap();
     let originals: Vec<String> = OWNED_SPELLING_LENGTHS
         .into_iter()
         .map(|len| format!("gfx/owned_{}.dds{}", len, "a".repeat(len)))
@@ -185,7 +188,8 @@ fn owned_cached_spellings_move_without_copying() {
         VanillaFiles::Cached(Cow::Owned(originals)),
         true,
         None,
-    );
+    )
+    .unwrap();
     let after: HashSet<usize> = index
         .paths_exact()
         .map(|path| path.as_ptr() as usize)
