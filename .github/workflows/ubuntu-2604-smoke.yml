@@ -1,0 +1,46 @@
+# Targeted migration smoke, isolated from the main CI gate and its caches.
+# The PR path validates changes to this workflow; after merge, maintainers can
+# run it on demand without adding another job to every pull request.
+name: Ubuntu 26.04 compatibility smoke
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ubuntu-2604-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Build and extension host smoke
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    env:
+      CWTOOLS_TEST_DISPLAY: xvfb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Install virtual display test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb xauth
+          command -v xvfb-run
+          command -v xauth
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+      - name: Build engine and client
+        run: npm run build -- quick
+      - name: Extension host smoke
+        timeout-minutes: 10
+        run: node scripts/build/python.mjs scripts/build/hosttest.py --label smoke
