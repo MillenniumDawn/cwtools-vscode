@@ -211,6 +211,14 @@ fn fingerprint(roots: &[Root], folders: Option<&[String]>) -> u64 {
         let mut policy = DefaultHasher::new();
         (&root.path, multi).hash(&mut policy);
         total = total.wrapping_add(policy.finish());
+        if root.role == RootRole::Mods {
+            // Use the loader\'s supplied spelling, including case-insensitive
+            // filesystem lookup, independently of ordinary file exclusions.
+            let descriptor = root.path.join("descriptor.mod");
+            if let Ok(meta) = fs::metadata(&descriptor) {
+                total = total.wrapping_add(entry_digest(&descriptor, &meta));
+            }
+        }
         if multi {
             // Walking the collection as well would apply a second, incorrect
             // relative path to member files and bypass path-based exclusions.
@@ -239,10 +247,7 @@ fn fingerprint(roots: &[Root], folders: Option<&[String]>) -> u64 {
 }
 
 fn fingerprint_collection(base: &Path) -> u64 {
-    let descriptor = base.join("descriptor.mod");
-    let mut total = fs::metadata(&descriptor)
-        .map(|meta| entry_digest(&descriptor, &meta))
-        .unwrap_or(0);
+    let mut total = 0u64;
     for name in ["mod", "mods"] {
         total = total.wrapping_add(fingerprint_descriptors(&base.join(name)));
     }
@@ -298,8 +303,7 @@ fn fingerprint_tree(
             let accepted = match root.role {
                 RootRole::Rules => is_rules_input(&path),
                 RootRole::Mods => {
-                    is_mod_descriptor(root, &path)
-                        || !is_ignored_logical_path(&root_relative(base, &path), &root.ignore_files)
+                    !is_ignored_logical_path(&root_relative(base, &path), &root.ignore_files)
                 }
             };
             if !accepted {
@@ -310,22 +314,6 @@ fn fingerprint_tree(
         }
     }
     total
-}
-
-/// These structural inputs are read independently of file ignore globs.
-fn is_mod_descriptor(root: &Root, path: &Path) -> bool {
-    let root_descriptor = path.parent() == Some(root.path.as_path())
-        && path.file_name().is_some_and(|name| {
-            name == "descriptor.mod"
-                || (cfg!(windows) && name.eq_ignore_ascii_case("descriptor.mod"))
-        });
-    root_descriptor
-        || (path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("mod"))
-            && ["mod", "mods"]
-                .iter()
-                .any(|name| path.parent() == Some(root.path.join(name).as_path())))
 }
 
 fn fingerprint_descriptors(dir: &Path) -> u64 {
@@ -1033,16 +1021,16 @@ mod tests {
         edit_is_observed(&watched, &[], &dir.path().join("custom/keep.txt"), true);
     }
 
-    #[cfg(windows)]
     #[test]
-    fn case_variant_root_descriptor_bypasses_file_ignores_on_windows() {
+    fn root_descriptor_observability_matches_filesystem_case_lookup() {
         let dir = tempfile::tempdir().unwrap();
         let descriptor = dir.path().join("Descriptor.MOD");
         fs::write(&descriptor, "replace_path = common\n").unwrap();
-        assert!(cwtools_file_manager::file_manager::read_root_descriptor(dir.path()).is_some());
+        let loaded =
+            cwtools_file_manager::file_manager::read_root_descriptor(dir.path()).is_some();
         let mut root = mods_root(dir.path());
         root.ignore_files = vec!["*.mod".to_string()];
-        edit_is_observed(&[root], &[], &descriptor, true);
+        edit_is_observed(&[root], &[], &descriptor, loaded);
     }
 
     #[test]
