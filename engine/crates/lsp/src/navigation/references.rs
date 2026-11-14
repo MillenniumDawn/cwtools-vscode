@@ -175,43 +175,42 @@ impl Backend {
     }
 
     pub(crate) async fn loc_file_uris(&self) -> Vec<String> {
-        let mut uris = tokio::task::block_in_place(|| {
-            self.state
+        tokio::task::block_in_place(|| {
+            let mut uris = self
+                .state
                 .documents
                 .lock()
                 .keys()
                 .filter(|uri| crate::paths::is_loc_file(uri))
                 .cloned()
-                .collect::<std::collections::HashSet<String>>()
-        });
-        let (roots, ignore_files, ignore_dirs): (
-            Vec<std::path::PathBuf>,
-            Vec<String>,
-            Vec<String>,
-        ) = {
-            let cfg = self.state.config.read();
-            let roots = if !cfg.workspace_roots.is_empty() {
-                cfg.workspace_roots.clone()
-            } else if let Some(ws) = &cfg.workspace_uri {
-                if let Ok(url) = Url::parse(ws)
-                    && let Ok(p) = url.to_file_path()
-                {
-                    vec![p]
+                .collect::<std::collections::HashSet<String>>();
+            let (roots, ignore_files, ignore_dirs): (
+                Vec<std::path::PathBuf>,
+                Vec<String>,
+                Vec<String>,
+            ) = {
+                let cfg = self.state.config.read();
+                let roots = if !cfg.workspace_roots.is_empty() {
+                    cfg.workspace_roots.clone()
+                } else if let Some(ws) = &cfg.workspace_uri {
+                    if let Ok(url) = Url::parse(ws)
+                        && let Ok(p) = url.to_file_path()
+                    {
+                        vec![p]
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
-                }
-            } else {
-                Vec::new()
+                };
+                (
+                    roots,
+                    cfg.ignore_file_patterns.clone(),
+                    cfg.ignore_dir_patterns.clone(),
+                )
             };
-            (
-                roots,
-                cfg.ignore_file_patterns.clone(),
-                cfg.ignore_dir_patterns.clone(),
-            )
-        };
-        if !roots.is_empty() {
-            let discovered = tokio::task::block_in_place(|| {
-                match cwtools_driver::discover_localisation_files(
+            if !roots.is_empty() {
+                let discovered = match cwtools_driver::discover_localisation_files(
                     &roots,
                     &ignore_files,
                     &ignore_dirs,
@@ -238,15 +237,13 @@ impl Backend {
                         tracing::warn!(error = %error, "localisation discovery failed");
                         Vec::new()
                     }
-                }
-            });
-            tokio::task::block_in_place(|| {
+                };
                 for path in discovered {
                     uris.insert(crate::paths::path_to_uri(&path));
                 }
-            });
-        }
-        tokio::task::block_in_place(|| uris.into_iter().collect())
+            }
+            uris.into_iter().collect()
+        })
     }
 
     /// Where `keys` are defined: closed files from `loc_locations`, open loc
