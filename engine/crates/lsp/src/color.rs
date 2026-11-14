@@ -462,58 +462,62 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(Vec::new());
         };
-        let (game, scope_checks, var_checks, encoding, ws_prefix) = {
-            let cfg = self.state.config.read();
-            (
-                cfg.game(),
-                cfg.scope_checks,
-                cfg.var_checks,
-                cfg.position_encoding.clone(),
-                cfg.workspace_prefix.clone(),
-            )
-        };
-        let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
-        let (ruleset, modifier_keys, scope_registry) = {
-            let rules = self.state.rules.read();
-            (
-                rules.ruleset.clone(),
-                rules.modifier_keys.clone(),
-                rules.scope_registry.clone(),
-            )
-        };
-        let Some(ruleset) = ruleset else {
-            return Ok(Vec::new());
-        };
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::ColorWalk);
+            let (game, scope_checks, var_checks, encoding, ws_prefix) = {
+                let cfg = self.state.config.read();
+                (
+                    cfg.game(),
+                    cfg.scope_checks,
+                    cfg.var_checks,
+                    cfg.position_encoding.clone(),
+                    cfg.workspace_prefix.clone(),
+                )
+            };
+            let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
+            let (ruleset, modifier_keys, scope_registry) = {
+                let rules = self.state.rules.read();
+                (
+                    rules.ruleset.clone(),
+                    rules.modifier_keys.clone(),
+                    rules.scope_registry.clone(),
+                )
+            };
+            let Some(ruleset) = ruleset else {
+                return Ok(Vec::new());
+            };
 
-        let table = self.table_for(&ast);
-        let found = {
-            let info = self.state.info_service.read();
-            let inline_guard = self.state.inline_scripts.read();
-            let prepared = crate::validate::make_prepared(
-                &ruleset,
-                &table,
-                game,
-                &info.type_index,
-                &modifier_keys,
-                None,
-                None,
-                Some(&inline_guard),
-                scope_registry.as_ref(),
-                scope_checks,
-                var_checks,
-            );
-            document_colours(&ast, &table, Some((&prepared, logical_path.as_str())))
-        };
+            let table = self.table_for(&ast);
+            let found = {
+                let info = self.state.info_service.read();
+                let inline_guard = self.state.inline_scripts.read();
+                let prepared = crate::validate::make_prepared(
+                    &ruleset,
+                    &table,
+                    game,
+                    &info.type_index,
+                    &modifier_keys,
+                    None,
+                    None,
+                    Some(&inline_guard),
+                    scope_registry.as_ref(),
+                    scope_checks,
+                    var_checks,
+                );
+                document_colours(&ast, &table, Some((&prepared, logical_path.as_str())))
+            };
 
-        let lines: Vec<&str> = text.lines().collect();
-        Ok(found
-            .iter()
-            .filter(|found| is_color_range_safe(found.range, &lines))
-            .map(|f| ColorInformation {
-                range: to_lsp_range(f.range, &lines, &encoding),
-                color: to_color(&f.literal),
-            })
-            .collect())
+            let lines: Vec<&str> = text.lines().collect();
+            Ok(found
+                .iter()
+                .filter(|found| is_color_range_safe(found.range, &lines))
+                .map(|f| ColorInformation {
+                    range: to_lsp_range(f.range, &lines, &encoding),
+                    color: to_color(&f.literal),
+                })
+                .collect())
+        })
     }
 
     pub(crate) async fn color_presentation_impl(
@@ -555,6 +559,90 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The only async worker must be available for another task while a
+    /// synchronous editor walk is held. A watchdog releases the gate if a
+    /// regression blocks the runtime itself.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn color_and_inlay_walks_release_the_async_worker() {
+        use crate::state::{HoldGate, HoldPoint};
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        for point in [HoldPoint::ColorWalk, HoldPoint::InlayWalk] {
+            let (backend, workspace) = crate::testing::workspace_backend();
+            let uri = crate::paths::path_to_uri(&workspace.path().join("common/test.txt"));
+            let text = "test = { color = { 1 1 1 } }";
+            crate::testing::open_document(&backend, &uri, text);
+            let ast = Arc::new(cwtools_parser::parser::parse_string(
+                text,
+                &backend.state.string_table,
+            ));
+            backend.state.documents.lock().set_ast(&uri, 1, ast);
+            let mut rules = cwtools_rules::rules_types::RuleSet::new();
+            rules.reindex();
+            backend.state.rules.write().ruleset = Some(Arc::new(rules));
+            backend.state.inlay_hints_loc_titles.store(true, Ordering::Relaxed);
+
+            let gate = HoldGate::new(point);
+            *backend.state.hold_gate.lock() = Some(gate.clone());
+            let watchdog_gate = gate.clone();
+            let watchdog_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let watchdog_flag = watchdog_fired.clone();
+            let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel::<()>();
+            let watchdog = std::thread::spawn(move || {
+                if watchdog_rx.recv_timeout(Duration::from_secs(15)).is_err() {
+                    watchdog_flag.store(true, Ordering::Release);
+                    watchdog_gate.release();
+                }
+            });
+            let worker = backend.clone();
+            let request_uri = uri.clone();
+            let walk = tokio::spawn(async move {
+                if point == HoldPoint::ColorWalk {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri }
+                    }))
+                    .unwrap();
+                    worker.document_color_impl(params).await.unwrap();
+                } else {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri },
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 1, "character": 0 }
+                        }
+                    }))
+                    .unwrap();
+                    worker.inlay_hint_impl(params).await.unwrap();
+                }
+            });
+            let arrived = tokio::time::timeout(Duration::from_secs(5), async {
+                while !gate.has_arrived() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            if arrived.is_err() {
+                gate.release();
+                let _ = watchdog_tx.send(());
+                watchdog.join().unwrap();
+                panic!("editor walk did not reach its gate: {point:?}");
+            }
+            let ping = tokio::spawn(async { 42 });
+            let progress = tokio::time::timeout(Duration::from_secs(5), ping).await;
+            gate.release();
+            let _ = watchdog_tx.send(());
+            watchdog.join().unwrap();
+            walk.await.unwrap();
+            assert!(
+                !watchdog_fired.load(Ordering::Acquire),
+                "watchdog released a blocked runtime during {point:?}"
+            );
+            assert_eq!(progress.unwrap().unwrap(), 42, "worker blocked by {point:?}");
+        }
+    }
 
     /// The literal the provider reads for `c = <text>`, through the parser.
     fn parse_literal(text: &str) -> Option<ColourLiteral> {

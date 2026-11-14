@@ -2,6 +2,8 @@
 
 #### Engine
 
+* Run color and inlay hint document walks outside async runtime workers.
+
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
 * Embed the source commit in published server binaries and expose it in version output and setup reports; local builds without supplied identity report it as unavailable. (#1223)

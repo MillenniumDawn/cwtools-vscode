@@ -40,71 +40,75 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(None);
         };
-        let encoding = self.position_encoding();
-        let ws_prefix = self.state.config.read().workspace_prefix.clone();
-        let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
-        let lines = DocLines::new(&text, encoding);
-        let table = self.table_for(&ast);
-        let loc_hints = if loc_titles {
-            // Lock order: info_service -> loc_text (documents already released).
-            let info = self.state.info_service.read();
-            let loc_text = self.state.loc_text.read();
-            loc_title_hints(
-                &ast,
-                &table,
-                &lines,
-                params.range,
-                &info.type_index,
-                &loc_text,
-            )
-        } else {
-            Vec::new()
-        };
-        let mut scope_hints = Vec::new();
-        if scopes {
-            let rules_guard = self.state.rules.read();
-            let info_guard = self.state.info_service.read();
-            let inline_guard = self.state.inline_scripts.read();
-            if let (Some(ruleset), Some(registry)) = (
-                rules_guard.ruleset.as_ref(),
-                rules_guard.scope_registry.as_ref(),
-            ) {
-                let (game, scope_checks, var_checks) = {
-                    let cfg = self.state.config.read();
-                    (cfg.game(), cfg.scope_checks, cfg.var_checks)
-                };
-                let prepared = crate::validate::make_prepared(
-                    ruleset,
-                    &table,
-                    game,
-                    &info_guard.type_index,
-                    rules_guard.modifier_keys.as_ref(),
-                    None,
-                    None,
-                    Some(&inline_guard),
-                    Some(registry),
-                    scope_checks,
-                    var_checks,
-                );
-                let (start_line, end_line) = source_line_bounds(params.range);
-                let transitions = cwtools_validation::position::scope_transitions_with_limit(
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::InlayWalk);
+            let encoding = self.position_encoding();
+            let ws_prefix = self.state.config.read().workspace_prefix.clone();
+            let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
+            let lines = DocLines::new(&text, encoding);
+            let table = self.table_for(&ast);
+            let loc_hints = if loc_titles {
+                // Lock order: info_service -> loc_text (documents already released).
+                let info = self.state.info_service.read();
+                let loc_text = self.state.loc_text.read();
+                loc_title_hints(
                     &ast,
-                    &logical_path,
-                    &prepared,
-                    start_line,
-                    end_line,
-                    MAX_HINTS,
-                );
-                scope_hints =
-                    scope_hints_from_transitions(&transitions, &lines, registry, params.range);
+                    &table,
+                    &lines,
+                    params.range,
+                    &info.type_index,
+                    &loc_text,
+                )
+            } else {
+                Vec::new()
+            };
+            let mut scope_hints = Vec::new();
+            if scopes {
+                let rules_guard = self.state.rules.read();
+                let info_guard = self.state.info_service.read();
+                let inline_guard = self.state.inline_scripts.read();
+                if let (Some(ruleset), Some(registry)) = (
+                    rules_guard.ruleset.as_ref(),
+                    rules_guard.scope_registry.as_ref(),
+                ) {
+                    let (game, scope_checks, var_checks) = {
+                        let cfg = self.state.config.read();
+                        (cfg.game(), cfg.scope_checks, cfg.var_checks)
+                    };
+                    let prepared = crate::validate::make_prepared(
+                        ruleset,
+                        &table,
+                        game,
+                        &info_guard.type_index,
+                        rules_guard.modifier_keys.as_ref(),
+                        None,
+                        None,
+                        Some(&inline_guard),
+                        Some(registry),
+                        scope_checks,
+                        var_checks,
+                    );
+                    let (start_line, end_line) = source_line_bounds(params.range);
+                    let transitions = cwtools_validation::position::scope_transitions_with_limit(
+                        &ast,
+                        &logical_path,
+                        &prepared,
+                        start_line,
+                        end_line,
+                        MAX_HINTS,
+                    );
+                    scope_hints =
+                        scope_hints_from_transitions(&transitions, &lines, registry, params.range);
+                }
             }
-        }
-        let hints = merge_hints(loc_hints, scope_hints);
-        if hints.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(hints))
-        }
+            let hints = merge_hints(loc_hints, scope_hints);
+            if hints.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(hints))
+            }
+        })
     }
 }
 
