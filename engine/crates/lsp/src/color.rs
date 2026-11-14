@@ -575,10 +575,27 @@ mod tests {
             HoldPoint::InlayWalk,
             HoldPoint::HighlightWalk,
             HoldPoint::WorkspaceSymbolWalk,
+            HoldPoint::NestedSymbolWalk,
+            HoldPoint::FlatSymbolWalk,
+            HoldPoint::LocSymbolWalk,
         ] {
             let (backend, workspace) = crate::testing::workspace_backend();
-            let uri = crate::paths::path_to_uri(&workspace.path().join("common/test.txt"));
-            let text = "test = { color = { 1 1 1 } }";
+            let is_loc = point == HoldPoint::LocSymbolWalk;
+            let path = if is_loc {
+                "localisation/test_l_english.yml"
+            } else {
+                "common/test.txt"
+            };
+            let uri = crate::paths::path_to_uri(&workspace.path().join(path));
+            let text = if is_loc {
+                "l_english:\n test_key:0 \"Test\"\n"
+            } else {
+                "test = { color = { 1 1 1 } }"
+            };
+            backend
+                .state
+                .hierarchical_symbols
+                .store(point == HoldPoint::NestedSymbolWalk, Ordering::Relaxed);
             crate::testing::open_document(&backend, &uri, text);
             let ast = Arc::new(cwtools_parser::parser::parse_string(
                 text,
@@ -628,10 +645,16 @@ mod tests {
                     }))
                     .unwrap();
                     worker.document_highlight_impl(params).await.unwrap();
-                } else {
+                } else if point == HoldPoint::WorkspaceSymbolWalk {
                     let params = serde_json::from_value(serde_json::json!({ "query": "test" }))
                         .unwrap();
                     worker.symbol_request_impl(params).await.unwrap();
+                } else {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri }
+                    }))
+                    .unwrap();
+                    worker.document_symbol_impl(params).await.unwrap();
                 }
             });
             let arrived = tokio::time::timeout(Duration::from_secs(5), async {

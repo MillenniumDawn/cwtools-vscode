@@ -144,20 +144,23 @@ impl Backend {
             && let Some(ast) = self.ast_for(&uri)
         {
             let text = self.file_text_for(&uri).await.unwrap_or_default();
-            // (#541).
-            let lines = DocLines::new(&text, self.position_encoding());
-            let syms = build_doc_symbols(
-                &ast.root_children,
-                &ast.arena,
-                &self.state.string_table,
-                &lines,
-            );
+            let syms = tokio::task::block_in_place(|| {
+                #[cfg(test)]
+                self.hold(crate::state::HoldPoint::NestedSymbolWalk);
+                let lines = DocLines::new(&text, self.position_encoding());
+                build_doc_symbols(
+                    &ast.root_children,
+                    &ast.arena,
+                    &self.state.string_table,
+                    &lines,
+                )
+            });
             if !syms.is_empty() {
                 return Ok(Some(DocumentSymbolResponse::Nested(syms)));
             }
         }
 
-        let (instances, variables) = {
+        let (instances, variables) = tokio::task::block_in_place(|| {
             let info = self.state.info_service.read();
             let instances = info
                 .type_index
@@ -171,19 +174,40 @@ impl Backend {
                 .map(|file_info| file_info.defined_variables.clone())
                 .unwrap_or_default();
             (instances, variables)
-        };
+        });
 
         let text = self.file_text_for(&uri).await;
-        let lines = text
-            .as_deref()
-            .map(|text| DocLines::new(text, self.position_encoding()));
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::FlatSymbolWalk);
+            let lines = text
+                .as_deref()
+                .map(|text| DocLines::new(text, self.position_encoding()));
 
-        let mut symbols: Vec<SymbolInformation> = instances
-            .into_iter()
-            .map(|(type_name, name, loc)| {
-                make_symbol(
+            let mut symbols: Vec<SymbolInformation> = instances
+                .into_iter()
+                .map(|(type_name, name, loc)| {
+                    make_symbol(
+                        name.clone(),
+                        SymbolKind::STRUCT,
+                        Location {
+                            uri: params.text_document.uri.clone(),
+                            range: self.source_range_with_lines(
+                                lines.as_ref(),
+                                loc.line.saturating_sub(1),
+                                loc.col as u32,
+                                &name,
+                            ),
+                        },
+                        Some(type_name),
+                    )
+                })
+                .collect();
+
+            for (name, loc) in variables {
+                symbols.push(make_symbol(
                     name.clone(),
-                    SymbolKind::STRUCT,
+                    SymbolKind::CONSTANT,
                     Location {
                         uri: params.text_document.uri.clone(),
                         range: self.source_range_with_lines(
@@ -193,33 +217,16 @@ impl Backend {
                             &name,
                         ),
                     },
-                    Some(type_name),
-                )
-            })
-            .collect();
+                    None,
+                ));
+            }
 
-        for (name, loc) in variables {
-            symbols.push(make_symbol(
-                name.clone(),
-                SymbolKind::CONSTANT,
-                Location {
-                    uri: params.text_document.uri.clone(),
-                    range: self.source_range_with_lines(
-                        lines.as_ref(),
-                        loc.line.saturating_sub(1),
-                        loc.col as u32,
-                        &name,
-                    ),
-                },
-                None,
-            ));
-        }
-
-        if symbols.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(DocumentSymbolResponse::Flat(symbols)))
-        }
+            if symbols.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(DocumentSymbolResponse::Flat(symbols)))
+            }
+        })
     }
 
     async fn loc_document_symbols(
@@ -228,74 +235,79 @@ impl Backend {
     ) -> Option<DocumentSymbolResponse> {
         let uri = params.text_document.uri.to_string();
         let text = self.file_text_for(&uri).await?;
-        if text.trim().is_empty() {
-            return None;
-        }
-        let path = crate::paths::uri_to_path_str(&uri);
-        let files = cwtools_localization::parse_loc_files(&path, &text, None).unwrap_or_default();
-        if files.iter().all(|f| f.entries.is_empty()) {
-            return None;
-        }
-        let lines = DocLines::new(&text, self.position_encoding());
-        let hierarchical = self
-            .state
-            .hierarchical_symbols
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if hierarchical {
-            let mut syms: Vec<DocumentSymbol> = Vec::new();
-            for file in &files {
-                for entry in &file.entries {
-                    let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = lines.line(line0);
-                    let col = line_text
-                        .find(&entry.key)
-                        .map(|b| line_text[..b].chars().count() as u32)
-                        .unwrap_or(0);
-                    let range = lines.token_range(line0, col, &entry.key);
-                    #[allow(deprecated)]
-                    syms.push(DocumentSymbol {
-                        name: entry.key.clone(),
-                        detail: None,
-                        kind: SymbolKind::KEY,
-                        tags: None,
-                        deprecated: None,
-                        range,
-                        selection_range: range,
-                        children: None,
-                    });
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::LocSymbolWalk);
+            if text.trim().is_empty() {
+                return None;
+            }
+            let path = crate::paths::uri_to_path_str(&uri);
+            let files =
+                cwtools_localization::parse_loc_files(&path, &text, None).unwrap_or_default();
+            if files.iter().all(|f| f.entries.is_empty()) {
+                return None;
+            }
+            let lines = DocLines::new(&text, self.position_encoding());
+            let hierarchical = self
+                .state
+                .hierarchical_symbols
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if hierarchical {
+                let mut syms: Vec<DocumentSymbol> = Vec::new();
+                for file in &files {
+                    for entry in &file.entries {
+                        let line0 = (entry.position.line.saturating_sub(1)) as u32;
+                        let line_text = lines.line(line0);
+                        let col = line_text
+                            .find(&entry.key)
+                            .map(|b| line_text[..b].chars().count() as u32)
+                            .unwrap_or(0);
+                        let range = lines.token_range(line0, col, &entry.key);
+                        #[allow(deprecated)]
+                        syms.push(DocumentSymbol {
+                            name: entry.key.clone(),
+                            detail: None,
+                            kind: SymbolKind::KEY,
+                            tags: None,
+                            deprecated: None,
+                            range,
+                            selection_range: range,
+                            children: None,
+                        });
+                    }
+                }
+                if syms.is_empty() {
+                    None
+                } else {
+                    Some(DocumentSymbolResponse::Nested(syms))
+                }
+            } else {
+                let mut symbols: Vec<SymbolInformation> = Vec::new();
+                for file in &files {
+                    for entry in &file.entries {
+                        let line0 = (entry.position.line.saturating_sub(1)) as u32;
+                        let line_text = lines.line(line0);
+                        let col = line_text
+                            .find(&entry.key)
+                            .map(|b| line_text[..b].chars().count() as u32)
+                            .unwrap_or(0);
+                        symbols.push(make_symbol(
+                            entry.key.clone(),
+                            SymbolKind::KEY,
+                            Location {
+                                uri: params.text_document.uri.clone(),
+                                range: lines.token_range(line0, col, &entry.key),
+                            },
+                            None,
+                        ));
+                    }
+                }
+                if symbols.is_empty() {
+                    None
+                } else {
+                    Some(DocumentSymbolResponse::Flat(symbols))
                 }
             }
-            if syms.is_empty() {
-                None
-            } else {
-                Some(DocumentSymbolResponse::Nested(syms))
-            }
-        } else {
-            let mut symbols: Vec<SymbolInformation> = Vec::new();
-            for file in &files {
-                for entry in &file.entries {
-                    let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = lines.line(line0);
-                    let col = line_text
-                        .find(&entry.key)
-                        .map(|b| line_text[..b].chars().count() as u32)
-                        .unwrap_or(0);
-                    symbols.push(make_symbol(
-                        entry.key.clone(),
-                        SymbolKind::KEY,
-                        Location {
-                            uri: params.text_document.uri.clone(),
-                            range: lines.token_range(line0, col, &entry.key),
-                        },
-                        None,
-                    ));
-                }
-            }
-            if symbols.is_empty() {
-                None
-            } else {
-                Some(DocumentSymbolResponse::Flat(symbols))
-            }
-        }
+        })
     }
 }
