@@ -100,7 +100,7 @@ jobs:
       - name: ruff
         run: ruff check scripts tests/scripts
       - name: black
-        run: black --check scripts tests/scripts
+        run: black --check --diff scripts tests/scripts
       - name: pylint
         run: pylint scripts tests/scripts
       - name: mypy
