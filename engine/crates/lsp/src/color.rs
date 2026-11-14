@@ -605,7 +605,10 @@ mod tests {
             let mut rules = cwtools_rules::rules_types::RuleSet::new();
             rules.reindex();
             backend.state.rules.write().ruleset = Some(Arc::new(rules));
-            backend.state.inlay_hints_loc_titles.store(true, Ordering::Relaxed);
+            backend
+                .state
+                .inlay_hints_loc_titles
+                .store(true, Ordering::Relaxed);
 
             let gate = HoldGate::new(point);
             *backend.state.hold_gate.lock() = Some(gate.clone());
@@ -646,8 +649,8 @@ mod tests {
                     .unwrap();
                     worker.document_highlight_impl(params).await.unwrap();
                 } else if point == HoldPoint::WorkspaceSymbolWalk {
-                    let params = serde_json::from_value(serde_json::json!({ "query": "test" }))
-                        .unwrap();
+                    let params =
+                        serde_json::from_value(serde_json::json!({ "query": "test" })).unwrap();
                     worker.symbol_request_impl(params).await.unwrap();
                 } else {
                     let params = serde_json::from_value(serde_json::json!({
@@ -679,7 +682,11 @@ mod tests {
                 !watchdog_fired.load(Ordering::Acquire),
                 "watchdog released a blocked runtime during {point:?}"
             );
-            assert_eq!(progress.unwrap().unwrap(), 42, "worker blocked by {point:?}");
+            assert_eq!(
+                progress.unwrap().unwrap(),
+                42,
+                "worker blocked by {point:?}"
+            );
         }
     }
 
