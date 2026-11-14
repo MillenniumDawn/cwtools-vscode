@@ -2153,80 +2153,88 @@ impl Backend {
             // Open docs only: a watched closed file in the live overlay left a stale entry and
             // fired a whole-file first-sight sweep (#90); those use `loc_watched_overlay`.
             // Parsing and linting are sync CPU work, so keep them off the runtime worker (#87).
-            let (changed_keys, diagnostics, cache, source_hash) = tokio::task::block_in_place(|| {
-                let source_hash = cwtools_cache::workspace::content_hash(text);
-                // One parse of the edited buffer, shared by the key set, the diagnostics and
-                // the hover text below (#87).
-                let parsed_loc = try_parse_loc_buffer(text, &path);
-                let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
-                let parsed_loc = parsed_loc.unwrap_or_default();
-                #[cfg(test)]
-                self.hold(crate::state::HoldPoint::LocParsed);
-                // Keep the document locked until all shared localisation state is
-                // installed. A version check without this lock leaves an edit window
-                // between the check and the writes.
-                let docs = self.state.documents.lock();
-                if cancel.is_some_and(CancelFlag::is_cancelled)
-                    || (matches!(
+            let (changed_keys, diagnostics, cache, source_hash) =
+                tokio::task::block_in_place(|| {
+                    let source_hash = cwtools_cache::workspace::content_hash(text);
+                    // One parse of the edited buffer, shared by the key set, the diagnostics and
+                    // the hover text below (#87).
+                    let parsed_loc = try_parse_loc_buffer(text, &path);
+                    let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
+                    let parsed_loc = parsed_loc.unwrap_or_default();
+                    #[cfg(test)]
+                    self.hold(crate::state::HoldPoint::LocParsed);
+                    // Keep the document locked until all shared localisation state is
+                    // installed. A version check without this lock leaves an edit window
+                    // between the check and the writes.
+                    let docs = self.state.documents.lock();
+                    if cancel.is_some_and(CancelFlag::is_cancelled)
+                        || (matches!(
+                            trigger,
+                            crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
+                        ) && docs.contains_key(uri))
+                        || parsed_version.is_some_and(|version| {
+                            !docs.get(uri).is_some_and(|doc| doc.version == version)
+                                || docs.content_hash(uri) != Some(source_hash)
+                        })
+                    {
+                        return None;
+                    }
+                    let is_open = docs.contains_key(uri);
+                    let changed_keys: HashSet<String> = if is_open {
+                        let new_keys = loc_keys_from(&parsed_loc);
+                        if self.loc_overlay_entry_matches(
+                            &self.state.loc_live_overlay,
+                            uri,
+                            &new_keys,
+                        ) {
+                            HashSet::new()
+                        } else {
+                            let mut overlay = self.loc_live_overlay_mut();
+                            let diff = match overlay.get(uri) {
+                                Some(prev) => {
+                                    prev.symmetric_difference(&new_keys).cloned().collect()
+                                }
+                                None => new_keys.clone(),
+                            };
+                            overlay.insert(uri.to_string(), new_keys);
+                            diff
+                        }
+                    } else if matches!(trigger, crate::ValidateTrigger::Watched) {
+                        self.record_watched_loc_parsed(uri, &parsed_loc)
+                    } else {
+                        HashSet::new()
+                    };
+                    // Update hover and closed-file locations while the version is
+                    // still protected by the document lock.
+                    self.update_loc_text_for_file(uri, &parsed_loc);
+                    if matches!(
                         trigger,
                         crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
-                    ) && docs.contains_key(uri))
-                    || parsed_version.is_some_and(|version| {
-                        !docs.get(uri).is_some_and(|doc| doc.version == version)
-                            || docs.content_hash(uri) != Some(source_hash)
-                    })
-                {
-                    return None;
-                }
-                let is_open = docs.contains_key(uri);
-                let changed_keys: HashSet<String> = if is_open {
-                    let new_keys = loc_keys_from(&parsed_loc);
-                    if self.loc_overlay_entry_matches(&self.state.loc_live_overlay, uri, &new_keys)
+                    ) && !is_open
                     {
-                        HashSet::new()
-                    } else {
-                        let mut overlay = self.loc_live_overlay_mut();
-                        let diff = match overlay.get(uri) {
-                            Some(prev) => prev.symmetric_difference(&new_keys).cloned().collect(),
-                            None => new_keys.clone(),
-                        };
-                        overlay.insert(uri.to_string(), new_keys);
-                        diff
+                        self.update_loc_locations_for_file(uri, &parsed_loc);
                     }
-                } else if matches!(trigger, crate::ValidateTrigger::Watched) {
-                    self.record_watched_loc_parsed(uri, &parsed_loc)
-                } else {
-                    HashSet::new()
-                };
-                // Update hover and closed-file locations while the version is
-                // still protected by the document lock.
-                self.update_loc_text_for_file(uri, &parsed_loc);
-                if matches!(
-                    trigger,
-                    crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
-                ) && !is_open
-                {
-                    self.update_loc_locations_for_file(uri, &parsed_loc);
-                }
-                drop(docs);
-                let additional_loc_keys = self.loc_overlay_keys();
-                let extra = self.loc_ref_names();
-                let diagnostics = self.validate_loc_parsed(
-                    &path,
-                    &parsed_loc,
-                    &lines,
-                    &additional_loc_keys,
-                    &extra,
-                );
-                let cache = cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
-                Some((changed_keys, diagnostics, cache, source_hash))
-            })?;
+                    drop(docs);
+                    let additional_loc_keys = self.loc_overlay_keys();
+                    let extra = self.loc_ref_names();
+                    let diagnostics = self.validate_loc_parsed(
+                        &path,
+                        &parsed_loc,
+                        &lines,
+                        &additional_loc_keys,
+                        &extra,
+                    );
+                    let cache =
+                        cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
+                    Some((changed_keys, diagnostics, cache, source_hash))
+                })?;
             if let Some(cache) = cache
-                && let Err(rejection) =
-                    self.state
-                        .documents
-                        .lock()
-                        .set_loc_cache(uri, cache.version, source_hash, cache)
+                && let Err(rejection) = self.state.documents.lock().set_loc_cache(
+                    uri,
+                    cache.version,
+                    source_hash,
+                    cache,
+                )
             {
                 tracing::debug!(
                     %uri,
