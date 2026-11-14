@@ -181,7 +181,7 @@ def test_marketplace_verifies_its_download_before_publishing() -> None:
     workflow = PUBLISH.read_text(encoding="utf-8")
     package_job = job_scope(workflow, "package")
     assert '--expected-version "$CWTOOLS_BUILD_VERSION"' in package_job
-    assert "sha256sum *.vsix > SHA256SUMS" in package_job
+    assert "sha256sum -- *.vsix > SHA256SUMS" in package_job
 
     marketplace = job_scope(workflow, "marketplace")
     _, verify_and_publish = marketplace.split(

@@ -108,6 +108,19 @@ jobs:
       - name: pytest
         run: pytest
 
+  # Semantic workflow validation complements the behavioral regression tests.
+  actionlint:
+    if: github.event_name != 'schedule'
+    name: Workflow semantics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run pinned actionlint
+        run: python3 scripts/build/actionlint.py
+
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
   # the engine's Cargo.lock.
