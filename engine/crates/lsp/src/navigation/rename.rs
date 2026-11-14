@@ -520,8 +520,11 @@ impl Backend {
         tokio::task::block_in_place(|| {
             #[cfg(test)]
             self.hold(crate::state::HoldPoint::LocRenameScanWalk);
-            let scan =
-                self.scan_loc_rename_file(uri, &text, &HashMap::from([(key.clone(), key.clone())]))?;
+            let scan = self.scan_loc_rename_file(
+                uri,
+                &text,
+                &HashMap::from([(key.clone(), key.clone())]),
+            )?;
             Ok(scan
                 .edits
                 .iter()
