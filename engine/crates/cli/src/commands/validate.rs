@@ -130,10 +130,15 @@ pub(super) fn run(args: ValidateArgs) {
 
     // Snapshotted before the first load, so an edit saved while it runs still
     // counts as a change. Ctrl-C ends a watch with status 0, even mid-load.
-    let poller = watching.then(|| {
+    let mut poller = watching.then(|| {
         watch::exit_on_interrupt();
-        let roots = watch::roots(&rules, &directory, &parent_roots, vanilla.as_deref());
-        watch::Poller::new(roots)
+        watch::Poller::new(watch::roots(
+            &rules,
+            &directory,
+            &parent_roots,
+            vanilla.as_deref(),
+            &ignore_dirs,
+        ))
     });
 
     // One pass is the whole load-and-validate pipeline. `--watch` repeats it
@@ -168,6 +173,10 @@ pub(super) fn run(args: ValidateArgs) {
         session,
         ..
     } = analyze(&job, true);
+
+    if let Some(poller) = poller.as_mut() {
+        poller.retune(session.ruleset().folders.clone());
+    }
 
     let total_errors = diags
         .iter()
@@ -277,12 +286,13 @@ pub(super) fn run(args: ValidateArgs) {
     // to the usual exit code. Errors in the report do not end a watch.
     if !discovery_failed && let Some(poller) = poller {
         drop(session);
-        watch::follow(poller, diags, || {
+        watch::follow(poller, diags, |poller| {
             let rerun = analyze(&job, false);
             if rerun.discovery_failed || rerun.discovery_incomplete || rerun.rules_unreadable {
                 eprintln!("warn: could not read the inputs; keeping the previous results");
                 return None;
             }
+            poller.retune(rerun.session.ruleset().folders.clone());
             Some(rerun.diags)
         });
     }
