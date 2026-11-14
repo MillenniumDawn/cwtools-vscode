@@ -184,8 +184,8 @@ fn retry<T>(
     }
 }
 
-/// Order-independent digest of the path, modified time and size of what each
-/// root's loader reads. Per poll, mod discovery is re-derived: the include
+/// Order-independent digest of the path, modified time and size of a superset
+/// of each root's inputs. Per poll, mod discovery is re-derived: the include
 /// folders it enters, fresh from any ruleset folder data the poller holds, and
 /// the multi-mod member directories it resolves. Unreadable entries are
 /// skipped, since the pass that follows reports them.
@@ -206,14 +206,13 @@ fn fingerprint(roots: &[Root], folders: Option<&[String]>) -> u64 {
         } else {
             None
         };
-        // Empty directory changes can switch discovery between a single mod
-        // and a descriptor collection without changing any file metadata.
+        let configured = folders
+            .is_some_and(|folders| !folders.is_empty() && includes.as_deref() == Some(folders));
         let mut policy = DefaultHasher::new();
-        (&root.path, multi).hash(&mut policy);
+        (&root.path, multi, configured).hash(&mut policy);
         total = total.wrapping_add(policy.finish());
         if root.role == RootRole::Mods {
-            // Use the loader\'s supplied spelling, including case-insensitive
-            // filesystem lookup, independently of ordinary file exclusions.
+            // Match the loader's filesystem lookup independently of file exclusions.
             let descriptor = root.path.join("descriptor.mod");
             if let Ok(meta) = fs::metadata(&descriptor) {
                 total = total.wrapping_add(entry_digest(&descriptor, &meta));
@@ -1177,6 +1176,49 @@ mod tests {
             snapshot,
             fingerprint(&poller.roots, poller.folders.as_deref())
         );
+    }
+
+    #[test]
+    fn a_retuned_retry_preserves_edits_to_newly_included_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("target")).unwrap();
+        let file = dir.path().join("target/input.txt");
+        fs::write(&file, "input").unwrap();
+        let mut poller = Poller::new(vec![mods_root(dir.path())]);
+        poller.retune(Vec::new());
+        let before = fingerprint(&poller.roots, Some(&[]));
+        let (snapshot, ()) = retry(
+            &mut poller,
+            before,
+            &mut |poller| {
+                fs::write(&file, "changed during validation").unwrap();
+                poller.retune(vec!["target".to_string()]);
+                Some(())
+            },
+            |_| {},
+        );
+        assert_eq!(snapshot, before);
+        assert_ne!(
+            snapshot,
+            fingerprint(&poller.roots, poller.folders.as_deref())
+        );
+    }
+
+    #[test]
+    fn empty_configured_folders_change_the_discovery_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("decisions")).unwrap();
+        fs::write(dir.path().join("decisions/input.txt"), "input = 1").unwrap();
+        let rules = write_rules(rules_dir.path(), &["events"]);
+        assert_eq!(discovered_single_all(dir.path(), &rules).len(), 1);
+        let watched = [mods_root(dir.path())];
+        let before = fingerprint(&watched, Some(&rules.folders));
+        fs::create_dir(dir.path().join("events")).unwrap();
+        assert!(discovered_single_all(dir.path(), &rules).is_empty());
+        assert_ne!(fingerprint(&watched, Some(&rules.folders)), before);
+        fs::remove_dir(dir.path().join("events")).unwrap();
+        assert_eq!(fingerprint(&watched, Some(&rules.folders)), before);
     }
 
     /// A retuned policy stays fresh: the next poll uses the new folders.
