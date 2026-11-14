@@ -73,22 +73,24 @@ def run_campaign(target: str, corpus: Path, output: Path) -> int:
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     status = "failed to start"
     try:
-        with (output / "campaign.log").open("w", encoding="utf-8") as log:
-            with subprocess.Popen(
+        with (
+            (output / "campaign.log").open("w", encoding="utf-8") as log,
+            subprocess.Popen(
                 command,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
                 text=True,
-            ) as process:
-                try:
-                    code = process.wait(timeout=WALL_SECONDS)
-                    status = f"exited {code}"
-                    return code
-                except subprocess.TimeoutExpired:
-                    status = "wall timeout"
-                    stop_group(process)
-                    return 124
+            ) as process,
+        ):
+            try:
+                code = process.wait(timeout=WALL_SECONDS)
+                status = f"exited {code}"
+                return code
+            except subprocess.TimeoutExpired:
+                status = "wall timeout"
+                stop_group(process)
+                return 124
     finally:
         replay = []
         for crash in sorted(artifacts.iterdir()):
