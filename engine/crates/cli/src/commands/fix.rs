@@ -129,7 +129,7 @@ pub(super) fn run(args: FixArgs) {
         })
     };
 
-    let session = Session::load_with_parse_cache(
+    let session = Session::load_for_fix(
         SessionConfig {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
@@ -263,7 +263,9 @@ pub(super) fn run(args: FixArgs) {
             Some(source) => session
                 .read_source_utf8(source)
                 .map_err(|error| error.to_string()),
-            None => std::fs::read_to_string(&file).map_err(|error| error.to_string()),
+            None => session
+                .read_loc_source_utf8(&file)
+                .map_err(|error| error.to_string()),
         };
         let text = match text {
             Ok(text) => text,
@@ -445,6 +447,46 @@ mod tests {
     }
 
     #[test]
+    fn localization_fix_rejects_changed_source_and_keeps_unchanged_fix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("mod");
+        let loc = root.join("localisation");
+        std::fs::create_dir_all(&loc).unwrap();
+        let path = loc.join("test_l_english.yml");
+        let original = "l_english:\n key: \"unclosed\n";
+        std::fs::write(&path, original).unwrap();
+        let rules = tmp.path().join("rules.cwt");
+        std::fs::write(&rules, "").unwrap();
+        let session = Session::load_for_fix(SessionConfig {
+            game: Game::Hoi4,
+            rules: RulesInput::File(rules),
+            directory: root,
+            parent_roots: vec![],
+            vanilla: None,
+            vanilla_cache: None,
+            vanilla_cache_auto: None,
+            ignore_files: &[],
+            ignore_dirs: &[],
+            loc_languages: None,
+            case_sensitive_files: false,
+            on_rules_diagnostic: None,
+        }, None);
+        let diagnostic = session.loc_project_diagnostics().into_iter()
+            .find(|d| d.code == "CW268" && d.fix.is_some())
+            .expect("fixable localization diagnostic");
+        let edits = diagnostic.fix.unwrap().edits;
+        let unchanged = session.read_loc_source_utf8(&path).unwrap();
+        assert_eq!(cwtools_parser::fix::apply_edits(&unchanged, &edits),
+            "l_english:\n key: \"unclosed\"\n");
+
+        let changed = "l_english:\n inserted:0 \"value\"\n key: \"unclosed\n";
+        std::fs::write(&path, changed).unwrap();
+        assert!(session.read_loc_source_utf8(&path).is_err());
+        assert!(session.is_incomplete());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), changed);
+    }
+
+    #[test]
     fn fix_snapshot_keeps_utf8_only_input_policy() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("mod");
@@ -513,3 +555,4 @@ mod tests {
         assert_eq!(cwtools_parser::fix::apply_edits(text, &kept), "Xbbb\n");
     }
 }
+
