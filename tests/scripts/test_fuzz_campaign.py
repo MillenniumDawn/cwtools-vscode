@@ -54,9 +54,7 @@ def test_wall_timeout_stops_group_and_preserves_partial_artifact(
     process = MagicMock(spec=subprocess.Popen)
     process.pid = 12345
     process.wait.side_effect = subprocess.TimeoutExpired("cargo", 1200)
-    monkeypatch.setattr(
-        subprocess, "Popen", MagicMock(return_value=process)
-    )
+    monkeypatch.setattr(subprocess, "Popen", MagicMock(return_value=process))
     stop = MagicMock()
     monkeypatch.setattr(fuzz_campaign, "stop_group", stop)
     # Finalization must work on hosts that have no POSIX process-group APIs.
