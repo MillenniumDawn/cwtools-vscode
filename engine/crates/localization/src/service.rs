@@ -72,7 +72,10 @@ impl LocService {
                 match read_text_capped_with_encoding(&path, budget.read_cap()) {
                     Ok((text, enc, n)) => {
                         if !bytes.try_reserve(n, budget.max_bytes) {
-                            return (Err((path_str, "scan byte budget exceeded".to_string())), None);
+                            return (
+                                Err((path_str, "scan byte budget exceeded".to_string())),
+                                None,
+                            );
                         }
                         let is_csv = path
                             .extension()

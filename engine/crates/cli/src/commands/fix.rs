@@ -457,27 +457,34 @@ mod tests {
         std::fs::write(&path, original).unwrap();
         let rules = tmp.path().join("rules.cwt");
         std::fs::write(&rules, "").unwrap();
-        let session = Session::load_for_fix(SessionConfig {
-            game: Game::Hoi4,
-            rules: RulesInput::File(rules),
-            directory: root,
-            parent_roots: vec![],
-            vanilla: None,
-            vanilla_cache: None,
-            vanilla_cache_auto: None,
-            ignore_files: &[],
-            ignore_dirs: &[],
-            loc_languages: None,
-            case_sensitive_files: false,
-            on_rules_diagnostic: None,
-        }, None);
-        let diagnostic = session.loc_project_diagnostics().into_iter()
+        let session = Session::load_for_fix(
+            SessionConfig {
+                game: Game::Hoi4,
+                rules: RulesInput::File(rules),
+                directory: root,
+                parent_roots: vec![],
+                vanilla: None,
+                vanilla_cache: None,
+                vanilla_cache_auto: None,
+                ignore_files: &[],
+                ignore_dirs: &[],
+                loc_languages: None,
+                case_sensitive_files: false,
+                on_rules_diagnostic: None,
+            },
+            None,
+        );
+        let diagnostic = session
+            .loc_project_diagnostics()
+            .into_iter()
             .find(|d| d.code == "CW268" && d.fix.is_some())
             .expect("fixable localization diagnostic");
         let edits = diagnostic.fix.unwrap().edits;
         let unchanged = session.read_loc_source_utf8(&path).unwrap();
-        assert_eq!(cwtools_parser::fix::apply_edits(&unchanged, &edits),
-            "l_english:\n key: \"unclosed\"\n");
+        assert_eq!(
+            cwtools_parser::fix::apply_edits(&unchanged, &edits),
+            "l_english:\n key: \"unclosed\"\n"
+        );
 
         let changed = "l_english:\n inserted:0 \"value\"\n key: \"unclosed\n";
         std::fs::write(&path, changed).unwrap();
