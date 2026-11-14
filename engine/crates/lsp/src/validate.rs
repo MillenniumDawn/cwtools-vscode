@@ -1966,9 +1966,11 @@ impl Backend {
                         ),
                     };
                     if cacheable {
+                        let source_hash = cwtools_cache::workspace::content_hash(&target.text);
                         match self.state.documents.lock().set_loc_cache(
                             &target.uri,
                             target.version,
+                            source_hash,
                             Arc::clone(&cache),
                         ) {
                             Ok(true) => {}
@@ -2151,7 +2153,8 @@ impl Backend {
             // Open docs only: a watched closed file in the live overlay left a stale entry and
             // fired a whole-file first-sight sweep (#90); those use `loc_watched_overlay`.
             // Parsing and linting are sync CPU work, so keep them off the runtime worker (#87).
-            let (changed_keys, diagnostics, cache) = tokio::task::block_in_place(|| {
+            let (changed_keys, diagnostics, cache, source_hash) = tokio::task::block_in_place(|| {
+                let source_hash = cwtools_cache::workspace::content_hash(text);
                 // One parse of the edited buffer, shared by the key set, the diagnostics and
                 // the hover text below (#87).
                 let parsed_loc = try_parse_loc_buffer(text, &path);
@@ -2170,8 +2173,7 @@ impl Backend {
                     ) && docs.contains_key(uri))
                     || parsed_version.is_some_and(|version| {
                         !docs.get(uri).is_some_and(|doc| doc.version == version)
-                            || docs.content_hash(uri)
-                                != Some(cwtools_cache::workspace::content_hash(text))
+                            || docs.content_hash(uri) != Some(source_hash)
                     })
                 {
                     return None;
@@ -2217,14 +2219,14 @@ impl Backend {
                     &extra,
                 );
                 let cache = cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
-                Some((changed_keys, diagnostics, cache))
+                Some((changed_keys, diagnostics, cache, source_hash))
             })?;
             if let Some(cache) = cache
                 && let Err(rejection) =
                     self.state
                         .documents
                         .lock()
-                        .set_loc_cache(uri, cache.version, cache)
+                        .set_loc_cache(uri, cache.version, source_hash, cache)
             {
                 tracing::debug!(
                     %uri,
