@@ -134,9 +134,9 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
     workflow = (
         Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
     ).read_text(encoding="utf-8")
-    section = workflow.split(
-        "- name: Require successful CI for the source commit", 1
-    )[1]
+    section = workflow.split("- name: Require successful CI for the source commit", 1)[
+        1
+    ]
     script = section.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     script = textwrap.dedent(script)
     bindir = tmp_path / "bin"
@@ -179,9 +179,12 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
 
 def test_ci_status_distinguishes_pending_from_terminal_and_invalid() -> None:
     assert release_decisions.ci_status(_pages(), SHA) == "pending"
-    assert release_decisions.ci_status(
-        _pages(_run(status="in_progress", conclusion=None)), SHA
-    ) == "pending"
+    assert (
+        release_decisions.ci_status(
+            _pages(_run(status="in_progress", conclusion=None)), SHA
+        )
+        == "pending"
+    )
     assert (
         release_decisions.ci_status(_pages(_run(conclusion="failure")), SHA)
         == "failure"
