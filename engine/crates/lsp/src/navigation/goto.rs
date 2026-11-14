@@ -85,7 +85,12 @@ impl Backend {
             return Ok(self.cwt_goto(&uri, pos, fallback).await);
         }
 
-        if let Some(info) = self.rule_info_at_cursor(&uri, pos, &logical_path) {
+        let rule_info = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::GotoWalk);
+            self.rule_info_at_cursor(&uri, pos, &logical_path)
+        });
+        if let Some(info) = rule_info {
             let locations = match &info.hint {
                 ReferenceHint::TypeRef { type_name, value } => {
                     let value = unquote(value);
@@ -132,7 +137,8 @@ impl Backend {
         // Fallback: try the leaf VALUE before the key, since an event reference like
         // `id = some.1` resolves by its dotted id; the key is second so a definition node
         // (e.g. `decision = { … }`) still resolves (#39).
-        if let Some(element) = self.element_at_cursor(&uri, pos) {
+        let element = tokio::task::block_in_place(|| self.element_at_cursor(&uri, pos));
+        if let Some(element) = element {
             // HOI4 scripted loc files are often untyped (#725).
             if let PositionElement::Leaf { key, value } = &element
                 && is_localization_key_field(key)
@@ -152,7 +158,7 @@ impl Backend {
                 PositionElement::Leaf { key, .. } => vec![key.clone()],
                 PositionElement::LeafValue { value } => vec![unquote(value).to_string()],
             };
-            let candidates_with_locations = {
+            let candidates_with_locations = tokio::task::block_in_place(|| {
                 let info = self.state.info_service.read();
                 candidates
                     .iter()
@@ -171,7 +177,7 @@ impl Backend {
                         (symbol.clone(), instances, definitions)
                     })
                     .collect::<Vec<_>>()
-            };
+            });
             for (symbol, instances, definitions) in candidates_with_locations {
                 let pairs = if instances.is_empty() {
                     definitions

@@ -47,6 +47,9 @@ pub(crate) enum HoldPoint {
     NestedSymbolWalk,
     FlatSymbolWalk,
     LocSymbolWalk,
+    PrepareRenameWalk,
+    GotoWalk,
+    ReferencesWalk,
     ExportSweepSnapshot,
     LoadingBarActiveChecked,
 }

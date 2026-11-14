@@ -578,6 +578,9 @@ mod tests {
             HoldPoint::NestedSymbolWalk,
             HoldPoint::FlatSymbolWalk,
             HoldPoint::LocSymbolWalk,
+            HoldPoint::PrepareRenameWalk,
+            HoldPoint::GotoWalk,
+            HoldPoint::ReferencesWalk,
         ] {
             let (backend, workspace) = crate::testing::workspace_backend();
             let is_loc = point == HoldPoint::LocSymbolWalk;
@@ -652,6 +655,28 @@ mod tests {
                     let params =
                         serde_json::from_value(serde_json::json!({ "query": "test" })).unwrap();
                     worker.symbol_request_impl(params).await.unwrap();
+                } else if point == HoldPoint::GotoWalk {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri },
+                        "position": { "line": 0, "character": 0 }
+                    }))
+                    .unwrap();
+                    worker.goto_definition_impl(params).await.unwrap();
+                } else if point == HoldPoint::ReferencesWalk {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri },
+                        "position": { "line": 0, "character": 0 },
+                        "context": { "includeDeclaration": true }
+                    }))
+                    .unwrap();
+                    worker.references_impl(params).await.unwrap();
+                } else if point == HoldPoint::PrepareRenameWalk {
+                    let params = serde_json::from_value(serde_json::json!({
+                        "textDocument": { "uri": request_uri },
+                        "position": { "line": 0, "character": 0 }
+                    }))
+                    .unwrap();
+                    worker.prepare_rename_impl(params).await.unwrap();
                 } else {
                     let params = serde_json::from_value(serde_json::json!({
                         "textDocument": { "uri": request_uri }

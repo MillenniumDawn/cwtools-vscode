@@ -513,7 +513,11 @@ impl Backend {
             }
         }
 
-        let type_ref = self.type_ref_at_cursor(&uri, pos, &logical_path);
+        let type_ref = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::ReferencesWalk);
+            self.type_ref_at_cursor(&uri, pos, &logical_path)
+        });
 
         let include_declaration = params.context.include_declaration;
 
@@ -531,7 +535,9 @@ impl Backend {
                 Vec::new()
             };
 
-            let sites = key_sites(self.collect_use_sites(&type_name, &instance_name));
+            let sites = tokio::task::block_in_place(|| {
+                key_sites(self.collect_use_sites(&type_name, &instance_name))
+            });
             let mut text_uris: Vec<String> = definitions
                 .iter()
                 .map(|(file_uri, _)| file_uri.clone())
@@ -561,7 +567,8 @@ impl Backend {
             }
         }
 
-        if let Some(element) = self.element_at_cursor(&uri, pos) {
+        let element = tokio::task::block_in_place(|| self.element_at_cursor(&uri, pos));
+        if let Some(element) = element {
             let symbol = match &element {
                 PositionElement::Leaf { key, .. } => key.clone(),
                 PositionElement::LeafValue { value } => value.clone(),
@@ -1470,7 +1477,7 @@ mod tests {
         assert_eq!(texts, vec!["ÿ\n", "😀\n"]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn references_impl_returns_complete_results_or_budget_error() {
         let fixture = indexed_type_navigation_fixture(20);
         let logical_path = crate::paths::logical_path_from_uri(
