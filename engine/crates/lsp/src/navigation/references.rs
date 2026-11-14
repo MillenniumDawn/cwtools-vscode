@@ -1533,7 +1533,7 @@ mod tests {
         gate.release();
         let _ = watchdog_tx.send(());
         watchdog.join().unwrap();
-        task.await.unwrap().unwrap();
+        let _ = task.await.unwrap().unwrap();
         assert!(!watchdog_fired.load(Ordering::Acquire));
         assert_eq!(progress.unwrap().unwrap(), 42);
     }
