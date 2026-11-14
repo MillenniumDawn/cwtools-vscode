@@ -70,14 +70,14 @@ def _parse_pages(pages: Any) -> list[tuple[datetime, int, dict[str, Any]]]:
     return runs
 
 
-def ci_succeeded(pages: Any, source_sha: str) -> bool:
-    """Require complete pages and the newest successful main push for the SHA."""
+def ci_status(pages: Any, source_sha: str) -> str:
+    """Return success, pending, or failure for complete exact-commit results."""
     if not _SHA.fullmatch(source_sha):
-        return False
+        return "failure"
     try:
         runs = _parse_pages(pages)
     except ValueError:
-        return False
+        return "failure"
     applicable = [
         run
         for run in runs
@@ -86,9 +86,20 @@ def ci_succeeded(pages: Any, source_sha: str) -> bool:
         and run[2]["head_branch"] == "main"
     ]
     if not applicable:
-        return False
+        return "pending"
     latest = max(applicable, key=lambda run: (run[0], run[1]))[2]
-    return latest["status"] == "completed" and latest.get("conclusion") == "success"
+    status = latest["status"]
+    conclusion = latest.get("conclusion")
+    if status in {"queued", "in_progress", "waiting", "pending", "requested"}:
+        return "pending" if conclusion is None else "failure"
+    if status != "completed":
+        return "failure"
+    return "success" if conclusion == "success" else "failure"
+
+
+def ci_succeeded(pages: Any, source_sha: str) -> bool:
+    """Require a complete successful main push for the exact SHA."""
+    return ci_status(pages, source_sha) == "success"
 
 
 def main() -> None:
@@ -96,9 +107,14 @@ def main() -> None:
         pages = json.load(sys.stdin)
     except (ValueError, OSError) as error:
         raise SystemExit("Unable to read CI results; retry later.") from error
-    if not ci_succeeded(pages, os.environ.get("GITHUB_SHA", "")):
-        raise SystemExit("No complete successful CI result for this SHA; retry later.")
+    status = ci_status(pages, os.environ.get("GITHUB_SHA", ""))
+    if status == "pending":
+        print("CI is not yet complete for this SHA.", file=sys.stderr)
+        raise SystemExit(2)
+    if status != "success":
+        raise SystemExit("CI failed or returned invalid results for this SHA.")
 
 
 if __name__ == "__main__":
     main()
+
