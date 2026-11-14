@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -124,3 +127,45 @@ def test_ci_gate_applies_to_both_channels(channel: str) -> None:
     assert "Require successful CI for the source commit" in verify
     assert "needs: verify" in job_scope(workflow, "build-server")
     assert "needs: [check, verify, build-server]" in job_scope(workflow, "package")
+
+
+
+def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
+    """Run the actual workflow shell with fake API, checker, and clock."""
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
+    ).read_text(encoding="utf-8")
+    section = workflow.split("- name: Require successful CI for the source commit", 1)[1]
+    script = section.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = textwrap.dedent(script)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    state = tmp_path / "attempts"
+    for name, body in {
+        "gh": '#!/bin/sh\ncat "$STATE" 2>/dev/null || echo 0\n',
+        "python3": (
+            '#!/bin/sh\nread n\nn=$((n+1))\necho "$n" > "$STATE"\n'
+            '[ "$n" -ge "$SUCCEED_AT" ]\n'
+        ),
+        "sleep": "#!/bin/sh\nexit 0\n",
+    }.items():
+        executable = bindir / name
+        executable.write_text(body, encoding="utf-8")
+        executable.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "STATE": str(state),
+        "GITHUB_REPOSITORY": "test/repo",
+        "GITHUB_SHA": SHA,
+    }
+    for succeed_at, expected, attempts in [(3, 0, 3), (999, 1, 90)]:
+        state.unlink(missing_ok=True)
+        result = subprocess.run(
+            ["bash", "-o", "pipefail", "-c", script],
+            env={**env, "SUCCEED_AT": str(succeed_at)},
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == expected, result.stderr
+        assert int(state.read_text(encoding="utf-8")) == attempts
