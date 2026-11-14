@@ -23,7 +23,7 @@ interface ScanReport {
 
 // The server's getSetupReport result, from engine/crates/lsp/src/setup_report.rs.
 export interface ServerSetupReport {
-	server: { version: string };
+	server: { version: string; buildCommit?: string | null };
 	state: { indexReady: boolean; scanInProgress: boolean };
 	game: { language: string; known: boolean };
 	workspace: { roots: string[]; parentMods: string[] };
@@ -258,6 +258,9 @@ export function renderSetupReport(
 	if (server.kind === "report") {
 		lines.push(
 			`- Server: running, version ${server.report.server.version}`,
+		);
+		lines.push(
+			`- Server source commit: ${server.report.server.buildCommit ?? "unavailable"}`,
 		);
 	} else {
 		lines.push(`- Server: not available (${server.reason})`);
