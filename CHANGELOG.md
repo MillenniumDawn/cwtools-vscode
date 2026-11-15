@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Poll `validate --watch` through the loaders' own discovery instead of a copy of its rules, so hidden rules, explicit include folders, multi-mod members, ignore files and ignore dirs match what a pass reads. Resources are tracked by path only, so re-exporting art no longer revalidates, and the first poll after startup no longer reports a change when nothing was edited. (#1210, #1336)
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
 * Share discovery file-count budgets across include directories, parent mods, and base-game auxiliary walks in one scan, enforce aggregate CLI script read budgets, and report incomplete validation when limits are exceeded. (#1266, #1247, #1246)

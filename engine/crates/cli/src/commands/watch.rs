@@ -1,17 +1,24 @@
 //! `validate --watch`: notice that the inputs changed, and print what the
 //! re-run did to the diagnostics.
 
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::iter;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cwtools_file_manager::path_identity;
+use cwtools_driver::{
+    DiscoveryPolicy, WorkspaceDiscoveryRequest, discover_workspace, workspace_discovery_config,
+};
+use cwtools_file_manager::{
+    DiscoveredPath, DiscoveryReport, FileError, FileKind, ScanBudget, path_identity,
+};
+use cwtools_rules::rules_types::RuleSet;
+use cwtools_rules::ruleset_loader::ruleset_input_files;
 
 use crate::diag::{Diag, severity_rank};
 use crate::run::note;
@@ -20,56 +27,111 @@ use crate::run::note;
 /// poll before it counts, so a save that touches many files reloads once.
 const POLL: Duration = Duration::from_millis(500);
 
-/// The roots a watch walks: the ruleset, the workspace, the parent roots, and
-/// the vanilla install when one was supplied explicitly. Deduplicated with
-/// `path_identity`, this crate's path key, so one tree is never walked twice.
-/// Every root is walked as-is: the mod's ignore-dir and exclusion filters
-/// decide what validates, not what counts as a change, and an unset vanilla
-/// adds no root.
+/// Which loader reads a root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RootRole {
+    /// The ruleset: `.cwt` files and `logs/modifiers.log`.
+    Rules,
+    /// The workspace or a parent mod, discovered under the user's ignore lists.
+    Workspace,
+    /// The explicit base-game install, discovered under its default policy.
+    Vanilla,
+}
+
+/// One watched root.
+#[derive(Debug)]
+pub(crate) struct Root {
+    path: PathBuf,
+    role: RootRole,
+    ignore_dirs: Vec<String>,
+    ignore_files: Vec<String>,
+}
+
+/// The roots a watch polls: the ruleset, the workspace, the parent roots, and
+/// the vanilla install when one was supplied explicitly. A path is watched once
+/// per role, so one directory can be both a ruleset and a mod.
 pub(crate) fn roots(
     rules: &Path,
     directory: &Path,
     parents: &[PathBuf],
     vanilla: Option<&Path>,
-) -> Vec<PathBuf> {
-    let mut seen: HashSet<Cow<'_, str>> = HashSet::new();
-    let mut watched: Vec<PathBuf> = Vec::new();
-    for root in std::iter::once(rules)
-        .chain(std::iter::once(directory))
-        .chain(parents.iter().map(PathBuf::as_path))
-        .chain(vanilla)
-    {
-        if seen.insert(path_identity(root)) {
-            watched.push(root.to_path_buf());
-        }
-    }
-    watched
+    ignore_dirs: &[String],
+    ignore_files: &[String],
+) -> Vec<Root> {
+    let plain = |path: &Path, role| Root {
+        path: path.to_path_buf(),
+        role,
+        ignore_dirs: Vec::new(),
+        ignore_files: Vec::new(),
+    };
+    let workspace = |path: &Path| Root {
+        ignore_dirs: ignore_dirs.to_vec(),
+        ignore_files: ignore_files.to_vec(),
+        ..plain(path, RootRole::Workspace)
+    };
+    let mut seen = HashSet::new();
+    iter::once(plain(rules, RootRole::Rules))
+        .chain(iter::once(workspace(directory)))
+        .chain(parents.iter().map(|parent| workspace(parent)))
+        .chain(vanilla.map(|path| plain(path, RootRole::Vanilla)))
+        .filter(|root| seen.insert((path_identity(&root.path).into_owned(), root.role)))
+        .collect()
 }
 
-/// Watches the roots a validate run reads by polling file metadata, so it
-/// needs no platform watcher.
+/// Watches the roots a validate run reads by polling the loaders' own
+/// discovery, so it needs no platform watcher.
 pub(crate) struct Poller {
-    roots: Vec<PathBuf>,
+    roots: Vec<Root>,
+    /// The loaded ruleset's folders; empty until the first load reports them.
+    folders: Vec<String>,
     seen: u64,
 }
 
 impl Poller {
     /// Snapshot the roots. Take it before the first load starts, so an edit
     /// saved while that load runs is still seen as a change afterwards.
-    pub(crate) fn new(roots: Vec<PathBuf>) -> Self {
-        let seen = fingerprint(&roots);
-        Self { roots, seen }
+    pub(crate) fn new(roots: Vec<Root>) -> Self {
+        let seen = fingerprint(&roots, &[]);
+        Self {
+            roots,
+            folders: Vec::new(),
+            seen,
+        }
+    }
+
+    /// Poll under the folders the latest load reported. Folders change which
+    /// files discovery lists, so when nothing changed since the last snapshot
+    /// the baseline moves to the new policy; a pending edit stays pending.
+    pub(crate) fn retune(&mut self, folders: Vec<String>) {
+        if folders == self.folders {
+            return;
+        }
+        // The new policy goes first: an edit landing between the two walks then
+        // shows in the second and keeps the snapshot stale.
+        let after = fingerprint(&self.roots, &folders);
+        if self.current() == self.seen {
+            self.seen = after;
+        }
+        self.folders = folders;
+    }
+
+    fn current(&self) -> u64 {
+        fingerprint(&self.roots, &self.folders)
     }
 
     /// Block until the roots differ from the last successful snapshot and have
     /// stopped changing. The caller adopts the snapshot after validation succeeds.
     fn wait(&self) -> u64 {
+        self.wait_with(thread::sleep)
+    }
+
+    fn wait_with(&self, mut sleep: impl FnMut(Duration)) -> u64 {
         let mut last = self.seen;
         let mut pause = POLL;
         loop {
-            thread::sleep(pause);
+            sleep(pause);
             let started = Instant::now();
-            let now = fingerprint(&self.roots);
+            let now = self.current();
             // Ten times the walk keeps an idle watch of a large mod near a tenth of a core.
             pause = POLL.max(started.elapsed() * 10);
             if now != self.seen && now == last {
@@ -82,17 +144,18 @@ impl Poller {
 
 /// Run `rerun` after every change and print its delta against the previous
 /// result. `rerun` returns `None` when the pass could not read its inputs, which
-/// keeps the previous result. Never returns: Ctrl-C ends the process.
+/// keeps the previous result, and may retune the poller with what that pass
+/// learned. Never returns: Ctrl-C ends the process.
 pub(crate) fn follow(
     mut poller: Poller,
     mut previous: Vec<Diag>,
-    mut rerun: impl FnMut() -> Option<Vec<Diag>>,
+    mut rerun: impl FnMut(&mut Poller) -> Option<Vec<Diag>>,
 ) -> ! {
     note("Watching for changes (Ctrl-C to stop)");
     loop {
         let snapshot = poller.wait();
         note("Change detected, validating again");
-        let (snapshot, next) = retry(poller.roots.as_slice(), snapshot, &mut rerun, thread::sleep);
+        let (snapshot, next) = retry(&mut poller, snapshot, &mut rerun, thread::sleep);
         poller.seen = snapshot;
         print!("{}", delta_report(&previous, &next));
         previous = next;
@@ -100,57 +163,138 @@ pub(crate) fn follow(
 }
 
 fn retry<T>(
-    roots: &[PathBuf],
+    poller: &mut Poller,
     mut snapshot: u64,
-    rerun: &mut impl FnMut() -> Option<T>,
+    rerun: &mut impl FnMut(&mut Poller) -> Option<T>,
     mut sleep: impl FnMut(Duration),
 ) -> (u64, T) {
     let mut pause = Duration::from_secs(1);
     loop {
-        if let Some(result) = rerun() {
+        if let Some(result) = rerun(poller) {
             return (snapshot, result);
         }
         sleep(pause);
         pause = (pause * 2).min(Duration::from_secs(30));
-        snapshot = fingerprint(roots);
+        snapshot = poller.current();
     }
 }
 
-/// Order-independent digest of the path, modified time and size of every file
-/// under `roots`. A root may be a single file. Dot-directories such as `.git`
-/// are skipped: tools rewrite their contents all the time and no input lives
-/// there. Unreadable entries are skipped, since the pass that follows reports them.
-fn fingerprint(roots: &[PathBuf]) -> u64 {
-    let mut total = 0u64;
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    for root in roots {
-        match fs::metadata(root) {
-            Ok(meta) if meta.is_dir() => dirs.push(root.clone()),
-            Ok(meta) => total = total.wrapping_add(entry_digest(root, &meta)),
-            Err(_) => {}
-        }
-    }
-    while let Some(dir) = dirs.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
-            if !meta.is_dir() {
-                total = total.wrapping_add(entry_digest(&entry.path(), &meta));
-            } else if !entry.file_name().to_string_lossy().starts_with('.') {
-                dirs.push(entry.path());
-            }
-        }
-    }
-    total
+/// Order-independent digest of what the loaders read under `roots`, as their
+/// own discovery lists it under `folders`. A root that cannot be read adds a
+/// marker of the failure; the pass that follows reports it.
+fn fingerprint(roots: &[Root], folders: &[String]) -> u64 {
+    let mut ruleset = RuleSet::new();
+    ruleset.folders = folders.to_vec();
+    roots
+        .iter()
+        .map(|root| match root.role {
+            RootRole::Rules => rules_digest(&root.path),
+            RootRole::Workspace | RootRole::Vanilla => mods_digest(root, &ruleset),
+        })
+        .fold(0, u64::wrapping_add)
 }
 
+fn rules_digest(path: &Path) -> u64 {
+    let Ok(meta) = fs::metadata(path) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return entry_digest(path, &meta);
+    }
+    ruleset_input_files(path, ScanBudget::default())
+        .iter()
+        .filter_map(|file| {
+            let meta = fs::metadata(file).ok()?;
+            Some(entry_digest(file, &meta))
+        })
+        .fold(0, u64::wrapping_add)
+}
+
+fn mods_digest(root: &Root, ruleset: &RuleSet) -> u64 {
+    let discovered = match discover(root, ruleset) {
+        Ok(DiscoveryReport {
+            files, failures, ..
+        }) => {
+            let failures = failures
+                .iter()
+                .map(|failure| digest((&failure.path, &failure.error)));
+            files
+                .iter()
+                .map(discovered_digest)
+                .chain(failures)
+                .fold(0, u64::wrapping_add)
+        }
+        Err(error) => digest((&root.path, error.to_string())),
+    };
+    discovered.wrapping_add(descriptors_digest(&root.path))
+}
+
+/// The files the session loads from `root`: the call, config and policy that
+/// `Session::load` makes for the workspace and its parents, plus resources.
+fn discover(root: &Root, ruleset: &RuleSet) -> Result<DiscoveryReport, FileError> {
+    let mut config = workspace_discovery_config(&root.path, Some(ruleset));
+    config
+        .exclude_patterns
+        .extend(root.ignore_files.iter().cloned());
+    config
+        .exclude_dir_patterns
+        .extend(root.ignore_dirs.iter().cloned());
+    let policy = if root.role == RootRole::Vanilla {
+        DiscoveryPolicy::Vanilla
+    } else {
+        DiscoveryPolicy::Workspace
+    };
+    discover_workspace(WorkspaceDiscoveryRequest {
+        roots: vec![root.path.clone()],
+        kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
+        config,
+        policy,
+    })
+}
+
+/// Scripts and localisation are read, so an edit counts. Resources only have to
+/// exist, so re-exporting art does not.
+fn discovered_digest(file: &DiscoveredPath) -> u64 {
+    let location = digest((&file.path, &file.root_relative_path));
+    if file.kind == FileKind::Resource {
+        return location;
+    }
+    match fs::metadata(&file.path) {
+        Ok(meta) => location.wrapping_add(entry_digest(&file.path, &meta)),
+        Err(_) => location,
+    }
+}
+
+/// `descriptor.mod` and the `mod`/`mods` descriptors are read outside
+/// discovery, and an ignore glob can hide them from it.
+fn descriptors_digest(root: &Path) -> u64 {
+    let collected = ["mod", "mods"]
+        .into_iter()
+        .filter_map(|name| fs::read_dir(root.join(name)).ok())
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("mod"))
+        });
+    iter::once(root.join("descriptor.mod"))
+        .chain(collected)
+        .filter_map(|path| {
+            let meta = fs::metadata(&path).ok()?;
+            Some(entry_digest(&path, &meta))
+        })
+        .fold(0, u64::wrapping_add)
+}
+
+/// Path, modified time and size: what changes when an input is edited.
 fn entry_digest(path: &Path, meta: &fs::Metadata) -> u64 {
+    digest((path, meta.modified().ok(), meta.len()))
+}
+
+fn digest(value: impl Hash) -> u64 {
     let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
-    meta.modified().ok().hash(&mut hasher);
-    meta.len().hash(&mut hasher);
+    value.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -393,88 +537,495 @@ mod tests {
         assert_eq!(delta_report(&first, &second), "no change\n");
     }
 
-    #[test]
-    fn fingerprint_moves_when_a_file_is_added_changed_or_removed() {
-        let dir = tempfile::tempdir().unwrap();
-        let roots = vec![dir.path().to_path_buf()];
-        let file = dir.path().join("sub").join("x.txt");
-        fs::create_dir(dir.path().join("sub")).unwrap();
-        let empty = fingerprint(&roots);
-        assert_eq!(empty, fingerprint(&roots), "stable while nothing changes");
+    fn strings<const N: usize>(items: [&str; N]) -> Vec<String> {
+        items.into_iter().map(String::from).collect()
+    }
 
-        fs::write(&file, "a = 1\n").unwrap();
-        let added = fingerprint(&roots);
-        assert_ne!(added, empty);
+    fn plain_root(path: &Path, role: RootRole) -> Root {
+        Root {
+            path: path.to_path_buf(),
+            role,
+            ignore_dirs: Vec::new(),
+            ignore_files: Vec::new(),
+        }
+    }
 
-        fs::write(&file, "a = 10\n").unwrap();
-        let resized = fingerprint(&roots);
-        assert_ne!(resized, added);
+    fn write(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
 
-        fs::remove_file(&file).unwrap();
-        assert_eq!(fingerprint(&roots), empty);
+    /// Whether rewriting `file` moves the fingerprint. The second body is
+    /// longer, so the answer never depends on the modified time's granularity.
+    fn edit_moves(watched: &[Root], folders: &[String], file: &Path) -> bool {
+        write(file, "a = 1\n");
+        let before = fingerprint(watched, folders);
+        write(file, "a = 1 # and a longer body\n");
+        fingerprint(watched, folders) != before
+    }
+
+    fn discovers(watched: &Root, folders: &[String], file: &Path) -> bool {
+        let mut ruleset = RuleSet::new();
+        ruleset.folders = folders.to_vec();
+        let report = discover(watched, &ruleset).unwrap();
+        report.files.iter().any(|found| found.path == file)
     }
 
     #[test]
-    fn fingerprint_accepts_a_single_file_root_and_a_missing_root() {
+    fn fingerprint_moves_when_a_file_is_added_changed_or_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        let file = dir.path().join("common/x.txt");
+        fs::create_dir(dir.path().join("common")).unwrap();
+        let empty = fingerprint(&watched, &[]);
+        assert_eq!(empty, fingerprint(&watched, &[]), "stable while idle");
+
+        write(&file, "a = 1\n");
+        let added = fingerprint(&watched, &[]);
+        assert_ne!(added, empty);
+
+        write(&file, "a = 10\n");
+        assert_ne!(fingerprint(&watched, &[]), added);
+
+        fs::remove_file(&file).unwrap();
+        assert_eq!(fingerprint(&watched, &[]), empty);
+    }
+
+    #[test]
+    fn scripts_and_localisation_are_read_but_resources_only_have_to_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        assert!(edit_moves(&watched, &[], &dir.path().join("common/x.txt")));
+        let loc = dir.path().join("localisation/a_l_english.yml");
+        assert!(edit_moves(&watched, &[], &loc));
+
+        let art = dir.path().join("gfx/icon.dds");
+        assert!(!edit_moves(&watched, &[], &art));
+        let before = fingerprint(&watched, &[]);
+        fs::remove_file(&art).unwrap();
+        assert_ne!(fingerprint(&watched, &[]), before);
+    }
+
+    #[test]
+    fn ignored_files_do_not_move_the_fingerprint() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ignore_files = strings([
+            "skip.txt",
+            "common/path*.txt",
+            "**/nested/no*.txt",
+            "localisation/skip*.yml",
+        ]);
+        let watched = roots(rules.path(), dir.path(), &[], None, &[], &ignore_files);
+        let cases = [
+            ("common/skip.txt", false),
+            ("common/path_match.txt", false),
+            ("common/nested/nope.txt", false),
+            ("localisation/skip_l_english.yml", false),
+            ("common/README.txt", false),
+            ("common/notes.md", false),
+            ("common/keep.txt", true),
+            ("localisation/keep_l_english.yml", true),
+        ];
+        for (relative, expected) in cases {
+            let file = dir.path().join(relative);
+            assert_eq!(edit_moves(&watched, &[], &file), expected, "{relative}");
+            assert_eq!(discovers(&watched[1], &[], &file), expected, "{relative}");
+        }
+    }
+
+    #[test]
+    fn ignored_dirs_do_not_move_the_fingerprint() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ignore_dirs = strings(["archive", "common/docs/tmp"]);
+        let watched = roots(rules.path(), dir.path(), &[], None, &ignore_dirs, &[]);
+        let unfiltered = plain_root(dir.path(), RootRole::Workspace);
+        for relative in [
+            "common/archive/old.txt",
+            "common/docs/tmp/draft.txt",
+            "gfx/archive/old.dds",
+        ] {
+            let file = dir.path().join(relative);
+            assert!(!edit_moves(&watched, &[], &file), "{relative}");
+            assert!(discovers(&unfiltered, &[], &file), "{relative}");
+            assert!(!discovers(&watched[1], &[], &file), "{relative}");
+        }
+        assert!(edit_moves(
+            &watched,
+            &[],
+            &dir.path().join("common/docs/kept.txt")
+        ));
+
+        // An explicit include folder is entered even when its name is ignored.
+        let included = dir.path().join("archive/included.txt");
+        assert!(!edit_moves(&watched, &[], &included));
+        assert!(edit_moves(&watched, &strings(["archive"]), &included));
+    }
+
+    #[test]
+    fn ruleset_folders_choose_which_scripts_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        let folders = strings(["map", "target/deep", "resources"]);
+        for relative in ["map/a.txt", "target/deep/b.txt", "resources/c.txt"] {
+            let file = dir.path().join(relative);
+            assert!(!edit_moves(&watched, &[], &file), "{relative}");
+            assert!(edit_moves(&watched, &folders, &file), "{relative}");
+        }
+    }
+
+    #[test]
+    fn an_empty_configured_folder_switches_the_discovery_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("common/a.txt"), "a = 1\n");
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        let folders = strings(["map"]);
+        let before = fingerprint(&watched, &folders);
+        fs::create_dir(dir.path().join("map")).unwrap();
+        assert_ne!(fingerprint(&watched, &folders), before);
+        fs::remove_dir(dir.path().join("map")).unwrap();
+        assert_eq!(fingerprint(&watched, &folders), before);
+    }
+
+    #[test]
+    fn a_tool_directory_is_not_watched() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let watched = roots(rules.path(), dir.path(), &[], None, &[], &[]);
+        let before = fingerprint(&watched, &[]);
+        write(&dir.path().join(".git/index"), "x");
+        write(&dir.path().join("node_modules/pkg/index.txt"), "x");
+        assert_eq!(fingerprint(&watched, &[]), before);
+    }
+
+    fn collection(dir: &Path) {
+        write(
+            &dir.join("mods/alpha.mod"),
+            "name = \"Alpha\"\npath = \"alpha\"\n",
+        );
+        fs::create_dir_all(dir.join("alpha/common")).unwrap();
+    }
+
+    #[test]
+    fn collection_members_are_polled_under_their_own_paths() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        collection(dir.path());
+        write(
+            &dir.path().join("mods/beta.mod"),
+            "name = \"Beta\"\npath = \"nested/beta\"\n",
+        );
+        fs::create_dir_all(dir.path().join("nested/beta")).unwrap();
+        let ignore_files = strings(["common/skip.txt"]);
+        let watched = roots(rules.path(), dir.path(), &[], None, &[], &ignore_files);
+
+        for (relative, expected) in [
+            ("alpha/common/keep.txt", true),
+            ("nested/beta/common/x.txt", true),
+            ("alpha/common/skip.txt", false),
+            ("alpha/gfx/icon.dds", false),
+            ("unowned.txt", false),
+        ] {
+            let file = dir.path().join(relative);
+            assert_eq!(edit_moves(&watched, &[], &file), expected, "{relative}");
+        }
+    }
+
+    #[test]
+    fn descriptors_are_polled_even_when_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        collection(dir.path());
+        let mut workspace = plain_root(dir.path(), RootRole::Workspace);
+        workspace.ignore_files = strings(["*.mod"]);
+        workspace.ignore_dirs = strings(["mods"]);
+        let watched = [workspace];
+        assert!(edit_moves(
+            &watched,
+            &[],
+            &dir.path().join("mods/alpha.mod")
+        ));
+        assert!(edit_moves(
+            &watched,
+            &[],
+            &dir.path().join("descriptor.mod")
+        ));
+
+        write(
+            &dir.path().join("mods/gamma.mod"),
+            "name = \"Gamma\"\npath = \"gamma\"\n",
+        );
+        fs::create_dir(dir.path().join("gamma")).unwrap();
+        assert!(edit_moves(
+            &watched,
+            &[],
+            &dir.path().join("gamma/common/z.txt")
+        ));
+    }
+
+    #[test]
+    fn the_descriptor_is_looked_up_the_way_the_loader_does() {
+        use cwtools_file_manager::file_manager::read_root_descriptor;
+
+        let dir = tempfile::tempdir().unwrap();
+        let descriptor = dir.path().join("Descriptor.MOD");
+        write(&descriptor, "replace_path = common\n");
+        let loaded = read_root_descriptor(dir.path()).is_some();
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        assert_eq!(edit_moves(&watched, &[], &descriptor), loaded);
+    }
+
+    #[test]
+    fn a_classification_change_applies_on_the_next_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let member_file = dir.path().join("resources/alpha/common/x.txt");
+        fs::create_dir(dir.path().join("mods")).unwrap();
+        write(&member_file, "x = 1\n");
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        assert!(!discovers(&watched[0], &[], &member_file));
+        assert!(!edit_moves(&watched, &[], &member_file));
+
+        write(
+            &dir.path().join("mods/alpha.mod"),
+            "name = \"Alpha\"\npath = \"resources/alpha\"\n",
+        );
+        assert!(discovers(&watched[0], &[], &member_file));
+        assert!(edit_moves(&watched, &[], &member_file));
+    }
+
+    #[test]
+    fn a_game_folder_reclassifies_a_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        collection(dir.path());
+        write(&dir.path().join("alpha/common/x.txt"), "x = 1\n");
+        let watched = [plain_root(dir.path(), RootRole::Workspace)];
+        let before = fingerprint(&watched, &[]);
+        fs::create_dir(dir.path().join("events")).unwrap();
+        assert_ne!(fingerprint(&watched, &[]), before);
+        fs::remove_dir(dir.path().join("events")).unwrap();
+        assert_eq!(fingerprint(&watched, &[]), before);
+    }
+
+    #[test]
+    fn a_rules_root_polls_exactly_the_files_the_loader_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("mods/alpha.mod"),
+            "name = \"Alpha\"\npath = \"alpha\"\n",
+        );
+        let watched = [plain_root(dir.path(), RootRole::Rules)];
+        for (relative, expected) in [
+            ("base.cwt", true),
+            (".patches/patch.cwt", true),
+            ("target/tool.cwt", true),
+            (".git/cached.cwt", true),
+            ("logs/modifiers.log", true),
+            ("modifiers.log", false),
+            ("README.md", false),
+            ("notes.txt", false),
+            // The loader never follows the mods a descriptor names.
+            ("alpha/note.txt", false),
+        ] {
+            let file = dir.path().join(relative);
+            assert_eq!(edit_moves(&watched, &[], &file), expected, "{relative}");
+        }
+    }
+
+    #[test]
+    fn a_rules_root_may_be_a_single_file_and_a_missing_root_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("rules.cwt");
-        fs::write(&file, "types = {}\n").unwrap();
-        let roots = vec![file.clone(), dir.path().join("missing")];
-        let before = fingerprint(&roots);
-        fs::write(&file, "types = { }\n").unwrap();
-        assert_ne!(fingerprint(&roots), before);
+        write(&file, "types = {}\n");
+        let watched = [
+            plain_root(&file, RootRole::Rules),
+            plain_root(&dir.path().join("missing"), RootRole::Rules),
+            plain_root(&dir.path().join("absent"), RootRole::Workspace),
+        ];
+        let before = fingerprint(&watched, &[]);
+        write(&file, "types = { }\n");
+        assert_ne!(fingerprint(&watched, &[]), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(&outside.path().join("outside.txt"), "a = 1\n");
+        write(&outside.path().join("outside.cwt"), "types = { }\n");
+        let common = dir.path().join("common");
+        fs::create_dir(&common).unwrap();
+        symlink(outside.path().join("outside.txt"), common.join("link.txt")).unwrap();
+        symlink(&common, common.join("loop")).unwrap();
+        let hidden = rules.path().join(".patches");
+        fs::create_dir(&hidden).unwrap();
+        symlink(outside.path().join("outside.cwt"), hidden.join("link.cwt")).unwrap();
+        symlink(&hidden, hidden.join("loop")).unwrap();
+        symlink(outside.path(), rules.path().join("linked")).unwrap();
+
+        let watched = roots(rules.path(), dir.path(), &[], None, &[], &[]);
+        let before = fingerprint(&watched, &[]);
+        write(&outside.path().join("outside.txt"), "a = 1, and longer\n");
+        write(&outside.path().join("outside.cwt"), "types = {  }\n");
+        assert_eq!(fingerprint(&watched, &[]), before);
+
+        write(&hidden.join("real.cwt"), "types = { }\n");
+        assert_ne!(fingerprint(&watched, &[]), before);
+    }
+
+    #[test]
+    fn roots_are_watched_once_per_role() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let roles = |watched: &[Root]| -> Vec<(PathBuf, RootRole)> {
+            watched
+                .iter()
+                .map(|root| (root.path.clone(), root.role))
+                .collect()
+        };
+
+        let watched = roots(
+            rules.path(),
+            dir.path(),
+            &[dir.path().to_path_buf()],
+            None,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            roles(&watched),
+            [
+                (rules.path().to_path_buf(), RootRole::Rules),
+                (dir.path().to_path_buf(), RootRole::Workspace),
+            ]
+        );
+
+        let same = rules.path();
+        let watched = roots(same, same, &[], Some(same), &[], &[]);
+        assert_eq!(
+            roles(&watched),
+            [
+                (same.to_path_buf(), RootRole::Rules),
+                (same.to_path_buf(), RootRole::Workspace),
+                (same.to_path_buf(), RootRole::Vanilla),
+            ]
+        );
+    }
+
+    #[test]
+    fn relative_default_paths_are_watched() {
+        let watched = roots(Path::new("."), Path::new("."), &[], None, &[], &[]);
+        assert_eq!(watched[0].path, Path::new("."));
+        assert_eq!(watched[1].path, Path::new("."));
+        assert_ne!(fingerprint(&watched, &[]), 0);
+    }
+
+    #[test]
+    fn ignore_lists_apply_to_the_workspace_and_parents_but_not_vanilla() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ignore_files = strings(["common/skip.txt"]);
+        let file = dir.path().join("common/skip.txt");
+        let workspace = roots(rules.path(), dir.path(), &[], None, &[], &ignore_files);
+        assert!(!edit_moves(&workspace, &[], &file));
+
+        // A pattern is relative to the root that carries it, so a parent
+        // rooted at `common` does not match.
+        let parents = [dir.path().join("common")];
+        let parent = roots(rules.path(), dir.path(), &parents, None, &[], &ignore_files);
+        assert!(edit_moves(&parent, &[], &file));
+
+        let vanilla = Some(dir.path());
+        let vanilla = roots(rules.path(), dir.path(), &[], vanilla, &[], &ignore_files);
+        assert!(edit_moves(&vanilla, &[], &file));
+    }
+
+    #[test]
+    fn an_explicit_vanilla_install_is_watched() {
+        let rules = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let vanilla = tempfile::tempdir().unwrap();
+        let vanilla_dir = Some(vanilla.path());
+        let watched = roots(rules.path(), workspace.path(), &[], vanilla_dir, &[], &[]);
+        let poller = Poller::new(watched);
+        write(&vanilla.path().join("events/vanilla.txt"), "x = 1\n");
+        assert_ne!(poller.current(), poller.seen);
+    }
+
+    #[test]
+    fn an_edit_is_seen_once_the_roots_hold_still() {
+        let dir = tempfile::tempdir().unwrap();
+        let poller = Poller::new(vec![plain_root(dir.path(), RootRole::Workspace)]);
+        let file = dir.path().join("common/x.txt");
+        let mut sleeps = 0;
+        let snapshot = poller.wait_with(|_| {
+            sleeps += 1;
+            // Two saves in a row, then quiet: the change counts once, after it settles.
+            match sleeps {
+                1 => write(&file, "a = 1\n"),
+                2 => write(&file, "a = 1 # and a longer body\n"),
+                _ => {}
+            }
+        });
+        assert_eq!(sleeps, 3);
+        assert_eq!(snapshot, poller.current());
+        assert_ne!(snapshot, poller.seen);
     }
 
     #[test]
     fn failed_validation_does_not_consume_the_change() {
         let dir = tempfile::tempdir().unwrap();
-        let poller = Poller::new(vec![dir.path().to_path_buf()]);
+        let poller = Poller::new(vec![plain_root(dir.path(), RootRole::Workspace)]);
         let previous = poller.seen;
-        fs::write(dir.path().join("changed.txt"), "change").unwrap();
-        poller.wait();
+        write(&dir.path().join("common/changed.txt"), "change");
+        poller.wait_with(|_| {});
         assert_eq!(poller.seen, previous);
+        assert_ne!(poller.current(), poller.seen);
     }
 
     #[test]
     fn retries_failed_passes_with_bounded_backoff_and_a_fresh_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let roots = vec![dir.path().to_path_buf()];
-        let original = fingerprint(&roots);
+        let mut poller = Poller::new(vec![plain_root(dir.path(), RootRole::Workspace)]);
+        let original = poller.current();
         let mut attempts = 0;
         let mut waits = Vec::new();
         let (snapshot, result) = retry(
-            &roots,
+            &mut poller,
             original,
-            &mut || {
+            &mut |_poller| {
                 attempts += 1;
                 (attempts == 8).then_some("ok")
             },
             |pause| {
                 waits.push(pause.as_secs());
-                fs::write(dir.path().join("changed.txt"), "change").unwrap();
+                write(&dir.path().join("common/changed.txt"), "change");
             },
         );
         assert_eq!(result, "ok");
         assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
         assert_ne!(snapshot, original);
-        assert_eq!(snapshot, fingerprint(&roots));
+        assert_eq!(snapshot, poller.current());
     }
 
     #[test]
-    fn change_during_successful_retry_is_not_consumed() {
+    fn a_change_during_a_successful_retry_is_not_consumed() {
         let dir = tempfile::tempdir().unwrap();
-        let roots = vec![dir.path().to_path_buf()];
-        let before = fingerprint(&roots);
+        let mut poller = Poller::new(vec![plain_root(dir.path(), RootRole::Workspace)]);
+        let before = poller.current();
         let mut attempts = 0;
         let (snapshot, ()) = retry(
-            &roots,
+            &mut poller,
             before,
-            &mut || {
+            &mut |_poller| {
                 attempts += 1;
                 if attempts == 1 {
                     None
                 } else {
-                    fs::write(dir.path().join("during.txt"), "new input").unwrap();
+                    write(&dir.path().join("common/during.txt"), "new input");
                     Some(())
                 }
             },
@@ -482,98 +1033,36 @@ mod tests {
         );
         assert_eq!(attempts, 2);
         assert_eq!(snapshot, before);
-        assert_ne!(snapshot, fingerprint(&roots));
+        assert_ne!(snapshot, poller.current());
     }
 
-    #[test]
-    fn fingerprint_ignores_dot_directories() {
+    /// A workspace whose `map` folder only the ruleset names, so the poll lists
+    /// different files before and after the first load reports its folders.
+    fn map_workspace() -> (tempfile::TempDir, Poller) {
         let dir = tempfile::tempdir().unwrap();
-        let roots = vec![dir.path().to_path_buf()];
-        let before = fingerprint(&roots);
-        fs::create_dir(dir.path().join(".git")).unwrap();
-        fs::write(dir.path().join(".git").join("index"), "x").unwrap();
-        assert_eq!(fingerprint(&roots), before);
+        write(&dir.path().join("common/a.txt"), "a = 1\n");
+        write(&dir.path().join("map/b.txt"), "b = 1\n");
+        let poller = Poller::new(vec![plain_root(dir.path(), RootRole::Workspace)]);
+        let tuned = fingerprint(&poller.roots, &strings(["common", "map"]));
+        assert_ne!(poller.seen, tuned, "the fixture must list different files");
+        (dir, poller)
     }
 
-    /// An explicit `--vanilla` install is an input of the run, so a file change
-    /// under it moves the fingerprint with no edit to the workspace at all.
     #[test]
-    fn an_explicit_vanilla_directory_is_watched() {
-        let rules = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let vanilla = tempfile::tempdir().unwrap();
-        let watched = roots(rules.path(), workspace.path(), &[], Some(vanilla.path()));
-        let poller = Poller::new(watched);
-        let before = poller.seen;
-
-        let file = vanilla.path().join("events").join("vanilla.txt");
-        fs::create_dir(vanilla.path().join("events")).unwrap();
-        fs::write(&file, "x = 1\n").unwrap();
-
-        assert_ne!(
-            fingerprint(&poller.roots),
-            before,
-            "an edit under an explicit --vanilla root must move the fingerprint"
-        );
+    fn learning_the_folders_is_not_a_change() {
+        let (_dir, mut poller) = map_workspace();
+        poller.retune(strings(["common", "map"]));
+        assert_eq!(poller.current(), poller.seen);
     }
 
-    /// One tree is never walked twice: vanilla that repeats the workspace, the
-    /// ruleset or a parent root is dropped as a duplicate.
     #[test]
-    fn vanilla_equal_to_another_root_is_watched_once() {
-        let rules = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let parent = tempfile::tempdir().unwrap();
-
-        let as_workspace = roots(
-            rules.path(),
-            workspace.path(),
-            &[parent.path().to_path_buf()],
-            Some(workspace.path()),
+    fn an_edit_saved_during_the_first_load_stays_pending() {
+        let (dir, mut poller) = map_workspace();
+        write(
+            &dir.path().join("common/a.txt"),
+            "a = 1 # edited during the load\n",
         );
-        assert_eq!(
-            as_workspace,
-            vec![
-                rules.path().to_path_buf(),
-                workspace.path().to_path_buf(),
-                parent.path().to_path_buf()
-            ],
-            "vanilla equal to the workspace is not walked twice"
-        );
-
-        let as_rules = roots(rules.path(), workspace.path(), &[], Some(rules.path()));
-        assert_eq!(
-            as_rules,
-            vec![rules.path().to_path_buf(), workspace.path().to_path_buf()],
-            "vanilla equal to the rules root is not walked twice"
-        );
-    }
-
-    /// With no vanilla supplied there is no vanilla root: the watched list is
-    /// exactly rules, workspace and parents, and a change elsewhere is invisible.
-    #[test]
-    fn an_unset_vanilla_adds_no_root() {
-        let rules = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let vanilla = tempfile::tempdir().unwrap();
-        let watched = roots(
-            rules.path(),
-            workspace.path(),
-            &[workspace.path().to_path_buf()],
-            None,
-        );
-        assert_eq!(
-            watched,
-            vec![rules.path().to_path_buf(), workspace.path().to_path_buf()],
-            "an unset vanilla adds no root and a duplicate parent stays deduplicated"
-        );
-
-        let before = fingerprint(&watched);
-        fs::write(vanilla.path().join("outside.txt"), "x = 1\n").unwrap();
-        assert_eq!(
-            fingerprint(&watched),
-            before,
-            "a directory outside the watched roots stays outside the fingerprint"
-        );
+        poller.retune(strings(["common", "map"]));
+        assert_ne!(poller.current(), poller.seen);
     }
 }

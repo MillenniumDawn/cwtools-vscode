@@ -479,11 +479,24 @@ fn test_validate_help_lists_watch() {
         .stdout(predicate::str::contains("--watch"));
 }
 
-/// The watch loop end to end: an added file prints its delta, and Ctrl-C exits 0.
-/// Each wait is for an output line, bounded by one deadline, never a fixed sleep.
 #[cfg(unix)]
 #[test]
 fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_interrupt() {
+    watch_added_file_prints_its_delta(&[], "events/second.txt");
+}
+
+/// `nested` is a file glob here, so it matches nothing. Handed to the poller as
+/// an ignore-dirs pattern instead, it would prune `events/nested` and hide the new file.
+#[cfg(unix)]
+#[test]
+fn test_validate_watch_applies_ignore_files_to_files_not_directories() {
+    watch_added_file_prints_its_delta(&["--ignore-file", "nested"], "events/nested/second.txt");
+}
+
+/// The watch loop end to end: an added file prints its delta, and Ctrl-C exits 0.
+/// Each wait is for an output line, bounded by one deadline, never a fixed sleep.
+#[cfg(unix)]
+fn watch_added_file_prints_its_delta(extra_args: &[&str], added: &str) {
     use crate::common::{INHERITED_GIT_ENV, fixture_text, write_tree};
     use std::io::{BufRead, BufReader, Read};
     use std::process::{Command, Stdio};
@@ -514,6 +527,7 @@ fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_inte
         .arg(mod_dir.path())
         .arg("--rules")
         .arg(fixtures_dir().join("rules"))
+        .args(extra_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -537,11 +551,9 @@ fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_inte
     let deadline = Instant::now() + Duration::from_secs(60);
     let watching = wait_for_line(&lines, "Watching for changes", deadline);
     if watching {
-        std::fs::write(
-            mod_dir.path().join("events").join("second.txt"),
-            event.replace("test.1", "test.2"),
-        )
-        .unwrap();
+        let added = mod_dir.path().join(added);
+        std::fs::create_dir_all(added.parent().unwrap()).unwrap();
+        std::fs::write(added, event.replace("test.1", "test.2")).unwrap();
     }
     let delta = watching && wait_for_line(&lines, "CW107      -0 +1", deadline);
     // SAFETY: sends SIGINT to the child this test spawned.
