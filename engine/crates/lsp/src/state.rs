@@ -43,6 +43,7 @@ pub(crate) enum HoldPoint {
     OpenUses,
     Pass2SnapshotDropped,
     TypeUsesMerge,
+    DependentSnapshot,
     WatchedFile,
     ValidatePrepared,
     ValidateBeforeAcceptance,
