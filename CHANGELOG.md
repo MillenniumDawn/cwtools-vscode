@@ -2,11 +2,11 @@
 
 #### Engine
 
-* Run document color, inlay hint, highlight, symbol, go-to-definition, references, and prepare-rename walks outside async runtime workers. Keep synchronous localization URI collection inside one blocking boundary. (#1326)
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
 * Embed the source commit in published server binaries and expose it in version output and setup reports; local builds without supplied identity report it as unavailable. (#1223)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
+* Run document color, inlay hint, highlight, symbol, go-to-definition, references, and prepare-rename walks outside async runtime workers. (#1326)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
 * Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)

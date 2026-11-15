@@ -87,38 +87,25 @@ impl Backend {
             return Ok(self.cwt_goto(&uri, pos, fallback).await);
         }
 
-        let rule_info = tokio::task::block_in_place(|| {
+        let (rule_info, indexed) = tokio::task::block_in_place(|| {
             #[cfg(test)]
             self.hold(crate::state::HoldPoint::GotoWalk);
-            self.rule_info_at_cursor(&uri, pos, &logical_path)
+            let info = self.rule_info_at_cursor(&uri, pos, &logical_path);
+            let indexed = info
+                .as_ref()
+                .and_then(|info| self.indexed_hint_locations(&info.hint, fallback));
+            (info, indexed)
         });
         if let Some(info) = rule_info {
-            let locations = match &info.hint {
-                ReferenceHint::TypeRef { type_name, value } => tokio::task::block_in_place(|| {
-                    let value = unquote(value);
-                    let defs = {
-                        let svc = self.state.info_service.read();
-                        svc.type_index
-                            .instances(type_name)
-                            .iter()
-                            .filter(|(_, inst)| inst.name == value)
-                            .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
-                            .collect::<Vec<_>>()
-                    };
-                    locations_at(self, defs, value, fallback)
-                }),
-                ReferenceHint::Variable { name, .. } => tokio::task::block_in_place(|| {
-                    let defs = {
-                        let svc = self.state.info_service.read();
-                        svc.find_variable_definitions(name)
-                    };
-                    locations_at(self, defs, name, fallback)
-                }),
-                ReferenceHint::LocRef { key } => {
+            let locations = match (indexed, &info.hint) {
+                (Some(locations), _) => locations,
+                (None, ReferenceHint::LocRef { key }) => {
                     self.loc_key_locations(&key.to_lowercase(), fallback).await
                 }
-                ReferenceHint::FileRef { path } => self.file_ref_locations(path, fallback).await,
-                ReferenceHint::EnumRef { enum_name, value } => self
+                (None, ReferenceHint::FileRef { path }) => {
+                    self.file_ref_locations(path, fallback).await
+                }
+                (None, ReferenceHint::EnumRef { enum_name, value }) => self
                     .cwt_def_location(
                         cwtools_rules::rules_types::CwtDefKind::Enum,
                         enum_name,
@@ -128,9 +115,9 @@ impl Backend {
                     .await
                     .into_iter()
                     .collect(),
-                _ => Vec::new(),
+                (None, _) => Vec::new(),
             };
-            let locations = tokio::task::block_in_place(|| dedup_locations(locations));
+            let locations = dedup_locations(locations);
             if !locations.is_empty() {
                 return Ok(Some(GotoDefinitionResponse::Array(locations)));
             }
@@ -160,27 +147,27 @@ impl Backend {
                 PositionElement::Leaf { key, .. } => vec![key.clone()],
                 PositionElement::LeafValue { value } => vec![unquote(value).to_string()],
             };
-            let candidates_with_locations = tokio::task::block_in_place(|| {
-                let info = self.state.info_service.read();
-                candidates
-                    .iter()
-                    .map(|symbol| {
-                        let instances = info
-                            .type_index
-                            .instance_locations(symbol)
-                            .into_iter()
-                            .map(|(uri, loc)| (uri.to_string(), loc))
-                            .collect::<Vec<_>>();
-                        let definitions = if instances.is_empty() {
-                            info.find_definitions(symbol).cloned().unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        };
-                        (symbol.clone(), instances, definitions)
-                    })
-                    .collect::<Vec<_>>()
-            });
-            let result = tokio::task::block_in_place(|| {
+            let response = tokio::task::block_in_place(|| {
+                let candidates_with_locations = {
+                    let info = self.state.info_service.read();
+                    candidates
+                        .iter()
+                        .map(|symbol| {
+                            let instances = info
+                                .type_index
+                                .instance_locations(symbol)
+                                .into_iter()
+                                .map(|(uri, loc)| (uri.to_string(), loc))
+                                .collect::<Vec<_>>();
+                            let definitions = if instances.is_empty() {
+                                info.find_definitions(symbol).cloned().unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            };
+                            (symbol.clone(), instances, definitions)
+                        })
+                        .collect::<Vec<_>>()
+                };
                 for (symbol, instances, definitions) in candidates_with_locations {
                     let pairs = if instances.is_empty() {
                         definitions
@@ -189,14 +176,47 @@ impl Backend {
                     };
                     let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback));
                     if !locations.is_empty() {
-                        return Ok(Some(GotoDefinitionResponse::Array(locations)));
+                        return Some(GotoDefinitionResponse::Array(locations));
                     }
                 }
-                Ok(None)
+                None
             });
-            return result;
+            return Ok(response);
         }
         Ok(None)
+    }
+
+    /// Definitions of a type or variable reference, which the index answers
+    /// without an await. `None` for the hints that read files. Call inside
+    /// `block_in_place`.
+    fn indexed_hint_locations(
+        &self,
+        hint: &ReferenceHint,
+        fallback: &Url,
+    ) -> Option<Vec<Location>> {
+        match hint {
+            ReferenceHint::TypeRef { type_name, value } => {
+                let value = unquote(value);
+                let defs = {
+                    let svc = self.state.info_service.read();
+                    svc.type_index
+                        .instances(type_name)
+                        .iter()
+                        .filter(|(_, inst)| inst.name == value)
+                        .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
+                        .collect::<Vec<_>>()
+                };
+                Some(locations_at(self, defs, value, fallback))
+            }
+            ReferenceHint::Variable { name, .. } => {
+                let defs = {
+                    let svc = self.state.info_service.read();
+                    svc.find_variable_definitions(name)
+                };
+                Some(locations_at(self, defs, name, fallback))
+            }
+            _ => None,
+        }
     }
 
     async fn file_ref_locations(&self, path: &str, fallback: &Url) -> Vec<Location> {

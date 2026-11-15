@@ -559,216 +559,179 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::HoldPoint;
+    use crate::testing::assert_walk_releases_worker;
+    use std::collections::HashSet;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
-    /// The only async worker must be available for another task while a
-    /// synchronous editor walk is held. A watchdog releases the gate if a
-    /// regression blocks the runtime itself.
+    type WalkFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+    type WalkRequest = fn(Backend, String) -> WalkFuture;
+
+    const SCRIPT: (&str, &str) = ("common/test.txt", "test = { color = { 1 1 1 } }");
+    const LOC: (&str, &str) = (
+        "localisation/test_l_english.yml",
+        "l_english:\n test_key:0 \"Test\"\n",
+    );
+
+    fn doc(uri: &str) -> serde_json::Value {
+        serde_json::json!({ "textDocument": { "uri": uri } })
+    }
+
+    fn at(uri: &str, line: u32, character: u32) -> serde_json::Value {
+        serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        })
+    }
+
+    fn references_at(uri: &str, line: u32, character: u32) -> serde_json::Value {
+        let mut params = at(uri, line, character);
+        params["context"] = serde_json::json!({ "includeDeclaration": true });
+        params
+    }
+
+    fn loc_key(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let at_start = Position::new(0, 0);
+            let _ = backend
+                .loc_key_at_cursor(&uri, at_start, "common/test.txt")
+                .await;
+        })
+    }
+
+    fn loc_references(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let params = serde_json::from_value(references_at(&uri, 1, 2)).unwrap();
+            backend.references_impl(params).await.unwrap();
+        })
+    }
+
+    fn document_symbols(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let params = serde_json::from_value(doc(&uri)).unwrap();
+            backend.document_symbol_impl(params).await.unwrap();
+        })
+    }
+
+    fn prepare_rename(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let params = serde_json::from_value(at(&uri, 0, 0)).unwrap();
+            backend.prepare_rename_impl(params).await.unwrap();
+        })
+    }
+
+    /// Each synchronous editor and navigation walk must leave the only async
+    /// worker free for another task while it is parked at its hold point.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn editor_and_navigation_walks_release_the_async_worker() {
-        use crate::state::{HoldGate, HoldPoint};
-        use std::sync::Arc;
-        use std::sync::atomic::Ordering;
-        use std::time::Duration;
-
-        for point in [
-            HoldPoint::ColorWalk,
-            HoldPoint::InlayWalk,
-            HoldPoint::HighlightWalk,
-            HoldPoint::WorkspaceSymbolWalk,
-            HoldPoint::NestedSymbolWalk,
-            HoldPoint::FlatSymbolWalk,
-            HoldPoint::LocSymbolWalk,
-            HoldPoint::PrepareRenameWalk,
-            HoldPoint::GotoWalk,
-            HoldPoint::ReferencesWalk,
-            HoldPoint::LocCursorTextWalk,
-            HoldPoint::LocCursorRuleWalk,
-            HoldPoint::LocRenameScanWalk,
-            HoldPoint::LocDefinitionsWalk,
-            HoldPoint::LocDefinitionsResultWalk,
-            HoldPoint::CwtCursorWalk,
-            HoldPoint::NavigationSnapshotWalk,
-            HoldPoint::NavigationTextSnapshotWalk,
-        ] {
+        let cases: [(HoldPoint, (&str, &str), WalkRequest); 18] = [
+            (HoldPoint::ColorWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(doc(&uri)).unwrap();
+                    backend.document_color_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::InlayWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let mut params = doc(&uri);
+                    params["range"] = serde_json::json!({
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 1, "character": 0 }
+                    });
+                    let params = serde_json::from_value(params).unwrap();
+                    backend.inlay_hint_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::HighlightWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(at(&uri, 0, 0)).unwrap();
+                    backend.document_highlight_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::WorkspaceSymbolWalk, SCRIPT, |backend, _| {
+                Box::pin(async move {
+                    let query = serde_json::json!({ "query": "test" });
+                    let params = serde_json::from_value(query).unwrap();
+                    backend.symbol_request_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::NestedSymbolWalk, SCRIPT, |backend, uri| {
+                backend
+                    .state
+                    .hierarchical_symbols
+                    .store(true, Ordering::Relaxed);
+                document_symbols(backend, uri)
+            }),
+            (HoldPoint::FlatSymbolWalk, SCRIPT, document_symbols),
+            (HoldPoint::LocSymbolWalk, LOC, document_symbols),
+            (HoldPoint::PrepareRenameWalk, SCRIPT, prepare_rename),
+            (HoldPoint::GotoWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(at(&uri, 0, 0)).unwrap();
+                    backend.goto_definition_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::ReferencesWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(references_at(&uri, 0, 0)).unwrap();
+                    backend.references_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::LocCursorTextWalk, LOC, loc_key),
+            (HoldPoint::LocCursorRuleWalk, SCRIPT, loc_key),
+            (
+                HoldPoint::LocRenameScanWalk,
+                ("common/test.txt", "test_key"),
+                |backend, uri| {
+                    let known = HashSet::from(["test_key".to_string()]);
+                    backend
+                        .state
+                        .loc_live_overlay
+                        .write()
+                        .insert("fixture".to_string(), known);
+                    prepare_rename(backend, uri)
+                },
+            ),
+            (HoldPoint::LocDefinitionsWalk, LOC, loc_references),
+            (HoldPoint::LocDefinitionsResultWalk, LOC, loc_references),
+            (HoldPoint::CwtCursorWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let _ = backend.cwt_ref_at_cursor(&uri, Position::new(0, 0)).await;
+                })
+            }),
+            (HoldPoint::NavigationSnapshotWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let scan = backend.scan_workspace_texts(vec![uri], |_, _| Vec::<String>::new());
+                    scan.await.unwrap();
+                })
+            }),
+            (
+                HoldPoint::NavigationTextSnapshotWalk,
+                SCRIPT,
+                |backend, uri| {
+                    Box::pin(async move {
+                        let uris = [uri];
+                        let snapshots = backend.file_text_snapshots_for_navigation(&uris);
+                        snapshots.await.unwrap();
+                    })
+                },
+            ),
+        ];
+        for (point, (file, text), request) in cases {
             let (backend, workspace) = crate::testing::workspace_backend();
-            let is_loc = matches!(
-                point,
-                HoldPoint::LocSymbolWalk
-                    | HoldPoint::LocCursorTextWalk
-                    | HoldPoint::LocDefinitionsWalk
-                    | HoldPoint::LocDefinitionsResultWalk
-            );
-            let path = if is_loc {
-                "localisation/test_l_english.yml"
-            } else {
-                "common/test.txt"
-            };
-            let uri = crate::paths::path_to_uri(&workspace.path().join(path));
-            let text = if is_loc {
-                "l_english:\n test_key:0 \"Test\"\n"
-            } else if point == HoldPoint::LocRenameScanWalk {
-                "test_key"
-            } else {
-                "test = { color = { 1 1 1 } }"
-            };
-            if point == HoldPoint::LocRenameScanWalk {
-                backend.state.loc_live_overlay.write().insert(
-                    "fixture".to_string(),
-                    std::collections::HashSet::from(["test_key".to_string()]),
-                );
-            }
-            backend
-                .state
-                .hierarchical_symbols
-                .store(point == HoldPoint::NestedSymbolWalk, Ordering::Relaxed);
+            let uri = crate::paths::path_to_uri(&workspace.path().join(file));
             crate::testing::open_document(&backend, &uri, text);
-            let ast = Arc::new(cwtools_parser::parser::parse_string(
-                text,
-                &backend.state.string_table,
-            ));
+            let table = &backend.state.string_table;
+            let ast = Arc::new(cwtools_parser::parser::parse_string(text, table));
             backend.state.documents.lock().set_ast(&uri, 1, ast);
             let mut rules = cwtools_rules::rules_types::RuleSet::new();
             rules.reindex();
             backend.state.rules.write().ruleset = Some(Arc::new(rules));
-            backend
-                .state
-                .inlay_hints_loc_titles
-                .store(true, Ordering::Relaxed);
-
-            let gate = HoldGate::new(point);
-            *backend.state.hold_gate.lock() = Some(gate.clone());
-            let watchdog_gate = gate.clone();
-            let watchdog_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watchdog_flag = watchdog_fired.clone();
-            let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel::<()>();
-            let watchdog = std::thread::spawn(move || {
-                if watchdog_rx.recv_timeout(Duration::from_secs(15)).is_err() {
-                    watchdog_flag.store(true, Ordering::Release);
-                    watchdog_gate.release();
-                }
-            });
-            let worker = backend.clone();
-            let request_uri = uri.clone();
-            let walk = tokio::spawn(async move {
-                if point == HoldPoint::ColorWalk {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri }
-                    }))
-                    .unwrap();
-                    worker.document_color_impl(params).await.unwrap();
-                } else if point == HoldPoint::InlayWalk {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri },
-                        "range": {
-                            "start": { "line": 0, "character": 0 },
-                            "end": { "line": 1, "character": 0 }
-                        }
-                    }))
-                    .unwrap();
-                    worker.inlay_hint_impl(params).await.unwrap();
-                } else if point == HoldPoint::HighlightWalk {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri },
-                        "position": { "line": 0, "character": 0 }
-                    }))
-                    .unwrap();
-                    worker.document_highlight_impl(params).await.unwrap();
-                } else if point == HoldPoint::WorkspaceSymbolWalk {
-                    let params =
-                        serde_json::from_value(serde_json::json!({ "query": "test" })).unwrap();
-                    worker.symbol_request_impl(params).await.unwrap();
-                } else if matches!(
-                    point,
-                    HoldPoint::LocCursorTextWalk | HoldPoint::LocCursorRuleWalk
-                ) {
-                    let _ = worker
-                        .loc_key_at_cursor(&request_uri, Position::new(0, 0), "common/test.txt")
-                        .await;
-                } else if point == HoldPoint::NavigationSnapshotWalk {
-                    worker
-                        .scan_workspace_texts(vec![request_uri], |_, _| Vec::<String>::new())
-                        .await
-                        .unwrap();
-                } else if point == HoldPoint::NavigationTextSnapshotWalk {
-                    let _ = worker
-                        .file_text_snapshots_for_navigation(&[request_uri])
-                        .await
-                        .unwrap();
-                } else if point == HoldPoint::CwtCursorWalk {
-                    let _ = worker
-                        .cwt_ref_at_cursor(&request_uri, Position::new(0, 0))
-                        .await;
-                } else if point == HoldPoint::GotoWalk {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri },
-                        "position": { "line": 0, "character": 0 }
-                    }))
-                    .unwrap();
-                    worker.goto_definition_impl(params).await.unwrap();
-                } else if matches!(
-                    point,
-                    HoldPoint::LocDefinitionsWalk | HoldPoint::LocDefinitionsResultWalk
-                ) {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri },
-                        "position": { "line": 1, "character": 2 },
-                        "context": { "includeDeclaration": true }
-                    }))
-                    .unwrap();
-                    worker.references_impl(params).await.unwrap();
-                } else if point == HoldPoint::ReferencesWalk {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri },
-                        "position": { "line": 0, "character": 0 },
-                        "context": { "includeDeclaration": true }
-                    }))
-                    .unwrap();
-                    worker.references_impl(params).await.unwrap();
-                } else if matches!(
-                    point,
-                    HoldPoint::PrepareRenameWalk | HoldPoint::LocRenameScanWalk
-                ) {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri },
-                        "position": { "line": 0, "character": 0 }
-                    }))
-                    .unwrap();
-                    worker.prepare_rename_impl(params).await.unwrap();
-                } else {
-                    let params = serde_json::from_value(serde_json::json!({
-                        "textDocument": { "uri": request_uri }
-                    }))
-                    .unwrap();
-                    worker.document_symbol_impl(params).await.unwrap();
-                }
-            });
-            let arrived = tokio::time::timeout(Duration::from_secs(5), async {
-                while !gate.has_arrived() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await;
-            if arrived.is_err() {
-                gate.release();
-                let _ = watchdog_tx.send(());
-                watchdog.join().unwrap();
-                panic!("editor walk did not reach its gate: {point:?}");
-            }
-            let ping = tokio::spawn(async { 42 });
-            let progress = tokio::time::timeout(Duration::from_secs(5), ping).await;
-            gate.release();
-            let _ = watchdog_tx.send(());
-            watchdog.join().unwrap();
-            walk.await.unwrap();
-            assert!(
-                !watchdog_fired.load(Ordering::Acquire),
-                "watchdog released a blocked runtime during {point:?}"
-            );
-            assert_eq!(
-                progress.unwrap().unwrap(),
-                42,
-                "worker blocked by {point:?}"
-            );
+            let walk = request(backend.clone(), uri);
+            assert_walk_releases_worker(&backend, point, walk).await;
         }
     }
 

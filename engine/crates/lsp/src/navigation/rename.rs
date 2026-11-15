@@ -210,12 +210,18 @@ impl Backend {
 
         let text = self.file_text_for(&uri).await;
         let position_encoding = self.position_encoding();
-        let variable_range = tokio::task::block_in_place(|| {
+        let (lines, variable_range) = tokio::task::block_in_place(|| {
             #[cfg(test)]
             self.hold(crate::state::HoldPoint::PrepareRenameWalk);
-            let text = text.as_deref()?;
-            let lines = DocLines::new(text, position_encoding.clone());
-            Self::at_var_rename_target(text, &lines, pos).map(|(_, range)| range)
+            let lines = text
+                .as_deref()
+                .map(|text| DocLines::new(text, position_encoding.clone()));
+            let range = text
+                .as_deref()
+                .zip(lines.as_ref())
+                .and_then(|(text, lines)| Self::at_var_rename_target(text, lines, pos))
+                .map(|(_, range)| range);
+            (lines, range)
         });
         if let Some(range) = variable_range {
             return Ok(Some(PrepareRenameResponse::Range(range)));
@@ -225,16 +231,16 @@ impl Backend {
             .loc_rename_key_at_cursor(&uri, pos, &logical_path)
             .await?
         {
-            let range = tokio::task::block_in_place(|| {
-                let token = if let Some(t) = text.as_deref() {
-                    let lines = DocLines::new(t, position_encoding.clone());
-                    let col = lines.source_column(pos);
-                    word_at_position(t, pos.line, col as u32).unwrap_or_else(|| key_lower.clone())
-                } else {
-                    key_lower.clone()
-                };
-                prepare_rename_range(text.as_deref(), pos, &token, &position_encoding)
-            });
+            // `lines` is `text.as_deref().map(..)`, so it is `Some` on exactly
+            // the same condition and the index answers this without the
+            // document rescan `lsp_pos_to_source_in_text` would do (#471).
+            let token = if let (Some(t), Some(lines)) = (text.as_deref(), lines.as_ref()) {
+                let col = lines.source_column(pos);
+                word_at_position(t, pos.line, col as u32).unwrap_or_else(|| key_lower.clone())
+            } else {
+                key_lower.clone()
+            };
+            let range = prepare_rename_range(text.as_deref(), pos, &token, &position_encoding);
             return Ok(Some(PrepareRenameResponse::Range(range)));
         }
 

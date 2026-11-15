@@ -1,8 +1,64 @@
 //! Fixtures shared by the unit tests in this crate's modules.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use crate::state::{Backend, DocumentState};
+use crate::state::{Backend, DocumentState, HoldGate, HoldPoint};
+
+/// Fails unless the only async worker stays free to run other tasks while
+/// the `request` is parked at `point`. Use it on a
+/// `#[tokio::test(flavor = "multi_thread", worker_threads = 1)]` runtime.
+///
+/// A parked worker also stops the timer driver, so the timeouts below cannot
+/// fire without a fence. A watchdog thread releases the gate after a longer
+/// wait, so a missing fence fails the test instead of hanging it.
+pub(crate) async fn assert_walk_releases_worker<F>(backend: &Backend, point: HoldPoint, request: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let gate = HoldGate::new(point);
+    *backend.state.hold_gate.lock() = Some(gate.clone());
+    let watchdog_fired = Arc::new(AtomicBool::new(false));
+    let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn({
+        let gate = gate.clone();
+        let fired = watchdog_fired.clone();
+        move || {
+            if cancelled.recv_timeout(Duration::from_secs(15)).is_err() {
+                fired.store(true, Ordering::Release);
+                gate.release();
+            }
+        }
+    });
+    let walk = tokio::spawn(request);
+    let arrived = tokio::time::timeout(Duration::from_secs(5), async {
+        while !gate.has_arrived() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let ping = match arrived {
+        Ok(()) => tokio::time::timeout(Duration::from_secs(5), tokio::spawn(async { 42 }))
+            .await
+            .ok(),
+        Err(_) => None,
+    };
+    gate.release();
+    let _ = cancel.send(());
+    watchdog.join().unwrap();
+    assert!(arrived.is_ok(), "walk did not reach its gate: {point:?}");
+    walk.await.unwrap();
+    assert!(
+        !watchdog_fired.load(Ordering::Acquire),
+        "watchdog released a blocked runtime during {point:?}"
+    );
+    assert_eq!(
+        ping.transpose().unwrap(),
+        Some(42),
+        "worker blocked by {point:?}"
+    );
+}
 
 /// A `Backend` over fresh state and a live `Client`, for tests that call its
 /// methods directly. The socket is dropped, so nothing it sends is read.

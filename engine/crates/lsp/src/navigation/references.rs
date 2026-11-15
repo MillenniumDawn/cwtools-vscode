@@ -259,7 +259,7 @@ impl Backend {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let sites = tokio::task::block_in_place(|| {
+        let (sites, text_uris) = tokio::task::block_in_place(|| {
             #[cfg(test)]
             self.hold(crate::state::HoldPoint::LocDefinitionsWalk);
             let mut sites: Vec<(String, u32, String)> = Vec::new();
@@ -311,13 +311,12 @@ impl Backend {
                     }
                 }
             }
-            sites
+            let text_uris: Vec<String> = sites.iter().map(|(uri, _, _)| uri.clone()).collect();
+            (sites, text_uris)
         });
         if sites.is_empty() {
             return Ok(Vec::new());
         }
-        let text_uris: Vec<String> =
-            tokio::task::block_in_place(|| sites.iter().map(|(uri, _, _)| uri.clone()).collect());
         let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
         let locations = tokio::task::block_in_place(|| {
             #[cfg(test)]
@@ -450,13 +449,13 @@ impl Backend {
         })
         .await
         .map_err(|_| navigation_snapshot_read_error())??;
-        let unchanged = tokio::task::block_in_place(|| {
+        let unchanged = {
             let docs = self.state.documents.lock();
             open_versions.iter().all(|(uri, version, hash)| {
                 docs.get(uri)
                     .is_some_and(|doc| doc.version == *version && docs.content_hash(uri) == *hash)
             })
-        });
+        };
         if !unchanged {
             return Err(navigation_snapshot_changed_error());
         }
@@ -472,7 +471,7 @@ impl Backend {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let script_uris = tokio::task::block_in_place(|| self.script_uris());
+        let script_uris = self.script_uris();
         if script_uris.is_empty() {
             return Ok(Vec::new());
         }
@@ -513,11 +512,7 @@ impl Backend {
                 hits
             })
             .await?;
-        tokio::task::block_in_place(|| {
-            out.sort_by(|a, b| {
-                (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start))
-            });
-        });
+        out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
         Ok(out)
     }
 
@@ -541,26 +536,19 @@ impl Backend {
                 all_locs.extend(self.collect_loc_definitions(&keys, fallback).await?);
             }
             all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await?);
-            let all_locs = tokio::task::block_in_place(|| dedup_locations(all_locs));
+            let all_locs = dedup_locations(all_locs);
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
             }
         }
 
-        let type_ref = tokio::task::block_in_place(|| {
-            #[cfg(test)]
-            self.hold(crate::state::HoldPoint::ReferencesWalk);
-            self.type_ref_at_cursor(&uri, pos, &logical_path)
-        });
-
         let include_declaration = params.context.include_declaration;
 
-        if let Some((type_name, instance_name)) = type_ref {
-            let fallback = &params.text_document_position.text_document.uri;
-            let definitions = tokio::task::block_in_place(|| {
-                if !include_declaration {
-                    return Vec::new();
-                }
+        let type_ref_sites = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::ReferencesWalk);
+            let (type_name, instance_name) = self.type_ref_at_cursor(&uri, pos, &logical_path)?;
+            let definitions = if include_declaration {
                 let info = self.state.info_service.read();
                 info.type_index
                     .instances(&type_name)
@@ -568,19 +556,19 @@ impl Backend {
                     .filter(|(_, inst)| inst.name == instance_name)
                     .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
                     .collect::<Vec<_>>()
-            });
-
-            let sites = tokio::task::block_in_place(|| {
-                key_sites(self.collect_use_sites(&type_name, &instance_name))
-            });
-            let text_uris: Vec<String> = tokio::task::block_in_place(|| {
-                let mut text_uris: Vec<String> = definitions
-                    .iter()
-                    .map(|(file_uri, _)| file_uri.clone())
-                    .collect();
-                text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
-                text_uris
-            });
+            } else {
+                Vec::new()
+            };
+            let sites = key_sites(self.collect_use_sites(&type_name, &instance_name));
+            let text_uris: Vec<String> = definitions
+                .iter()
+                .map(|(file_uri, _)| file_uri.clone())
+                .chain(sites.iter().map(|(file_uri, _)| file_uri.clone()))
+                .collect();
+            Some((instance_name, definitions, sites, text_uris))
+        });
+        if let Some((instance_name, definitions, sites, text_uris)) = type_ref_sites {
+            let fallback = &params.text_document_position.text_document.uri;
             let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let all_locs = tokio::task::block_in_place(|| {
                 #[cfg(test)]
@@ -609,14 +597,12 @@ impl Backend {
             }
         }
 
-        let element = tokio::task::block_in_place(|| self.element_at_cursor(&uri, pos));
-        if let Some(element) = element {
-            let symbol = match &element {
-                PositionElement::Leaf { key, .. } => key.clone(),
-                PositionElement::LeafValue { value } => value.clone(),
+        let symbol_sites = tokio::task::block_in_place(|| {
+            let symbol = match self.element_at_cursor(&uri, pos)? {
+                PositionElement::Leaf { key, .. } => key,
+                PositionElement::LeafValue { value } => value,
             };
-            let fallback = &params.text_document_position.text_document.uri;
-            let (definitions, references) = tokio::task::block_in_place(|| {
+            let (definitions, references) = {
                 let info = self.state.info_service.read();
                 (
                     if include_declaration {
@@ -626,13 +612,15 @@ impl Backend {
                     },
                     info.find_references(&symbol).unwrap_or_default(),
                 )
-            });
-            let (pairs, text_uris): (Vec<_>, Vec<String>) = tokio::task::block_in_place(|| {
-                let mut pairs = definitions;
-                pairs.extend(references);
-                let text_uris = pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
-                (pairs, text_uris)
-            });
+            };
+            let mut pairs = definitions;
+            pairs.extend(references);
+            let text_uris: Vec<String> =
+                pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
+            Some((symbol, pairs, text_uris))
+        });
+        if let Some((symbol, pairs, text_uris)) = symbol_sites {
+            let fallback = &params.text_document_position.text_document.uri;
             let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let all_locs = tokio::task::block_in_place(|| {
                 let indexed = index_snapshots(&texts, &self.position_encoding());
@@ -926,7 +914,7 @@ impl Backend {
         })
         .await
         .map_err(|_| navigation_snapshot_read_error())??;
-        tokio::task::block_in_place(|| snapshots.extend(read.into_iter().flatten()));
+        snapshots.extend(read.into_iter().flatten());
         Ok(snapshots)
     }
 
@@ -1530,46 +1518,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn reference_result_walk_releases_async_worker() {
-        use crate::state::{HoldGate, HoldPoint};
-        use std::sync::atomic::Ordering;
-        use std::time::Duration;
-
         let fixture = indexed_type_navigation_fixture(2);
-        let gate = HoldGate::new(HoldPoint::ReferencesResultWalk);
-        *fixture.state.hold_gate.lock() = Some(gate.clone());
-        let watchdog_gate = gate.clone();
-        let watchdog_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watchdog_flag = watchdog_fired.clone();
-        let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel::<()>();
-        let watchdog = std::thread::spawn(move || {
-            if watchdog_rx.recv_timeout(Duration::from_secs(15)).is_err() {
-                watchdog_flag.store(true, Ordering::Release);
-                watchdog_gate.release();
-            }
-        });
         let backend = fixture.backend.clone();
         let params = fixture.references_params(false);
-        let task = tokio::spawn(async move { backend.references_impl(params).await });
-        let arrived = tokio::time::timeout(Duration::from_secs(5), async {
-            while !gate.has_arrived() {
-                tokio::task::yield_now().await;
-            }
-        })
+        let request = async move {
+            backend.references_impl(params).await.unwrap();
+        };
+        crate::testing::assert_walk_releases_worker(
+            &fixture.backend,
+            crate::state::HoldPoint::ReferencesResultWalk,
+            request,
+        )
         .await;
-        if arrived.is_err() {
-            gate.release();
-            let _ = watchdog_tx.send(());
-            watchdog.join().unwrap();
-            panic!("reference result walk did not reach its gate");
-        }
-        let progress =
-            tokio::time::timeout(Duration::from_secs(5), tokio::spawn(async { 42 })).await;
-        gate.release();
-        let _ = watchdog_tx.send(());
-        watchdog.join().unwrap();
-        let _ = task.await.unwrap().unwrap();
-        assert!(!watchdog_fired.load(Ordering::Acquire));
-        assert_eq!(progress.unwrap().unwrap(), 42);
     }
 
     #[tokio::test(flavor = "multi_thread")]
