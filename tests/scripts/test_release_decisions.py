@@ -120,6 +120,10 @@ def test_cli_rejects_malformed_json_and_error_payload(
     release_decisions.main()
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the Linux-only publish step's stubbed commands hang under Windows bash",
+)
 def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
     """Run the actual workflow shell with fake API, checker, and clock."""
     bash = shutil.which("bash")

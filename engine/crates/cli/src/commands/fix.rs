@@ -252,10 +252,8 @@ pub(super) fn run(args: FixArgs) {
     for (file, planned) in by_file {
         let file_display = file.display().to_string();
         let text = match indexed_sources.get(file.as_path()) {
-            Some(source) => session
-                .read_source_utf8(source)
-                .map_err(|error| error.to_string()),
-            None => std::fs::read_to_string(&file).map_err(|error| error.to_string()),
+            Some(source) => session.read_source_utf8(source),
+            None => session.read_loc_source_utf8(&file),
         };
         let text = match text {
             Ok(text) => text,
@@ -358,6 +356,7 @@ fn fix_preview(path: &str, old: &str, edits: &[cwtools_parser::fix::SpanEdit]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cwtools_driver::SessionWithFiles;
     use cwtools_parser::ast::{SourcePos, SourceRange};
     use cwtools_parser::fix::SpanEdit;
 
@@ -417,6 +416,108 @@ mod tests {
             );
             assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
         }
+    }
+
+    const UNCLOSED_LOC: &str = "\u{feff}l_english:\n key: \"unclosed\n";
+
+    fn loc_session(contents: &[u8]) -> (tempfile::TempDir, SessionWithFiles, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("mod");
+        let loc = root.join("localisation");
+        std::fs::create_dir_all(&loc).unwrap();
+        let path = loc.join("test_l_english.yml");
+        std::fs::write(&path, contents).unwrap();
+        let rules = tmp.path().join("rules.cwt");
+        std::fs::write(&rules, "").unwrap();
+        let session = Session::load(SessionConfig {
+            game: Game::Hoi4,
+            rules: RulesInput::File(rules),
+            directory: root,
+            parent_roots: vec![],
+            vanilla: None,
+            vanilla_cache: None,
+            vanilla_cache_auto: None,
+            ignore_files: &[],
+            ignore_dirs: &[],
+            loc_languages: None,
+            case_sensitive_files: false,
+            on_rules_diagnostic: None,
+        });
+        (tmp, session, path)
+    }
+
+    /// The fixable CW268 diagnostic, as `run` reads it: the file by its reported name.
+    fn cw268_fix(session: &SessionWithFiles) -> (std::path::PathBuf, Vec<SpanEdit>) {
+        let diagnostic = session
+            .loc_project_diagnostics()
+            .into_iter()
+            .find(|d| d.code == "CW268" && d.fix.is_some())
+            .expect("fixable localization diagnostic");
+        let edits = diagnostic.fix.unwrap().edits.to_vec();
+        (std::path::PathBuf::from(diagnostic.file.as_str()), edits)
+    }
+
+    #[test]
+    fn localization_fix_applies_to_an_unchanged_source() {
+        let (_tmp, session, path) = loc_session(UNCLOSED_LOC.as_bytes());
+        let (file, edits) = cw268_fix(&session);
+        let text = session.read_loc_source_utf8(&file).unwrap();
+        assert_eq!(text, UNCLOSED_LOC);
+        assert_eq!(
+            cwtools_parser::fix::apply_edits(&text, &edits),
+            "\u{feff}l_english:\n key: \"unclosed\"\n"
+        );
+        assert!(!session.is_incomplete());
+        assert_eq!(std::fs::read(path).unwrap(), UNCLOSED_LOC.as_bytes());
+    }
+
+    #[test]
+    fn localization_fix_refuses_an_inserted_line() {
+        let (_tmp, session, path) = loc_session(UNCLOSED_LOC.as_bytes());
+        let (file, _edits) = cw268_fix(&session);
+        let changed = "\u{feff}l_english:\n inserted:0 \"value\"\n key: \"unclosed\n";
+        std::fs::write(&path, changed).unwrap();
+        assert!(session.read_loc_source_utf8(&file).is_err());
+        assert!(
+            session.is_incomplete(),
+            "a localization source that changed after indexing must block fixing"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), changed.as_bytes());
+    }
+
+    #[test]
+    fn localization_fix_classes_growth_inside_a_multibyte_character_as_changed() {
+        let (_tmp, session, path) = loc_session(UNCLOSED_LOC.as_bytes());
+        let (file, _edits) = cw268_fix(&session);
+        // The one-byte-past-the-end read cuts the appended `é` after its lead byte.
+        let grown = format!("{UNCLOSED_LOC}é");
+        std::fs::write(&path, &grown).unwrap();
+        let error = session.read_loc_source_utf8(&file).unwrap_err();
+        assert!(error.to_string().contains("changed"), "{error}");
+        assert!(session.is_incomplete());
+        assert_eq!(std::fs::read(path).unwrap(), grown.as_bytes());
+    }
+
+    #[test]
+    fn localization_fix_classes_a_deleted_source_as_changed() {
+        let (_tmp, session, path) = loc_session(UNCLOSED_LOC.as_bytes());
+        let (file, _edits) = cw268_fix(&session);
+        std::fs::remove_file(&path).unwrap();
+        assert!(session.read_loc_source_utf8(&file).is_err());
+        assert!(session.is_incomplete());
+    }
+
+    #[test]
+    fn localization_fix_keeps_utf8_only_input_policy() {
+        let contents = b"\xef\xbb\xbfl_english:\n key: \"caf\xe9\n";
+        let (_tmp, session, path) = loc_session(contents);
+        let (file, _edits) = cw268_fix(&session);
+        assert!(session.read_loc_source_utf8(&file).is_err());
+        assert!(
+            !session.is_incomplete(),
+            "a non-UTF-8 source is refused by policy, not because it changed"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), contents);
     }
 
     #[test]
