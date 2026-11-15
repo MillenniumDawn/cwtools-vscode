@@ -521,8 +521,15 @@ fn discover_workspace_files_enforces_file_budget() {
     let mut cfg = workspace_discovery_config(&root, None);
     cfg.include_dirs = vec![".".to_string()];
     cfg.scan_budget.max_files = 3;
-    let files = discover_workspace_files(cfg).expect("discovery");
-    assert_eq!(files.len(), 3, "discovery must stop at the file budget");
+    assert!(matches!(
+        discover_workspace_files(cfg.clone()),
+        Err(FileError::FileCountBudget(_))
+    ));
+    for i in 3..10 {
+        std::fs::remove_file(root.join(format!("f{i}.txt"))).unwrap();
+    }
+    let files = discover_workspace_files(cfg).expect("an exact-cap scan is complete");
+    assert_eq!(files.len(), 3);
 }
 
 /// Discovery order is a contract: the TypeIndex merge order is observable

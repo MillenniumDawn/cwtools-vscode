@@ -20,6 +20,8 @@ mod watched;
 mod workspace;
 
 pub(crate) use loc::ParentLocKey;
+#[cfg(test)]
+pub(crate) use vanilla::{FileIndexBuilder, VanillaLoader, test_capped_vanilla_loader};
 pub(crate) use vanilla::{VanillaLoc, VanillaLocKey, vanilla_fingerprint};
 pub use vanilla::{resolve_source_uris, source_uri};
 
@@ -1127,6 +1129,39 @@ mod tests {
         );
     }
 
+    /// An over-cap batch whose rescan fails is not a lost race: requeueing it would
+    /// re-arm the window for a failure that repeats.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_over_cap_batch_drops_events_when_the_scan_fails() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(tmp.path().join("missing")).unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_uri = Some(uri.as_str().into());
+            config.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri.as_str()));
+        }
+        let uri_of = |name: String| {
+            tower_lsp::lsp_types::Url::from_file_path(tmp.path().join("ws").join(name))
+                .unwrap()
+                .to_string()
+        };
+        let changes: HashSet<String> = (0..=WATCHED_BULK_CAP)
+            .map(|i| uri_of(format!("common/f{i}.txt")))
+            .collect();
+
+        backend
+            .process_watched_batch(changes, vec![uri_of("gfx/gone.dds".to_string())])
+            .await;
+
+        assert!(backend.state.watched_pending.lock().is_empty());
+        assert!(backend.state.watched_deleted.lock().is_empty());
+        assert!(
+            backend.state.watched_debounce.lock().is_none(),
+            "a failed scan must not re-arm the batch window"
+        );
+    }
+
     async fn wait_for_clear(flag: &AtomicBool) -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while flag.load(Ordering::SeqCst) {
@@ -1455,7 +1490,7 @@ mod tests {
                 ..Default::default()
             },
         });
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
 
         let info = backend.state.info_service.read();
         assert!(

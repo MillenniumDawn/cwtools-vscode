@@ -462,58 +462,62 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(Vec::new());
         };
-        let (game, scope_checks, var_checks, encoding, ws_prefix) = {
-            let cfg = self.state.config.read();
-            (
-                cfg.game(),
-                cfg.scope_checks,
-                cfg.var_checks,
-                cfg.position_encoding.clone(),
-                cfg.workspace_prefix.clone(),
-            )
-        };
-        let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
-        let (ruleset, modifier_keys, scope_registry) = {
-            let rules = self.state.rules.read();
-            (
-                rules.ruleset.clone(),
-                rules.modifier_keys.clone(),
-                rules.scope_registry.clone(),
-            )
-        };
-        let Some(ruleset) = ruleset else {
-            return Ok(Vec::new());
-        };
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::ColorWalk);
+            let (game, scope_checks, var_checks, encoding, ws_prefix) = {
+                let cfg = self.state.config.read();
+                (
+                    cfg.game(),
+                    cfg.scope_checks,
+                    cfg.var_checks,
+                    cfg.position_encoding.clone(),
+                    cfg.workspace_prefix.clone(),
+                )
+            };
+            let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
+            let (ruleset, modifier_keys, scope_registry) = {
+                let rules = self.state.rules.read();
+                (
+                    rules.ruleset.clone(),
+                    rules.modifier_keys.clone(),
+                    rules.scope_registry.clone(),
+                )
+            };
+            let Some(ruleset) = ruleset else {
+                return Ok(Vec::new());
+            };
 
-        let table = self.table_for(&ast);
-        let found = {
-            let info = self.state.info_service.read();
-            let inline_guard = self.state.inline_scripts.read();
-            let prepared = crate::validate::make_prepared(
-                &ruleset,
-                &table,
-                game,
-                &info.type_index,
-                &modifier_keys,
-                None,
-                None,
-                Some(&inline_guard),
-                scope_registry.as_ref(),
-                scope_checks,
-                var_checks,
-            );
-            document_colours(&ast, &table, Some((&prepared, logical_path.as_str())))
-        };
+            let table = self.table_for(&ast);
+            let found = {
+                let info = self.state.info_service.read();
+                let inline_guard = self.state.inline_scripts.read();
+                let prepared = crate::validate::make_prepared(
+                    &ruleset,
+                    &table,
+                    game,
+                    &info.type_index,
+                    &modifier_keys,
+                    None,
+                    None,
+                    Some(&inline_guard),
+                    scope_registry.as_ref(),
+                    scope_checks,
+                    var_checks,
+                );
+                document_colours(&ast, &table, Some((&prepared, logical_path.as_str())))
+            };
 
-        let lines: Vec<&str> = text.lines().collect();
-        Ok(found
-            .iter()
-            .filter(|found| is_color_range_safe(found.range, &lines))
-            .map(|f| ColorInformation {
-                range: to_lsp_range(f.range, &lines, &encoding),
-                color: to_color(&f.literal),
-            })
-            .collect())
+            let lines: Vec<&str> = text.lines().collect();
+            Ok(found
+                .iter()
+                .filter(|found| is_color_range_safe(found.range, &lines))
+                .map(|f| ColorInformation {
+                    range: to_lsp_range(f.range, &lines, &encoding),
+                    color: to_color(&f.literal),
+                })
+                .collect())
+        })
     }
 
     pub(crate) async fn color_presentation_impl(
@@ -555,6 +559,181 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::HoldPoint;
+    use crate::testing::assert_walk_releases_worker;
+    use std::collections::HashSet;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    type WalkFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+    type WalkRequest = fn(Backend, String) -> WalkFuture;
+
+    const SCRIPT: (&str, &str) = ("common/test.txt", "test = { color = { 1 1 1 } }");
+    const LOC: (&str, &str) = (
+        "localisation/test_l_english.yml",
+        "l_english:\n test_key:0 \"Test\"\n",
+    );
+
+    fn doc(uri: &str) -> serde_json::Value {
+        serde_json::json!({ "textDocument": { "uri": uri } })
+    }
+
+    fn at(uri: &str, line: u32, character: u32) -> serde_json::Value {
+        serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        })
+    }
+
+    fn references_at(uri: &str, line: u32, character: u32) -> serde_json::Value {
+        let mut params = at(uri, line, character);
+        params["context"] = serde_json::json!({ "includeDeclaration": true });
+        params
+    }
+
+    fn loc_key(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let at_start = Position::new(0, 0);
+            let _ = backend
+                .loc_key_at_cursor(&uri, at_start, "common/test.txt")
+                .await;
+        })
+    }
+
+    fn loc_references(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let params = serde_json::from_value(references_at(&uri, 1, 2)).unwrap();
+            backend.references_impl(params).await.unwrap();
+        })
+    }
+
+    fn document_symbols(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let params = serde_json::from_value(doc(&uri)).unwrap();
+            backend.document_symbol_impl(params).await.unwrap();
+        })
+    }
+
+    fn prepare_rename(backend: Backend, uri: String) -> WalkFuture {
+        Box::pin(async move {
+            let params = serde_json::from_value(at(&uri, 0, 0)).unwrap();
+            backend.prepare_rename_impl(params).await.unwrap();
+        })
+    }
+
+    /// Each synchronous editor and navigation walk must leave the only async
+    /// worker free for another task while it is parked at its hold point.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn editor_and_navigation_walks_release_the_async_worker() {
+        let cases: [(HoldPoint, (&str, &str), WalkRequest); 18] = [
+            (HoldPoint::ColorWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(doc(&uri)).unwrap();
+                    backend.document_color_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::InlayWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let mut params = doc(&uri);
+                    params["range"] = serde_json::json!({
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 1, "character": 0 }
+                    });
+                    let params = serde_json::from_value(params).unwrap();
+                    backend.inlay_hint_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::HighlightWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(at(&uri, 0, 0)).unwrap();
+                    backend.document_highlight_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::WorkspaceSymbolWalk, SCRIPT, |backend, _| {
+                Box::pin(async move {
+                    let query = serde_json::json!({ "query": "test" });
+                    let params = serde_json::from_value(query).unwrap();
+                    backend.symbol_request_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::NestedSymbolWalk, SCRIPT, |backend, uri| {
+                backend
+                    .state
+                    .hierarchical_symbols
+                    .store(true, Ordering::Relaxed);
+                document_symbols(backend, uri)
+            }),
+            (HoldPoint::FlatSymbolWalk, SCRIPT, document_symbols),
+            (HoldPoint::LocSymbolWalk, LOC, document_symbols),
+            (HoldPoint::PrepareRenameWalk, SCRIPT, prepare_rename),
+            (HoldPoint::GotoWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(at(&uri, 0, 0)).unwrap();
+                    backend.goto_definition_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::ReferencesWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let params = serde_json::from_value(references_at(&uri, 0, 0)).unwrap();
+                    backend.references_impl(params).await.unwrap();
+                })
+            }),
+            (HoldPoint::LocCursorTextWalk, LOC, loc_key),
+            (HoldPoint::LocCursorRuleWalk, SCRIPT, loc_key),
+            (
+                HoldPoint::LocRenameScanWalk,
+                ("common/test.txt", "test_key"),
+                |backend, uri| {
+                    let known = HashSet::from(["test_key".to_string()]);
+                    backend
+                        .state
+                        .loc_live_overlay
+                        .write()
+                        .insert("fixture".to_string(), known);
+                    prepare_rename(backend, uri)
+                },
+            ),
+            (HoldPoint::LocDefinitionsWalk, LOC, loc_references),
+            (HoldPoint::LocDefinitionsResultWalk, LOC, loc_references),
+            (HoldPoint::CwtCursorWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let _ = backend.cwt_ref_at_cursor(&uri, Position::new(0, 0)).await;
+                })
+            }),
+            (HoldPoint::NavigationSnapshotWalk, SCRIPT, |backend, uri| {
+                Box::pin(async move {
+                    let scan = backend.scan_workspace_texts(vec![uri], |_, _| Vec::<String>::new());
+                    scan.await.unwrap();
+                })
+            }),
+            (
+                HoldPoint::NavigationTextSnapshotWalk,
+                SCRIPT,
+                |backend, uri| {
+                    Box::pin(async move {
+                        let uris = [uri];
+                        let snapshots = backend.file_text_snapshots_for_navigation(&uris);
+                        snapshots.await.unwrap();
+                    })
+                },
+            ),
+        ];
+        for (point, (file, text), request) in cases {
+            let (backend, workspace) = crate::testing::workspace_backend();
+            let uri = crate::paths::path_to_uri(&workspace.path().join(file));
+            crate::testing::open_document(&backend, &uri, text);
+            let table = &backend.state.string_table;
+            let ast = Arc::new(cwtools_parser::parser::parse_string(text, table));
+            backend.state.documents.lock().set_ast(&uri, 1, ast);
+            let mut rules = cwtools_rules::rules_types::RuleSet::new();
+            rules.reindex();
+            backend.state.rules.write().ruleset = Some(Arc::new(rules));
+            let walk = request(backend.clone(), uri);
+            assert_walk_releases_worker(&backend, point, walk).await;
+        }
+    }
 
     /// The literal the provider reads for `c = <text>`, through the parser.
     fn parse_literal(text: &str) -> Option<ColourLiteral> {

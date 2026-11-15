@@ -215,3 +215,24 @@ def test_published_binary_identity_is_checked_before_compilation() -> None:
     assert 'test "$(git rev-parse HEAD)" = "$CWTOOLS_BUILD_COMMIT"' in step
     assert "cargo build --locked --release -p cwtools_lsp" in step
     assert step.index("git rev-parse HEAD") < step.index("cargo build")
+
+
+def test_publish_requires_exact_source_ci_before_any_registry() -> None:
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    verify = job_scope(workflow, "verify")
+    assert "    if:" not in verify.split("    steps:", maxsplit=1)[0]
+    assert "actions: read" in verify
+    assert "actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" in verify
+    assert "branch=main" in verify
+    assert "gh api --paginate --slurp" in verify
+    assert "scripts/build/release_decisions.py" in verify
+    assert verify.index("Check the publish tokens") < verify.index(
+        "Require successful CI"
+    )
+    assert "needs: verify" in job_scope(workflow, "build-server")
+    assert "needs: [check, verify, build-server]" in job_scope(workflow, "package")
+    for job in PUBLISH_JOBS:
+        assert "package" in job_scope(workflow, job).split("    steps:", maxsplit=1)[0]
+    # A cancelled CI run on main would fail the gate for that commit.
+    ci = (PUBLISH.parent / "ci.yml").read_text(encoding="utf-8")
+    assert "github.event_name == 'push' && github.sha" in ci

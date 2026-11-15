@@ -245,7 +245,10 @@ impl crate::Backend {
         if let Some(rules) = rules {
             self.load_rules_config(&rules).await;
         }
-        if !self.validate_entire_workspace(false).await {
+        // Only a scan that lost the scan flag is retried. A failed one would fail again.
+        if self.validate_entire_workspace_tracked(false, None).await
+            == crate::command_progress::ScanOutcome::Busy
+        {
             self.spawn_deferred_revalidation("diagnostics baseline changed");
         }
     }

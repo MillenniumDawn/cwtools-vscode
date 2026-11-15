@@ -1,6 +1,6 @@
 //! `validate`: run the whole engine over a mod directory and render a report.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use cwtools_driver::{RulesInput, Session, SessionConfig, SessionWithFiles, VanillaCacheAuto};
@@ -130,10 +130,16 @@ pub(super) fn run(args: ValidateArgs) {
 
     // Snapshotted before the first load, so an edit saved while it runs still
     // counts as a change. Ctrl-C ends a watch with status 0, even mid-load.
-    let poller = watching.then(|| {
+    let mut poller = watching.then(|| {
         watch::exit_on_interrupt();
-        let roots = watch::roots(&rules, &directory, &parent_roots, vanilla.as_deref());
-        watch::Poller::new(roots)
+        watch::Poller::new(watch::roots(
+            &rules,
+            &directory,
+            &parent_roots,
+            vanilla.as_deref(),
+            &ignore_dirs,
+            &ignore_files,
+        ))
     });
 
     // One pass is the whole load-and-validate pipeline. `--watch` repeats it
@@ -165,9 +171,14 @@ pub(super) fn run(args: ValidateArgs) {
         diags,
         vanilla_notice,
         discovery_failed,
+        discovery_incomplete,
         session,
         ..
     } = analyze(&job, true);
+
+    if let Some(poller) = poller.as_mut() {
+        poller.retune(session.ruleset().folders.clone());
+    }
 
     let total_errors = diags
         .iter()
@@ -275,22 +286,52 @@ pub(super) fn run(args: ValidateArgs) {
 
     // A walk that failed on the first pass has nothing to watch: fall through
     // to the usual exit code. Errors in the report do not end a watch.
-    if !discovery_failed && let Some(poller) = poller {
+    if !discovery_failed
+        && !discovery_incomplete
+        && let Some(poller) = poller
+    {
         drop(session);
-        watch::follow(poller, diags, || {
+        watch::follow(poller, diags, |poller| {
             let rerun = analyze(&job, false);
             if rerun.discovery_failed || rerun.discovery_incomplete || rerun.rules_unreadable {
                 eprintln!("warn: could not read the inputs; keeping the previous results");
                 return None;
             }
+            poller.retune(rerun.session.ruleset().folders.clone());
             Some(rerun.diags)
         });
     }
 
     let failing = fail_on.failing(diags.iter().map(|d| d.severity));
-    let code = exit_code(failing, discovery_failed, write_failed);
+    if discovery_incomplete {
+        eprintln!("error: validation is incomplete because some inputs could not be scanned");
+    }
+    let code = exit_code(
+        failing,
+        discovery_failed || discovery_incomplete,
+        write_failed,
+    );
     if code != 0 {
         std::process::exit(code);
+    }
+}
+
+fn prepare_script_source(
+    sources: &mut SourceLines,
+    session: &SessionWithFiles,
+    source: &cwtools_driver::SourceFile,
+    key: &str,
+) {
+    match session.read_source_text(source) {
+        Ok(text) => sources.set_text(key, Some(&text)),
+        Err(error) => {
+            eprintln!(
+                "warn: could not read report source {}: {}",
+                source.path.display(),
+                error
+            );
+            sources.set_text(key, None);
+        }
     }
 }
 
@@ -491,7 +532,7 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
 
     // Nothing to validate is a failure, not a clean run. A failed walk
     // already exits 3 below, so don't relabel it as an empty input.
-    if first_run && !session.discovery_failed {
+    if first_run && !session.discovery_failed && !session.discovery_incomplete {
         exit_if_empty(
             ruleset.types.len(),
             *allow_empty,
@@ -511,11 +552,12 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
     // fingerprint and detect staleness. THIS run already used the
     // cached data (the cache short-circuits the vanilla walk); the
     // rebuild makes the next run correct.
+    let mut rebuild_incomplete = false;
     if first_run
         && let (Some(cache_path), Some(fp_loaded), Some(vanilla_dir)) =
             (vanilla_cache, &cached_fingerprint, vanilla)
     {
-        rebuild_vanilla_cache_if_stale(
+        rebuild_incomplete = rebuild_vanilla_cache_if_stale(
             &session,
             cache_path,
             fp_loaded,
@@ -560,11 +602,22 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
         diags.push(d);
     }
 
+    let indexed_sources: HashMap<_, _> = session
+        .parsed_files()
+        .iter()
+        .map(|file| (file.path.as_path(), file))
+        .collect();
     for (path, errors) in session.validate_selected(selected.as_ref()) {
         let file_key = path_identity(&path);
         let display_file = path.display().to_string();
         if !scope::wanted(scope.as_ref(), &display_file) {
             continue;
+        }
+        if !errors.is_empty() {
+            let source = indexed_sources
+                .get(path.as_path())
+                .expect("validation only returns indexed sources");
+            prepare_script_source(&mut sources, &session, source, &file_key);
         }
         for err in errors {
             // Same placement as the hash baseline: a suppressed code
@@ -677,8 +730,68 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
         diags,
         vanilla_notice,
         discovery_failed: session.discovery_failed,
-        discovery_incomplete: session.discovery_incomplete,
+        discovery_incomplete: session.is_incomplete() || rebuild_incomplete,
         rules_unreadable,
         session,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_script_source;
+    use crate::diag::SourceLines;
+    use cwtools_driver::{RulesInput, Session, SessionConfig};
+    use cwtools_file_manager::path_identity;
+    use cwtools_game::Game;
+
+    #[test]
+    fn reporting_never_rereads_a_grown_script_without_its_snapshot_bound() {
+        for grow_before_validation in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("mod");
+            let scripts = root.join("common/ideas");
+            std::fs::create_dir_all(&scripts).unwrap();
+            let path = scripts.join("test.txt");
+            std::fs::write(&path, "x = 1\n").unwrap();
+            let rules = tmp.path().join("rules.cwt");
+            std::fs::write(&rules, "").unwrap();
+            let session = Session::load(SessionConfig {
+                game: Game::Hoi4,
+                rules: RulesInput::File(rules),
+                directory: root,
+                parent_roots: vec![],
+                vanilla: None,
+                vanilla_cache: None,
+                vanilla_cache_auto: None,
+                ignore_files: &[],
+                ignore_dirs: &[],
+                loc_languages: None,
+                case_sensitive_files: false,
+                on_rules_diagnostic: None,
+            });
+            let source = session
+                .parsed_files()
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap();
+            if grow_before_validation {
+                std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
+            }
+            let _ = session.validate_all();
+            if !grow_before_validation {
+                assert!(!session.is_incomplete());
+                std::fs::write(&path, "changed = ".repeat(1024)).unwrap();
+            }
+            let key = path_identity(&path);
+            let mut sources = SourceLines::default();
+            prepare_script_source(&mut sources, &session, source, &key);
+            assert_eq!(sources.trimmed_path(&key, &path, 1), "");
+            assert!(session.is_incomplete());
+            assert_ne!(
+                crate::run::exit_code(0, session.is_incomplete(), false),
+                0,
+                "an incomplete validation must not exit successfully"
+            );
+        }
     }
 }

@@ -29,7 +29,10 @@ suite("executable — existAndIsExe", () => {
 		});
 	});
 
-	test.each([
+	// Windows has no execute bit: X_OK only checks that the file exists.
+	const isWindows = process.platform === "win32";
+
+	test.skipIf(isWindows).each([
 		["no-exec", 0o644, false],
 		["owner-exec", 0o744, true],
 		["group-exec", 0o710, true],
@@ -38,12 +41,16 @@ suite("executable — existAndIsExe", () => {
 		assert.strictEqual(await existAndIsExe(makeFile(name, mode)), expected);
 	});
 
+	test.runIf(isWindows)("treats any existing file as executable on Windows", async () => {
+		assert.strictEqual(await existAndIsExe(makeFile("windows-plain", 0o644)), true);
+	});
+
 	test("returns false for a missing path and for a directory", async () => {
 		assert.strictEqual(await existAndIsExe(path.join(tmpDir, "missing")), false);
 		assert.strictEqual(await existAndIsExe(tmpDir), false);
 	});
 
-	test.each([
+	test.skipIf(isWindows).each([
 		["exec-target", 0o755, true],
 		["plain-target", 0o644, false],
 	])("follows a symlink to %s", async (name, mode, expected) => {
