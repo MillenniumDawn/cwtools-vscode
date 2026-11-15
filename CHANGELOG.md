@@ -42,6 +42,7 @@
 * Verify the publishing build checks out the requested commit while keeping the Rust lockfile enforced.
 * Add an on-demand Ubuntu 26.04 build and extension-host smoke workflow, ahead of the `ubuntu-latest` move.
 * Enforce the committed Rust lockfile in CI, coverage, guard and release builds. (#1218)
+* Run bounded weekly fuzz discovery campaigns that carry their corpus between runs, show failures in the job summary, and keep replay metadata for each crash. (#1230)
 
 #### Extension
 
