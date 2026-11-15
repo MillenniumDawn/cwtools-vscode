@@ -148,7 +148,7 @@ def copy_dir(
 
 def build_and_deploy_rust_server() -> None:
     workspace = rust_workspace()
-    run("cargo", ["build", "--release", "-p", "cwtools_lsp"], cwd=workspace)
+    run("cargo", ["build", "--locked", "--release", "-p", "cwtools_lsp"], cwd=workspace)
     bin_name = "cwtools-server.exe" if os.name == "nt" else "cwtools-server"
     built = workspace / "target" / "release" / bin_name
     if not built.is_file():
