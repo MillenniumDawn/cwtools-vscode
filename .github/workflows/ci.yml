@@ -156,6 +156,19 @@ jobs:
           fail-on-scopes: runtime, development
           comment-summary-in-pr: on-failure
 
+  # Semantic workflow validation complements the behavioral regression tests.
+  actionlint:
+    if: github.event_name != 'schedule'
+    name: Workflow semantics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run pinned actionlint
+        run: python3 scripts/build/actionlint.py
+
   # npm's weekly advisory sweep for what a merge already shipped; the PR
   # path stays on dependency-review. Same severity floor, dev deps included.
   # workflow_dispatch runs it too, so it can be exercised on demand.

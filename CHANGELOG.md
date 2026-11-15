@@ -41,6 +41,7 @@
 * Require successful main-branch CI for the exact published commit before building or publishing. CI runs for pushes to main no longer cancel each other. (#1215)
 * Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
 * Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
+* Check GitHub Actions workflow semantics in CI with checksum-pinned actionlint and ShellCheck. (#1228)
 * Verify the publishing build checks out the requested commit while keeping the Rust lockfile enforced.
 * Add an on-demand Ubuntu 26.04 build and extension-host smoke workflow, ahead of the `ubuntu-latest` move.
 * Enforce the committed Rust lockfile in CI, coverage, guard and release builds. (#1218)
