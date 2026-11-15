@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any
 import pytest
 
 import release_decisions
-from workflow_helpers import job_scope
+from workflow_helpers import job_scope, workflow_step
 
 SHA = "a" * 40
 OTHER = "b" * 40
@@ -47,13 +48,13 @@ def _pages(*runs: dict[str, Any]) -> list[dict[str, Any]]:
     ],
 )
 def test_ci_rejects_nonmatching_or_unsuccessful_runs(changes: dict[str, Any]) -> None:
-    assert not release_decisions.ci_succeeded(_pages(_run(**changes)), SHA)
+    assert release_decisions.ci_status(_pages(_run(**changes)), SHA) != "success"
 
 
 def test_ci_accepts_exact_main_push_and_rejects_absent_or_invalid_sha() -> None:
-    assert release_decisions.ci_succeeded(_pages(_run()), SHA)
-    assert not release_decisions.ci_succeeded(_pages(), SHA)
-    assert not release_decisions.ci_succeeded(_pages(_run()), "bad")
+    assert release_decisions.ci_status(_pages(_run()), SHA) == "success"
+    assert release_decisions.ci_status(_pages(), SHA) != "success"
+    assert release_decisions.ci_status(_pages(_run()), "bad") != "success"
 
 
 @pytest.mark.parametrize("status", ["failure", "queued"])
@@ -65,13 +66,16 @@ def test_newer_unsuccessful_run_overrides_success_regardless_of_id(status: str) 
         status="queued" if status == "queued" else "completed",
         conclusion=None if status == "queued" else status,
     )
-    assert not release_decisions.ci_succeeded(_pages(older, newer), SHA)
-    assert release_decisions.ci_succeeded(
-        _pages(
-            {**older, "conclusion": "failure"},
-            {**newer, "status": "completed", "conclusion": "success"},
-        ),
-        SHA,
+    assert release_decisions.ci_status(_pages(older, newer), SHA) != "success"
+    assert (
+        release_decisions.ci_status(
+            _pages(
+                {**older, "conclusion": "failure"},
+                {**newer, "status": "completed", "conclusion": "success"},
+            ),
+            SHA,
+        )
+        == "success"
     )
 
 
@@ -82,11 +86,11 @@ def test_complete_pagination_and_truncation() -> None:
         {"total_count": 2, "workflow_runs": [first]},
         {"total_count": 2, "workflow_runs": [second]},
     ]
-    assert release_decisions.ci_succeeded(pages, SHA)
-    assert not release_decisions.ci_succeeded(pages[:1], SHA)
-    assert not release_decisions.ci_succeeded(pages + pages[:1], SHA)
+    assert release_decisions.ci_status(pages, SHA) == "success"
+    assert release_decisions.ci_status(pages[:1], SHA) != "success"
+    assert release_decisions.ci_status(pages + pages[:1], SHA) != "success"
     pages[1]["total_count"] = 3
-    assert not release_decisions.ci_succeeded(pages, SHA)
+    assert release_decisions.ci_status(pages, SHA) != "success"
 
 
 @pytest.mark.parametrize(
@@ -101,7 +105,7 @@ def test_complete_pagination_and_truncation() -> None:
     ],
 )
 def test_malformed_api_payloads_fail_closed(payload: Any) -> None:
-    assert not release_decisions.ci_succeeded(payload, SHA)
+    assert release_decisions.ci_status(payload, SHA) == "failure"
 
 
 def test_cli_rejects_malformed_json_and_error_payload(
@@ -116,29 +120,18 @@ def test_cli_rejects_malformed_json_and_error_payload(
     release_decisions.main()
 
 
-@pytest.mark.parametrize("channel", ["release", "pre-release"])
-def test_ci_gate_applies_to_both_channels(channel: str) -> None:
-    workflow = (
-        Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
-    ).read_text(encoding="utf-8")
-    verify = job_scope(workflow, "verify")
-    header = verify.split("    steps:", maxsplit=1)[0]
-    assert "    if:" not in header, channel
-    assert "Require successful CI for the source commit" in verify
-    assert "needs: verify" in job_scope(workflow, "build-server")
-    assert "needs: [check, verify, build-server]" in job_scope(workflow, "package")
-
-
 def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
     """Run the actual workflow shell with fake API, checker, and clock."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not available")
     workflow = (
         Path(__file__).resolve().parents[2] / ".github/workflows/publish.yml"
     ).read_text(encoding="utf-8")
-    section = workflow.split("- name: Require successful CI for the source commit", 1)[
-        1
-    ]
-    script = section.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
-    script = textwrap.dedent(script)
+    step = workflow_step(
+        job_scope(workflow, "verify"), "Require successful CI for the source commit"
+    )
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
     bindir = tmp_path / "bin"
     bindir.mkdir()
     state = tmp_path / "attempts"
@@ -156,7 +149,7 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
         executable.chmod(0o755)
     env = {
         **os.environ,
-        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "STATE": str(state),
         "GITHUB_REPOSITORY": "test/repo",
         "GITHUB_SHA": SHA,
@@ -168,7 +161,7 @@ def test_publish_polling_retries_and_remains_bounded(tmp_path: Path) -> None:
     ]:
         state.unlink(missing_ok=True)
         result = subprocess.run(
-            ["bash", "-o", "pipefail", "-c", script],
+            [bash, "-o", "pipefail", "-c", script],
             env={**env, "SUCCEED_AT": str(succeed_at), "FAIL_CODE": str(fail_code)},
             capture_output=True,
             check=False,

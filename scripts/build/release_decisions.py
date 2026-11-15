@@ -97,11 +97,6 @@ def ci_status(pages: Any, source_sha: str) -> str:
     return "success" if conclusion == "success" else "failure"
 
 
-def ci_succeeded(pages: Any, source_sha: str) -> bool:
-    """Require a complete successful main push for the exact SHA."""
-    return ci_status(pages, source_sha) == "success"
-
-
 def main() -> None:
     try:
         pages = json.load(sys.stdin)
