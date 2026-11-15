@@ -2,14 +2,20 @@
 
 #### Engine
 
+* Poll `validate --watch` through the loaders' own discovery instead of a copy of its rules, so hidden rules, explicit include folders, multi-mod members, ignore files and ignore dirs match what a pass reads. Resources are tracked by path only, so re-exporting art no longer revalidates, and the first poll after startup no longer reports a change when nothing was edited. (#1210, #1336)
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
 * Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
+* Share one discovery file cap across the include directories and roots of a walk, and from a mod into its parent mods' script walks (and, in the CLI, their localisation walks). Count script and localisation files against the cap in the base-game auxiliary walk and the file index, and list resource files without counting them, so a large asset tree cannot fail a scan. Enforce an aggregate read budget over the scripts of a CLI run, and report validation as incomplete when a cap is exceeded. The editor's localisation walks and the other file-index walks keep a cap of their own. (#1266, #1247, #1246)
+* When discovery skips files or reaches a cap, the editor now logs a warning, marks the index incomplete and retries on the next pass, instead of aborting the scan or leaving the background reindex disabled. Workspace-folder, watched-file and configuration rescans retry only while another scan is busy, base-game file indexing is retried after incomplete discovery, and a scan that loses the vanilla publication race clears its quiet-scan fingerprint. The base-game merge no longer holds its locks across filesystem work. (#1266, #1247, #1246)
 * Embed the source commit in published server binaries and expose it in version output and setup reports; local builds without supplied identity report it as unavailable. (#1223)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
+* Run document color, inlay hint, highlight, symbol, go-to-definition, references, and prepare-rename walks outside async runtime workers. (#1326)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
+* Stop stale or superseded localization validations, and watched reads of files that are open in the editor, from overwriting newer localization state. (#1325)
 * Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)
 * Keep document tokens from the accepted validation when an older validation finishes late. (#1256)
+* Cover a dependent validation sweep that snapshots current text with an older syntax tree: it neither publishes stale diagnostics nor replaces newer type uses. (#1236)
 * Refresh closed-file diagnostics when ignored error codes change. (#1257)
 * Replace the active rules when a rules directory loads successfully but is empty, while retaining the last good rules on input acquisition failure. (#1258)
 * Rebuild base-game value sets and variables when their collection rules change. (#1213)
@@ -31,10 +37,13 @@
 * Run non-UI client and Python helper tests on Windows and macOS as well as Linux. (#1227)
 * Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
 * Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
+* Require successful main-branch CI for the exact published commit before building or publishing. CI runs for pushes to main no longer cancel each other. (#1215)
 * Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
 * Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
 * Verify the publishing build checks out the requested commit while keeping the Rust lockfile enforced.
+* Add an on-demand Ubuntu 26.04 build and extension-host smoke workflow, ahead of the `ubuntu-latest` move.
 * Enforce the committed Rust lockfile in CI, coverage, guard and release builds. (#1218)
+* Run bounded weekly fuzz discovery campaigns that carry their corpus between runs, show failures in the job summary, and keep replay metadata for each crash. (#1230)
 
 #### Extension
 

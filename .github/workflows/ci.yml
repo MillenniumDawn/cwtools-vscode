@@ -20,9 +20,10 @@ name: CI
 permissions:
   contents: read
 
-# event_name keeps a push to main from cancelling the weekly deny sweep.
+# event_name keeps a push to main from cancelling the weekly deny sweep. A push
+# groups by commit so no main push cancels another: Publish waits on each one.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:

@@ -275,13 +275,13 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
     vanilla_dir: &Path,
     game: Game,
     use_parse_cache: bool,
-) {
+) -> bool {
     let ruleset = session.ruleset();
     let shadow = cwtools_driver::vanilla_replacement_shadow(mod_layers.primary, mod_layers.parents);
     let live_fingerprint =
         cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
     if cached_fingerprint == live_fingerprint {
-        return;
+        return false;
     }
     eprintln!(
         "  warn: vanilla cache is stale (cached: {cached_fingerprint}, live: {live_fingerprint}); rebuilding"
@@ -309,8 +309,17 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
     };
     match index {
         Ok(index) => {
-            let aux =
-                cwtools_driver::build_vanilla_cache_aux_with_shadow(vanilla_dir, &index, &shadow);
+            let aux = match cwtools_driver::build_vanilla_cache_aux_with_shadow(
+                vanilla_dir,
+                &index,
+                &shadow,
+            ) {
+                Ok(aux) => aux,
+                Err(error) => {
+                    eprintln!("  warn: could not discover base-game auxiliary data: {error}");
+                    return true;
+                }
+            };
             match vanilla_cache::save(
                 &index,
                 &game.to_string(),
@@ -318,19 +327,28 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
                 cache_path,
                 aux,
             ) {
-                Ok(n) => note(format!("  Rebuilt vanilla cache with {n} instances")),
-                Err(e) => eprintln!(
-                    "  warn: could not write rebuilt cache {}: {}",
-                    cache_path.display(),
-                    e
-                ),
+                Ok(n) => {
+                    note(format!("  Rebuilt vanilla cache with {n} instances"));
+                    false
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  warn: could not write rebuilt cache {}: {}",
+                        cache_path.display(),
+                        e
+                    );
+                    true
+                }
             }
         }
-        Err(e) => eprintln!(
-            "  warn: could not rebuild vanilla cache from {}: {}",
-            vanilla_dir.display(),
-            e
-        ),
+        Err(e) => {
+            eprintln!(
+                "  warn: could not rebuild vanilla cache from {}: {}",
+                vanilla_dir.display(),
+                e
+            );
+            true
+        }
     }
 }
 
