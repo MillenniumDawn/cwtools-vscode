@@ -82,7 +82,7 @@ suite("engine — detectFromFolder", () => {
 		["common/dynasties", "ck3"],
 	])("content marker %s detects %s under an opaque name", async (marker, expected) => {
 		assert.strictEqual(
-			await detectFromFolder("/opaque", (p) => p === "/opaque/" + marker),
+			await detectFromFolder("/opaque", (p) => p === path.join("/opaque", ...marker.split("/"))),
 			expected,
 		);
 	});
@@ -203,7 +203,7 @@ suite("engine — resolveRulesFolder", () => {
 		["an unset %VAR% stays literal", "%NONEXISTENT%\\path", { ...win32, env: {} }, path.win32.normalize("%NONEXISTENT%\\path")],
 		["double quotes and whitespace are trimmed", '  "/home/user/config"  ', linux, "/home/user/config"],
 		["single quotes and whitespace are trimmed", "  '/home/user/config'  ", linux, "/home/user/config"],
-		["a relative path resolves against the workspace root", "rules", { ...linux, workspaceRoot: "/mods/mymod" }, path.resolve("/mods/mymod", "rules")],
+		["a relative path resolves against the workspace root", "rules", { ...linux, workspaceRoot: "/mods/mymod" }, path.posix.resolve("/mods/mymod", "rules")],
 		["an absolute path ignores the workspace root", "/absolute/path", { ...linux, workspaceRoot: "/mods/mymod" }, "/absolute/path"],
 	])("%s", (_name, raw, opts, expected) => {
 		assert.deepStrictEqual(

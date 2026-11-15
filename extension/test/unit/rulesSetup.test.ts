@@ -367,7 +367,7 @@ suite("rulesSetup", () => {
 		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
 		assert.deepStrictEqual(state.rulesFetches, [
 			{
-				cacheDir: "/cache/hoi4",
+				cacheDir: path.join("/cache", "hoi4"),
 				repo: LANGUAGE_REPOS.hoi4.repo,
 				ref: sha("f"),
 				head: null,

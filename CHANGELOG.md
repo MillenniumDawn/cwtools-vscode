@@ -35,6 +35,7 @@
 
 #### Tooling
 
+* Run non-UI client and Python helper tests on Windows and macOS as well as Linux. (#1227)
 * Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
 * Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
 * Require successful main-branch CI for the exact published commit before building or publishing. CI runs for pushes to main no longer cancel each other. (#1215)
