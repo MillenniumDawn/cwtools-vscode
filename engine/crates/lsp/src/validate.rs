@@ -231,6 +231,36 @@ fn loc_keys_from(files: &[cwtools_localization::LocFile]) -> HashSet<String> {
     keys
 }
 
+type LocOverlay = parking_lot::RwLock<std::collections::HashMap<String, HashSet<String>>>;
+
+/// One hover translation: the key, its language, and the display text.
+type LocTextEntry = (Arc<str>, cwtools_localization::Lang, String);
+
+/// One definition site: the key, its zero-based line, and whether it is in the primary language.
+type LocSite = (Arc<str>, u32, bool);
+
+/// A new overlay entry for a file, with the keys that differ from the entry it replaces.
+struct LocKeyUpdate {
+    keys: HashSet<String>,
+    changed: HashSet<String>,
+}
+
+/// The overlay update `keys` would make for `uri`, or `None` when the entry already holds
+/// exactly these keys. Read from a snapshot, so the caller does this before the document
+/// lock and only the insert runs under it.
+fn loc_key_update(overlay: &LocOverlay, uri: &str, keys: HashSet<String>) -> Option<LocKeyUpdate> {
+    let overlay = overlay.read();
+    let prev = overlay.get(uri);
+    if prev.is_some_and(|prev| *prev == keys) {
+        return None;
+    }
+    let changed = match prev {
+        Some(prev) => prev.symmetric_difference(&keys).cloned().collect(),
+        None => keys.clone(),
+    };
+    Some(LocKeyUpdate { keys, changed })
+}
+
 fn loc_cache(
     version: i32,
     source_bytes: usize,
@@ -1774,10 +1804,9 @@ impl Backend {
         keys
     }
 
-    /// Update the hover loc text from a single loc file without a full rescan (#53). Replaces
-    /// what `uri` contributed before, so a key edited away loses its text at once and another
-    /// file's translation of the same key stays (#476).
-    fn update_loc_text_for_file(&self, uri: &str, files: &[cwtools_localization::LocFile]) {
+    /// The hover loc text a file contributes, built apart from `install_loc_text` so the
+    /// per-entry work runs before the document lock (#53).
+    fn loc_text_entries(&self, files: &[cwtools_localization::LocFile]) -> Vec<LocTextEntry> {
         let hover_all = self
             .state
             .hover_show_all_languages
@@ -1788,47 +1817,44 @@ impl Backend {
             .and_then(|l| l.first().copied())
             .unwrap_or(cwtools_localization::Lang::English);
 
-        let new_entries = {
-            let loc_index = self.state.loc_index.read();
-            let mut new_entries = Vec::new();
-            for file in files {
-                let lang = file.lang.unwrap_or(cwtools_localization::Lang::English);
-                let lang_included = hover_all || lang == primary_lang;
-                if !lang_included {
-                    continue;
-                }
-                for entry in &file.entries {
-                    let display = crate::paths::loc_display_text(&entry.desc);
-                    if !display.is_empty() {
-                        let key = loc_index
-                            .as_deref()
-                            .and_then(|index| index.key(&entry.key))
-                            .unwrap_or_else(|| Arc::from(entry.key.to_lowercase()));
-                        new_entries.push((key, lang, display.to_string()));
-                    }
+        let loc_index = self.state.loc_index.read();
+        let mut entries = Vec::new();
+        for file in files {
+            let lang = file.lang.unwrap_or(cwtools_localization::Lang::English);
+            let lang_included = hover_all || lang == primary_lang;
+            if !lang_included {
+                continue;
+            }
+            for entry in &file.entries {
+                let display = crate::paths::loc_display_text(&entry.desc);
+                if !display.is_empty() {
+                    let key = loc_index
+                        .as_deref()
+                        .and_then(|index| index.key(&entry.key))
+                        .unwrap_or_else(|| Arc::from(entry.key.to_lowercase()));
+                    entries.push((key, lang, display.to_string()));
                 }
             }
-            new_entries
-        };
+        }
+        entries
+    }
 
+    /// Update the hover loc text from a single loc file without a full rescan (#53). Replaces
+    /// what `uri` contributed before, so a key edited away loses its text at once and another
+    /// file's translation of the same key stays (#476).
+    fn install_loc_text(&self, uri: &str, entries: Vec<LocTextEntry>) {
         let mut loc_text = self.state.loc_text.write();
         loc_text.remove_file(uri);
-        for (key, lang, text) in new_entries {
+        for (key, lang, text) in entries {
             loc_text.insert(key, uri, lang, text);
         }
     }
 
-    /// Re-records where `uri` defines its keys, from a parse of its on-disk
-    /// text, so find-references keeps answering closed files from the index
-    /// between workspace scans (#474). Open buffers are not recorded here:
-    /// the request reads them fresh, so the sweep is not paid per keystroke.
-    /// A language the scan does not parse is skipped here too, so a watched
-    /// file in it does not become a target the next scan takes away again.
-    pub(crate) fn update_loc_locations_for_file(
-        &self,
-        uri: &str,
-        files: &[cwtools_localization::LocFile],
-    ) {
+    /// Where a file defines its keys, built apart from `install_loc_locations` so the
+    /// per-entry work runs before the document lock. A language the scan does not parse is
+    /// skipped here, so a watched file in it does not become a target the next scan takes
+    /// away again.
+    fn loc_location_entries(&self, files: &[cwtools_localization::LocFile]) -> Vec<LocSite> {
         let hover_all = self
             .state
             .hover_show_all_languages
@@ -1846,11 +1872,8 @@ impl Backend {
         } else {
             loc_languages.as_deref()
         };
-        let uri: Arc<str> = Arc::from(uri);
-        // Lock order: loc_index -> loc_locations.
         let loc_index = self.state.loc_index.read();
-        let mut locations = self.state.loc_locations.write();
-        locations.remove_file(&uri);
+        let mut sites = Vec::new();
         for file in files {
             if let Some(langs) = parsed_languages
                 && let Some(lang) = file.lang
@@ -1859,16 +1882,31 @@ impl Backend {
                 continue;
             }
             let lang = file.lang.unwrap_or(cwtools_localization::Lang::English);
-            let entries = file.entries.iter().map(|entry| {
+            sites.extend(file.entries.iter().map(|entry| {
                 let key = loc_index
                     .as_deref()
                     .and_then(|index| index.key(&entry.key))
                     .unwrap_or_else(|| Arc::from(entry.key.to_lowercase()));
-                (key, (entry.position.line.saturating_sub(1)) as u32)
-            });
-            for (key, line0) in entries {
-                locations.insert(key, &uri, line0, lang == primary_lang);
-            }
+                (
+                    key,
+                    (entry.position.line.saturating_sub(1)) as u32,
+                    lang == primary_lang,
+                )
+            }));
+        }
+        sites
+    }
+
+    /// Re-records where `uri` defines its keys, from a parse of its on-disk
+    /// text, so find-references keeps answering closed files from the index
+    /// between workspace scans (#474). Open buffers are not recorded here:
+    /// the request reads them fresh, so the sweep is not paid per keystroke.
+    fn install_loc_locations(&self, uri: &str, sites: Vec<LocSite>) {
+        let uri: Arc<str> = Arc::from(uri);
+        let mut locations = self.state.loc_locations.write();
+        locations.remove_file(&uri);
+        for (key, line0, primary_lang) in sites {
+            locations.insert(key, &uri, line0, primary_lang);
         }
     }
 
@@ -2021,35 +2059,14 @@ impl Backend {
         path: &str,
         text: &str,
     ) -> HashSet<String> {
-        let files = parse_loc_buffer(text, path);
-        self.record_watched_loc_parsed(uri, &files)
-    }
-
-    fn record_watched_loc_parsed(
-        &self,
-        uri: &str,
-        files: &[cwtools_localization::LocFile],
-    ) -> HashSet<String> {
-        let new_keys = loc_keys_from(files);
-        if self.loc_overlay_entry_matches(&self.state.loc_watched_overlay, uri, &new_keys) {
-            return HashSet::new();
+        let keys = loc_keys_of(text, path);
+        match loc_key_update(&self.state.loc_watched_overlay, uri, keys) {
+            Some(LocKeyUpdate { keys, changed }) => {
+                self.loc_watched_overlay_mut().insert(uri.to_string(), keys);
+                changed
+            }
+            None => HashSet::new(),
         }
-        let mut overlay = self.loc_watched_overlay_mut();
-        let changed = match overlay.get(uri) {
-            Some(prev) => prev.symmetric_difference(&new_keys).cloned().collect(),
-            None => new_keys.clone(),
-        };
-        overlay.insert(uri.to_string(), new_keys);
-        changed
-    }
-
-    fn loc_overlay_entry_matches(
-        &self,
-        overlay: &parking_lot::RwLock<std::collections::HashMap<String, HashSet<String>>>,
-        uri: &str,
-        new_keys: &HashSet<String>,
-    ) -> bool {
-        overlay.read().get(uri).is_some_and(|prev| prev == new_keys)
     }
 
     /// The cross-file refresh an open loc edit runs per file, done ONCE for a whole watched
@@ -2161,6 +2178,23 @@ impl Backend {
                     let parsed_loc = try_parse_loc_buffer(text, &path);
                     let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
                     let parsed_loc = parsed_loc.unwrap_or_default();
+                    // Build every per-entry piece before the document lock, which did_change,
+                    // hover and publish share. The locked section below only checks the edit
+                    // is still current and installs what was built here.
+                    let watched = trigger == crate::ValidateTrigger::Watched;
+                    let reads_disk = watched || trigger == crate::ValidateTrigger::DidClose;
+                    let key_update = if trigger == crate::ValidateTrigger::DidClose {
+                        None
+                    } else {
+                        let overlay = if watched {
+                            &self.state.loc_watched_overlay
+                        } else {
+                            &self.state.loc_live_overlay
+                        };
+                        loc_key_update(overlay, uri, loc_keys_from(&parsed_loc))
+                    };
+                    let text_entries = self.loc_text_entries(&parsed_loc);
+                    let sites = reads_disk.then(|| self.loc_location_entries(&parsed_loc));
                     #[cfg(test)]
                     self.hold(crate::state::HoldPoint::LocParsed);
                     // Keep the document locked until all shared localisation state is
@@ -2168,10 +2202,7 @@ impl Backend {
                     // between the check and the writes.
                     let docs = self.state.documents.lock();
                     if cancel.is_some_and(CancelFlag::is_cancelled)
-                        || (matches!(
-                            trigger,
-                            crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
-                        ) && docs.contains_key(uri))
+                        || (reads_disk && docs.contains_key(uri))
                         || parsed_version.is_some_and(|version| {
                             !docs.get(uri).is_some_and(|doc| doc.version == version)
                                 || docs.content_hash(uri) != Some(source_hash)
@@ -2179,42 +2210,27 @@ impl Backend {
                     {
                         return None;
                     }
+                    // A disk read is only accepted for a closed file, so `watched` and
+                    // `is_open` never both hold here.
                     let is_open = docs.contains_key(uri);
-                    let changed_keys: HashSet<String> = if is_open {
-                        let new_keys = loc_keys_from(&parsed_loc);
-                        if self.loc_overlay_entry_matches(
-                            &self.state.loc_live_overlay,
-                            uri,
-                            &new_keys,
-                        ) {
-                            HashSet::new()
-                        } else {
-                            let mut overlay = self.loc_live_overlay_mut();
-                            let diff = match overlay.get(uri) {
-                                Some(prev) => {
-                                    prev.symmetric_difference(&new_keys).cloned().collect()
-                                }
-                                None => new_keys.clone(),
+                    let (changed_keys, replaced_keys) = match key_update {
+                        Some(LocKeyUpdate { keys, changed }) if watched || is_open => {
+                            let mut overlay = if watched {
+                                self.loc_watched_overlay_mut()
+                            } else {
+                                self.loc_live_overlay_mut()
                             };
-                            overlay.insert(uri.to_string(), new_keys);
-                            diff
+                            let replaced = overlay.insert(uri.to_string(), keys);
+                            (changed, replaced)
                         }
-                    } else if matches!(trigger, crate::ValidateTrigger::Watched) {
-                        self.record_watched_loc_parsed(uri, &parsed_loc)
-                    } else {
-                        HashSet::new()
+                        _ => (HashSet::new(), None),
                     };
-                    // Update hover and closed-file locations while the version is
-                    // still protected by the document lock.
-                    self.update_loc_text_for_file(uri, &parsed_loc);
-                    if matches!(
-                        trigger,
-                        crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
-                    ) && !is_open
-                    {
-                        self.update_loc_locations_for_file(uri, &parsed_loc);
+                    self.install_loc_text(uri, text_entries);
+                    if let Some(sites) = sites {
+                        self.install_loc_locations(uri, sites);
                     }
                     drop(docs);
+                    drop(replaced_keys);
                     let additional_loc_keys = self.loc_overlay_keys();
                     let extra = self.loc_ref_names();
                     let diagnostics = self.validate_loc_parsed(
@@ -2957,6 +2973,125 @@ mod info_revision_tests {
         assert!(!backend.state.loc_watched_overlay.read().contains_key(&uri));
         assert!(backend.state.loc_text.read().get("disk_key").is_none());
         assert!(backend.state.loc_locations.read().get("disk_key").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_loc_validation_installs_no_state() {
+        use crate::state::{HoldGate, HoldPoint};
+        let backend = idea_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let disk = "l_english:\n parked_key:0 \"Parked\"\n";
+        let cancel = Arc::new(CancelFlag::default());
+        let gate = HoldGate::new(HoldPoint::LocParsed);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let parked_uri = uri.clone();
+        let parked_cancel = Arc::clone(&cancel);
+        // A watched read writes the overlay, the hover text and the locations, so one
+        // run shows that a cancelled validation installed none of them.
+        let parked = tokio::spawn(async move {
+            worker
+                .parse_and_validate_inner(
+                    &parked_uri,
+                    disk,
+                    crate::ValidateTrigger::Watched,
+                    None,
+                    Some(parked_cancel.as_ref()),
+                    None,
+                )
+                .await
+        });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("cancelled localisation parse did not reach the gate");
+        }
+        cancel.cancel();
+        gate.release();
+        assert!(parked.await.unwrap().is_none());
+        assert!(!backend.loc_overlay_keys().contains("parked_key"));
+        assert!(!backend.state.loc_watched_overlay.read().contains_key(&uri));
+        assert!(backend.state.loc_text.read().get("parked_key").is_none());
+        assert!(
+            backend
+                .state
+                .loc_locations
+                .read()
+                .get("parked_key")
+                .is_none()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn same_version_reopen_with_new_text_rejects_the_older_loc_validation() {
+        use crate::state::{HoldGate, HoldPoint};
+        let backend = idea_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let old: Arc<str> = Arc::from("l_english:\n old_key:0 \"Old\"\n");
+        let reopened: Arc<str> = Arc::from("l_english:\n reopened_key:0 \"Reopened\"\n");
+        let open = |text: &Arc<str>| {
+            backend
+                .state
+                .documents
+                .lock()
+                .open(
+                    uri.clone(),
+                    crate::state::ParsedDoc {
+                        version: 1,
+                        text: Arc::clone(text),
+                        ast: None,
+                        ast_version: None,
+                        ast_source_bytes: 0,
+                        loc_cache: None,
+                    },
+                )
+                .unwrap();
+        };
+        open(&old);
+        let gate = HoldGate::new(HoldPoint::LocParsed);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let worker = backend.clone();
+        let old_uri = uri.clone();
+        let stale = tokio::spawn(async move {
+            worker
+                .parse_and_validate_inner(
+                    &old_uri,
+                    &old,
+                    crate::ValidateTrigger::DidChange,
+                    Some(1),
+                    None,
+                    None,
+                )
+                .await
+        });
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("older localisation parse did not reach the gate");
+        }
+        // Same version, different text: only the content hash tells the two apart.
+        open(&reopened);
+        backend
+            .parse_and_validate(&uri, &reopened, crate::ValidateTrigger::DidChange, Some(1))
+            .await;
+        gate.release();
+        assert!(stale.await.unwrap().is_none());
+        let overlay = backend.loc_overlay_keys();
+        assert!(overlay.contains("reopened_key"));
+        assert!(!overlay.contains("old_key"));
+        let loc_text = backend.state.loc_text.read();
+        assert!(loc_text.get("reopened_key").is_some());
+        assert!(loc_text.get("old_key").is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
