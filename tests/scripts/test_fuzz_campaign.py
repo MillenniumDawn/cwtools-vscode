@@ -16,7 +16,9 @@ def test_failure_retains_timeout_reproducer_and_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = tmp_path / "result"
+    summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     process = MagicMock(spec=subprocess.Popen)
     process.__enter__.return_value = process
     process.wait.return_value = 77
@@ -42,6 +44,19 @@ def test_failure_retains_timeout_reproducer_and_limits(
     replay = (output / "replay.txt").read_text(encoding="utf-8")
     assert "fuzz-campaign/artifacts/timeout-deadbeef -- -runs=1" in replay
     assert all(limit in replay for limit in fuzz_campaign.LIMITS)
+    shown = summary.read_text(encoding="utf-8")
+    assert "### Fuzz campaign exited 77" in shown
+    assert "fuzz-campaign/artifacts/timeout-deadbeef" in shown
+
+
+def test_workflow_pins_match_the_helper() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github/workflows/fuzz-campaign.yml"
+    ).read_text(encoding="utf-8")
+    assert f"target: [{', '.join(fuzz_campaign.TARGETS)}]" in workflow
+    assert workflow.count(fuzz_campaign.TOOLCHAIN) == 4
+    assert f"cargo-tool-version: {fuzz_campaign.CARGO_FUZZ}" in workflow
+    assert f"--version {fuzz_campaign.CARGO_FUZZ}" in workflow
 
 
 def test_wall_timeout_stops_group_and_preserves_partial_artifact(

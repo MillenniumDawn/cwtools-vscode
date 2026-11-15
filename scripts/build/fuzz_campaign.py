@@ -26,6 +26,26 @@ TARGETS = (
     "vanilla_cache_load",
 )
 LIMITS = ["-timeout=10", "-rss_limit_mb=2048", "-max_len=1048576"]
+LOG_TAIL_LINES = 40
+
+
+def report_failure(output: Path, status: str, replay: list[str]) -> None:
+    """Show a failed campaign's log tail and replay commands where CI shows them."""
+    log = output / "campaign.log"
+    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    body = "\n".join(
+        [
+            *lines[-LOG_TAIL_LINES:],
+            "",
+            "Replay from engine/:",
+            *(replay or ["(no retained input)"]),
+        ]
+    )
+    print(f"Fuzz campaign {status}.\n{body}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a", encoding="utf-8") as handle:
+            handle.write(f"### Fuzz campaign {status}\n\n```\n{body}\n```\n")
 
 
 def stop_group(process: subprocess.Popen[str]) -> None:
@@ -59,7 +79,7 @@ def run_campaign(target: str, corpus: Path, output: Path) -> int:
     ]
     metadata = {
         "target": target,
-        "source_revision": os.environ["GITHUB_SHA"],
+        "source_revision": os.environ.get("GITHUB_SHA", "unknown"),
         "rust_toolchain": TOOLCHAIN,
         "cargo_fuzz": CARGO_FUZZ,
         "command": command,
@@ -114,6 +134,8 @@ def run_campaign(target: str, corpus: Path, output: Path) -> int:
         metadata_path.write_text(
             json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
         )
+        if status != "exited 0" and (output / "campaign.log").exists():
+            report_failure(output, status, replay)
 
 
 def main() -> int:
