@@ -14,6 +14,7 @@
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
 * Stop stale or superseded localization validations, and watched reads of files that are open in the editor, from overwriting newer localization state. (#1325)
 * Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)
+* Refuse to apply `fix` edits to a localization file that changed after it was loaded, as `fix` already does for scripts. The load records each file's byte length and content hash, and the fix rereads at most one byte past that length and compares. A grown, edited, renamed or deleted file stops the run before anything is written, and files that still match are fixed as before. (#1346)
 * Keep document tokens from the accepted validation when an older validation finishes late. (#1256)
 * Cover a dependent validation sweep that snapshots current text with an older syntax tree: it neither publishes stale diagnostics nor replaces newer type uses. (#1236)
 * Refresh closed-file diagnostics when ignored error codes change. (#1257)
