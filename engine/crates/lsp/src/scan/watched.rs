@@ -294,13 +294,24 @@ impl Backend {
                         let Some(_permit) = self.validation_permit().await else {
                             return;
                         };
-                        if crate::paths::is_loc_file(&uri) {
-                            changed_loc_keys
-                                .extend(self.record_watched_loc_keys(&uri, &path, &text));
-                        }
-                        let (diagnostics, _) = self
-                            .parse_and_validate(&uri, &text, crate::ValidateTrigger::Watched, None)
-                            .await;
+                        let diagnostics = if crate::paths::is_loc_file(&uri) {
+                            let Some((diagnostics, changed)) =
+                                self.parse_and_validate_watched_loc(&uri, &text).await
+                            else {
+                                continue;
+                            };
+                            changed_loc_keys.extend(changed);
+                            diagnostics
+                        } else {
+                            self.parse_and_validate(
+                                &uri,
+                                &text,
+                                crate::ValidateTrigger::Watched,
+                                None,
+                            )
+                            .await
+                            .0
+                        };
                         refresh_features = true;
                         if let Some(sig) = sig {
                             self.state

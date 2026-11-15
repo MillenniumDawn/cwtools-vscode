@@ -342,18 +342,63 @@ mod tests {
     }
 
     #[test]
+    fn loc_cache_rejects_same_version_reopen_with_different_source() {
+        let mut store = DocumentStore::new();
+        let uri = "file:///localisation/test_l_english.yml";
+        let old_text = "l_english:\n OLD:0 \"Old\"\n";
+        let new_text = "l_english:\n NEW:0 \"New\"\n";
+        store.open(uri.to_string(), document(old_text)).unwrap();
+        // Model a parse that captured version 1 before close/reopen.
+        let stale_cache = loc_document_cache(1, 10);
+        let stale_hash = cwtools_cache::workspace::content_hash(old_text);
+        store.remove(uri).unwrap();
+        store.open(uri.to_string(), document(new_text)).unwrap();
+        let current_cache = loc_document_cache(1, 20);
+        assert_eq!(
+            store.set_loc_cache(
+                uri,
+                1,
+                cwtools_cache::workspace::content_hash(new_text),
+                Arc::clone(&current_cache),
+            ),
+            Ok(true)
+        );
+        let retained = store.retained_text_bytes;
+        assert_eq!(
+            store.set_loc_cache(uri, 1, stale_hash, stale_cache),
+            Ok(false)
+        );
+        assert!(Arc::ptr_eq(
+            store.get(uri).unwrap().loc_cache.as_ref().unwrap(),
+            &current_cache,
+        ));
+        assert_eq!(store.retained_text_bytes, retained);
+        store.remove(uri).unwrap();
+        assert_eq!(
+            store.set_loc_cache(
+                uri,
+                1,
+                cwtools_cache::workspace::content_hash(new_text),
+                current_cache,
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
     fn document_store_versions_and_accounts_for_loc_caches() {
+        let text_hash = cwtools_cache::workspace::content_hash("text");
         let mut store = DocumentStore::new();
         store
             .open("file:///doc".to_string(), document("text"))
             .unwrap();
 
         assert_eq!(
-            store.set_loc_cache("file:///doc", 0, loc_document_cache(0, 10)),
+            store.set_loc_cache("file:///doc", 0, text_hash, loc_document_cache(0, 10)),
             Ok(false)
         );
         assert_eq!(
-            store.set_loc_cache("file:///doc", 1, loc_document_cache(1, 10)),
+            store.set_loc_cache("file:///doc", 1, text_hash, loc_document_cache(1, 10)),
             Ok(true)
         );
         let doc_index_bytes = store.line_index_of("file:///doc").unwrap().retained_bytes();
@@ -363,7 +408,12 @@ mod tests {
         );
         let retained_before_rejected_cache = store.retained_text_bytes;
         assert_eq!(
-            store.set_loc_cache("file:///doc", 1, loc_document_cache(1, MAX_DOCUMENT_BYTES)),
+            store.set_loc_cache(
+                "file:///doc",
+                1,
+                text_hash,
+                loc_document_cache(1, MAX_DOCUMENT_BYTES),
+            ),
             Err(DocumentRejection::TooLarge)
         );
         assert_eq!(store.retained_text_bytes, retained_before_rejected_cache);
@@ -371,7 +421,12 @@ mod tests {
             .open("file:///cached".to_string(), document("z"))
             .unwrap();
         assert_eq!(
-            store.set_loc_cache("file:///cached", 1, loc_document_cache(1, 10)),
+            store.set_loc_cache(
+                "file:///cached",
+                1,
+                cwtools_cache::workspace::content_hash("z"),
+                loc_document_cache(1, 10),
+            ),
             Ok(true)
         );
         let cached_index_bytes = store
@@ -669,7 +724,12 @@ mod tests {
         assert!(store.set_ast(uri, 2, Arc::new(parse_string("y", &table))));
         assert!(store.replace_reference_sites(uri, 2, vec![indexed_site(uri, "value")]));
         assert_eq!(
-            store.set_loc_cache(uri, 2, loc_document_cache(2, 10)),
+            store.set_loc_cache(
+                uri,
+                2,
+                cwtools_cache::workspace::content_hash("y"),
+                loc_document_cache(2, 10),
+            ),
             Ok(true)
         );
         store.open(uri.to_string(), document("reopened")).unwrap();
@@ -894,7 +954,12 @@ mod tests {
             state
                 .documents
                 .lock()
-                .set_loc_cache(old_uri, 1, loc_document_cache(1, 10))
+                .set_loc_cache(
+                    old_uri,
+                    1,
+                    cwtools_cache::workspace::content_hash("l_english:\n KEY:0 \"value\"\n"),
+                    loc_document_cache(1, 10),
+                )
                 .unwrap()
         );
 

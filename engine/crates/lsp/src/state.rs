@@ -39,6 +39,7 @@ pub(crate) enum HoldPoint {
     WatchedFile,
     ValidatePrepared,
     ValidateBeforeAcceptance,
+    LocParsed,
     DependentUsesPrepared,
     ExportSweepSnapshot,
     LoadingBarActiveChecked,
@@ -1035,12 +1036,18 @@ impl DocumentStore {
         &mut self,
         uri: &str,
         version: i32,
+        source_hash: u64,
         cache: Arc<LocDocumentCache>,
     ) -> std::result::Result<bool, DocumentRejection> {
         let Some(document) = self.documents.get(uri) else {
             return Ok(false);
         };
-        if document.version != version || cache.version != version {
+        // Versions may be reused after close/reopen. Check the parsed source
+        // under the same store lock as installation, not only before parsing.
+        if document.version != version
+            || cache.version != version
+            || self.content_hash(uri) != Some(source_hash)
+        {
             return Ok(false);
         }
         let index_bytes = self
@@ -1305,6 +1312,7 @@ mod semantic_line_index_tests {
         docs.set_loc_cache(
             uri,
             2,
+            cwtools_cache::workspace::content_hash("\n\nroot = first\n"),
             Arc::new(LocDocumentCache {
                 version: 2,
                 retained_bytes: 10,

@@ -1,5 +1,7 @@
 ### Unreleased
 
+- Guard live localisation updates against stale edits and watched file reads.
+
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
