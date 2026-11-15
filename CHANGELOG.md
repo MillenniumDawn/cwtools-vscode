@@ -9,6 +9,7 @@
 * When discovery skips files or reaches a cap, the editor now logs a warning, marks the index incomplete and retries on the next pass, instead of aborting the scan or leaving the background reindex disabled. Workspace-folder, watched-file and configuration rescans retry only while another scan is busy, base-game file indexing is retried after incomplete discovery, and a scan that loses the vanilla publication race clears its quiet-scan fingerprint. The base-game merge no longer holds its locks across filesystem work. (#1266, #1247, #1246)
 * Embed the source commit in published server binaries and expose it in version output and setup reports; local builds without supplied identity report it as unavailable. (#1223)
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
+* Run document color, inlay hint, highlight, symbol, go-to-definition, references, and prepare-rename walks outside async runtime workers. (#1326)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
 * Stop stale or superseded localization validations, and watched reads of files that are open in the editor, from overwriting newer localization state. (#1325)
