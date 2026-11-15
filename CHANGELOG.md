@@ -11,6 +11,7 @@
 * Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
 * Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
+* Stop stale or superseded localization validations, and watched reads of files that are open in the editor, from overwriting newer localization state. (#1325)
 * Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)
 * Keep document tokens from the accepted validation when an older validation finishes late. (#1256)
 * Cover a dependent validation sweep that snapshots current text with an older syntax tree: it neither publishes stale diagnostics nor replaces newer type uses. (#1236)
