@@ -1626,17 +1626,50 @@ fn discover_file_index_paths_with_budget(
             .exclude_dir_patterns
             .extend(ignore_dirs.iter().cloned());
     }
-    let report = checked_discovery(discover_workspace(WorkspaceDiscoveryRequest {
-        roots: vec![root.to_path_buf()],
-        kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
-        config,
-        policy,
-    })?)?;
+    let report = file_index_report(root, config, policy)?;
     Ok(report
         .files
         .into_iter()
         .map(|file| file.root_relative_path)
         .collect())
+}
+
+/// Walk `root` for the file index. The file cap bounds script and localisation
+/// files; resource files are only listed, so a large asset tree can neither
+/// fail the walk nor be cut short and read as missing files.
+fn file_index_report(
+    root: &Path,
+    config: FileManagerConfig,
+    policy: DiscoveryPolicy,
+) -> Result<DiscoveryReport, FileError> {
+    let cap = config.scan_budget.max_files;
+    let request = |kinds, config| WorkspaceDiscoveryRequest {
+        roots: vec![root.to_path_buf()],
+        kinds,
+        config,
+        policy,
+    };
+    let mut report = checked_discovery(discover_workspace(request(
+        vec![FileKind::Script],
+        config.clone(),
+    ))?)?;
+    let mut uncapped = config;
+    uncapped.scan_budget.max_files = 0;
+    let rest = checked_discovery(discover_workspace(request(
+        vec![FileKind::Localisation, FileKind::Resource],
+        uncapped,
+    ))?)?;
+    let localisation = rest
+        .files
+        .iter()
+        .filter(|file| file.kind == FileKind::Localisation)
+        .count();
+    if cap != 0 && report.examined.saturating_add(localisation) > cap {
+        return Err(FileError::FileCountBudget(root.to_path_buf()));
+    }
+    report.examined = report.examined.saturating_add(rest.examined);
+    report.files.extend(rest.files);
+    Ok(report)
 }
 
 fn discover_file_index_paths(
@@ -1683,17 +1716,16 @@ fn build_vanilla_cache_aux_with_budget(
     shadow: Option<&LayerShadow>,
     budget: ScanBudget,
 ) -> Result<cwtools_index::vanilla_cache::VanillaCacheAux, FileError> {
-    // One walk so loc and file-index paths share this file cap.
-    let report = checked_discovery(discover_workspace(WorkspaceDiscoveryRequest {
-        roots: vec![vanilla_dir.to_path_buf()],
-        kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
-        config: FileManagerConfig {
+    // One report so script and loc files share the file cap with the file-index paths.
+    let report = file_index_report(
+        vanilla_dir,
+        FileManagerConfig {
             include_dirs: vec![".".to_string()],
             scan_budget: budget,
             ..Default::default()
         },
-        policy: DiscoveryPolicy::Vanilla,
-    })?)?;
+        DiscoveryPolicy::Vanilla,
+    )?;
     let loc_paths: Vec<_> = report
         .files
         .iter()
@@ -1925,31 +1957,9 @@ pub struct ContinuedScan {
     pub examined: usize,
 }
 
-/// [`visible_parent_files`] over script files, each parent discovered the
-/// way [`workspace_discovery_config`] discovers the primary.
-pub fn discover_parent_script_files(
-    parent_roots: &[PathBuf],
-    primary_root: &Path,
-    primary_files: &[DiscoveredFile],
-    ruleset: Option<&RuleSet>,
-    ignore_files: &[String],
-    ignore_dirs: &[String],
-) -> Result<Vec<DiscoveredFile>, FileError> {
-    discover_parent_script_files_sharing(
-        parent_roots,
-        primary_root,
-        primary_files,
-        ruleset,
-        ignore_files,
-        ignore_dirs,
-        ContinuedScan {
-            budget: ScanBudget::default(),
-            examined: 0,
-        },
-    )
-}
-
-/// Parent discovery continuing from [`ContinuedScan`].
+/// [`visible_parent_files`] over script files, each parent discovered the way
+/// [`workspace_discovery_config`] discovers the primary, continuing from
+/// [`ContinuedScan`]. An incomplete walk is an error: no partial list returns.
 pub fn discover_parent_script_files_sharing(
     parent_roots: &[PathBuf],
     primary_root: &Path,
@@ -2015,12 +2025,6 @@ impl ParentDiscoveryStatus {
     }
 }
 
-impl Default for ParentDiscoveryStatus {
-    fn default() -> Self {
-        Self::new(ScanBudget::default())
-    }
-}
-
 fn parent_discovery_result<T>(files: Vec<T>, incomplete: bool) -> Result<Vec<T>, FileError> {
     if incomplete {
         Err(FileError::Io(std::io::Error::other(
@@ -2076,24 +2080,8 @@ fn discover_parent_script_files_inner(
     )
 }
 
-/// [`visible_parent_files`] over localisation files.
-pub fn discover_parent_localisation_files(
-    parent_roots: &[PathBuf],
-    primary_root: &Path,
-    primary_files: &[DiscoveredPath],
-    ignore_files: &[String],
-    ignore_dirs: &[String],
-) -> Result<Vec<DiscoveredPath>, FileError> {
-    discover_parent_localisation_files_with_budget(
-        parent_roots,
-        primary_root,
-        primary_files,
-        ignore_files,
-        ignore_dirs,
-        ScanBudget::default(),
-    )
-}
-
+/// [`visible_parent_files`] over localisation files, under `budget`. An
+/// incomplete walk is an error: no partial list returns.
 pub fn discover_parent_localisation_files_with_budget(
     parent_roots: &[PathBuf],
     primary_root: &Path,
@@ -2552,60 +2540,82 @@ mod tests {
     }
 
     #[test]
-    fn vanilla_auxiliary_discovery_rejects_partial_file_and_loc_walks() {
+    fn vanilla_auxiliary_discovery_caps_scripts_and_loc_but_not_resources() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("vanilla");
-        let budget = ScanBudget {
-            max_files: 1,
-            ..ScanBudget::default()
+        let aux = |max_files| {
+            let budget = ScanBudget {
+                max_files,
+                ..ScanBudget::default()
+            };
+            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget)
         };
         std::fs::create_dir_all(root.join("gfx")).unwrap();
-        std::fs::write(root.join("gfx/a.dds"), "").unwrap();
-        std::fs::write(root.join("gfx/b.dds"), "").unwrap();
-        let index = TypeIndex::new();
+        for name in ["a.dds", "b.dds", "c.dds"] {
+            std::fs::write(root.join("gfx").join(name), "").unwrap();
+        }
+        assert_eq!(
+            aux(1).unwrap().file_paths.len(),
+            3,
+            "resources are listed past the cap"
+        );
+
+        std::fs::create_dir_all(root.join("common")).unwrap();
+        for name in ["a.txt", "b.txt"] {
+            std::fs::write(root.join("common").join(name), "x").unwrap();
+        }
         let cache = tmp.path().join("existing.cwv");
         std::fs::write(&cache, b"old cache").unwrap();
-        let aux = build_vanilla_cache_aux_with_budget(&root, &index, None, budget);
-        assert!(write_vanilla_cache_checked(&index, "hoi4", "fp", &cache, aux).is_err());
+        assert!(
+            write_vanilla_cache_checked(&TypeIndex::new(), "hoi4", "fp", &cache, aux(1)).is_err()
+        );
         assert_eq!(std::fs::read(&cache).unwrap(), b"old cache");
-        std::fs::remove_file(&cache).unwrap();
 
-        std::fs::remove_file(root.join("gfx/b.dds")).unwrap();
-        std::fs::write(root.join("gfx/README.txt"), "ignored").unwrap();
-        assert!(
-            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_ok()
-        );
-        std::fs::remove_file(root.join("gfx/a.dds")).unwrap();
+        std::fs::remove_file(root.join("common/b.txt")).unwrap();
+        assert!(aux(1).is_ok(), "an exact cap is complete");
         std::fs::create_dir_all(root.join("localisation")).unwrap();
-        for name in ["a_l_english.yml", "b_l_english.yml"] {
-            std::fs::write(
-                root.join("localisation").join(name),
-                "l_english:\n key:0 \"hi\"\n",
-            )
-            .unwrap();
+        std::fs::write(
+            root.join("localisation/a_l_english.yml"),
+            "l_english:\n key:0 \"hi\"\n",
+        )
+        .unwrap();
+        assert!(aux(1).is_err(), "script and loc files share one file cap");
+        assert!(aux(2).is_ok());
+    }
+
+    #[test]
+    fn file_index_cap_counts_scripts_and_loc_but_lists_every_resource() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("common")).unwrap();
+        std::fs::create_dir_all(root.join("gfx")).unwrap();
+        std::fs::write(root.join("common/a.txt"), "x").unwrap();
+        for name in ["a.dds", "b.dds", "c.dds"] {
+            std::fs::write(root.join("gfx").join(name), "").unwrap();
         }
-        assert!(
-            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_err()
+        let paths = |max_files| {
+            let budget = ScanBudget {
+                max_files,
+                ..ScanBudget::default()
+            };
+            discover_file_index_paths_with_budget(
+                root,
+                &[],
+                &[],
+                DiscoveryPolicy::Workspace,
+                budget,
+            )
+        };
+        let mut found = paths(1).expect("resources must not count toward the cap");
+        found.sort();
+        assert_eq!(
+            found,
+            ["common/a.txt", "gfx/a.dds", "gfx/b.dds", "gfx/c.dds"]
         );
 
-        std::fs::remove_file(root.join("localisation/b_l_english.yml")).unwrap();
-        std::fs::write(root.join("gfx/a.dds"), "").unwrap();
-        assert!(
-            build_vanilla_cache_aux_with_budget(&root, &TypeIndex::new(), None, budget).is_err(),
-            "loc and resource files share one file cap"
-        );
-        assert!(
-            build_vanilla_cache_aux_with_budget(
-                &root,
-                &TypeIndex::new(),
-                None,
-                ScanBudget {
-                    max_files: 2,
-                    ..ScanBudget::default()
-                },
-            )
-            .is_ok()
-        );
+        std::fs::write(root.join("common/b.txt"), "x").unwrap();
+        assert!(matches!(paths(1), Err(FileError::FileCountBudget(_))));
+        assert_eq!(paths(2).unwrap().len(), 5);
     }
 
     #[test]

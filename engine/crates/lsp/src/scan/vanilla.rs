@@ -312,6 +312,7 @@ impl Backend {
             scripted_loc_names,
             scripted_gui_names,
             file_paths,
+            sources,
             attempt_revision,
             publication_revision,
         ) = {
@@ -324,6 +325,7 @@ impl Backend {
                 vanilla.scripted_loc_names.clone(),
                 vanilla.scripted_gui_names.clone(),
                 vanilla.file_paths.clone(),
+                vanilla.index.as_ref().map(distinct_sources),
                 vanilla.merge_attempt_revision,
                 vanilla.publication_revision,
             )
@@ -397,6 +399,18 @@ impl Backend {
             } else {
                 None
             };
+        // The filesystem work of the merge runs here, before any publication lock.
+        // The result is only used if the revisions below still match; the staged
+        // index stays in `vanilla_state` until then, so a lost race loses nothing.
+        let resolved = sources.map(|sources| {
+            resolve_vanilla_sources(
+                &sources,
+                vanilla_dir.as_deref(),
+                replacement_shadow.as_ref(),
+            )
+        });
+        #[cfg(test)]
+        self.hold(crate::state::HoldPoint::VanillaMergeIo);
         // Match validation's info -> config order. Taking config first and then
         // waiting for info can deadlock behind a queued config writer.
         let mut vanilla = self.state.vanilla_state.lock();
@@ -417,11 +431,11 @@ impl Backend {
         let same_attempt = vanilla.merge_attempt_revision == attempt_revision;
         let same_publication = vanilla.publication_revision == publication_revision;
         if !same_payload || !same_settings || !same_attempt || !same_publication {
-            return Err(FileError::Io(std::io::Error::other(
-                "base-game payload, settings, or merge attempt changed during file indexing; retry",
-            )));
+            return Err(publication_retry());
         }
-        let per_type = vanilla.index.take();
+        // `resolved` exists exactly when an index was staged at the snapshot, and the
+        // checks above prove it is still the one staged.
+        let per_type = resolved.as_ref().and_then(|_| vanilla.index.take());
         let merged_index = per_type.is_some();
         // No staged index with a retained file-path payload means the type half
         // was already merged. A later successful auxiliary retry restores its
@@ -429,33 +443,28 @@ impl Backend {
         let retry_retained = !merged_index
             && file_index.is_some()
             && !self.state.vanilla_merged.load(Ordering::SeqCst);
-        if let Some(per_type) = per_type {
-            let per_type = match (&vanilla_dir, &replacement_shadow) {
-                (Some(vanilla_root), Some(shadow)) => {
-                    cwtools_driver::filter_vanilla_index(per_type, vanilla_root, shadow)
-                }
-                _ => per_type,
-            };
-            let vanilla_root = vanilla_dir
-                .as_deref()
-                .and_then(|root| std::fs::canonicalize(root).ok());
+        if let (Some(per_type), Some((uri_cache, filtered))) = (per_type, resolved) {
             // Convert raw source paths to `file://` URIs, as workspace files are keyed, so goto
             // lands in the real base-game file; paths outside the install root are dropped. The
             // old "<vanilla-cache>" sentinel silently fell back to the open document (#62).
-            let distinct: HashSet<&Arc<str>> =
-                per_type.values().flatten().map(|(path, _)| path).collect();
-            let uri_cache = resolve_source_uris(&distinct, vanilla_root.as_deref());
+            // A source missing from `uri_cache` is hidden by a `replace_path`.
             let mut converted: HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>> =
                 HashMap::with_capacity(per_type.len());
             for (type_name, instances) in per_type {
                 let mut out = Vec::with_capacity(instances.len());
+                let mut any_visible = false;
                 for (path, inst) in instances {
-                    let Some(Some(uri)) = uri_cache.get(&path) else {
+                    let Some(uri) = uri_cache.get(&path) else {
                         continue;
                     };
-                    out.push((Arc::clone(uri), inst));
+                    any_visible = true;
+                    if let Some(uri) = uri {
+                        out.push((Arc::clone(uri), inst));
+                    }
                 }
-                converted.insert(type_name, out);
+                if !filtered || any_visible {
+                    converted.insert(type_name, out);
+                }
             }
             let uris: HashSet<Arc<str>> = uri_cache.into_values().flatten().collect();
             let old = std::mem::replace(&mut vanilla.merged_uris, uris);
@@ -763,6 +772,82 @@ impl Backend {
             fingerprint,
         )))
     }
+}
+
+/// Every distinct source file the staged index names.
+fn distinct_sources(
+    index: &HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>>,
+) -> Vec<Arc<str>> {
+    let distinct: HashSet<&Arc<str>> = index.values().flatten().map(|(path, _)| path).collect();
+    distinct.into_iter().map(Arc::clone).collect()
+}
+
+/// The URI of each source the staged index names, or `None` outside the install
+/// root. A source a `replace_path` hides has no entry. The flag is set when that
+/// filter applied, so a type left with no visible instance is dropped. All the
+/// filesystem work of a merge is here, so it runs before the publication locks.
+fn resolve_vanilla_sources(
+    sources: &[Arc<str>],
+    vanilla_dir: Option<&std::path::Path>,
+    shadow: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+) -> (HashMap<Arc<str>, Option<Arc<str>>>, bool) {
+    let hiding = vanilla_dir
+        .zip(shadow)
+        .filter(|(_, shadow)| shadow.has_replace_paths());
+    let visible = match hiding {
+        Some((root, shadow)) => visible_sources(sources, root, shadow),
+        None => sources.to_vec(),
+    };
+    let root = vanilla_dir.and_then(|root| std::fs::canonicalize(root).ok());
+    let distinct: HashSet<&Arc<str>> = visible.iter().collect();
+    (
+        resolve_source_uris(&distinct, root.as_deref()),
+        hiding.is_some(),
+    )
+}
+
+/// The sources `replace_path` leaves visible. This runs `filter_vanilla_index`
+/// over one probe instance per source, so the checks stay the driver's own.
+fn visible_sources(
+    sources: &[Arc<str>],
+    root: &std::path::Path,
+    shadow: &cwtools_file_manager::file_manager::LayerShadow,
+) -> Vec<Arc<str>> {
+    let probe = cwtools_info::TypeInstance {
+        name: String::new(),
+        location: cwtools_info::SourceLocation {
+            line: 0,
+            col: 0,
+            end: (0, 0),
+        },
+        primary_loc_key: None,
+        required_loc_keys: Vec::new(),
+    };
+    let probes = HashMap::from([(
+        String::new(),
+        sources
+            .iter()
+            .map(|source| (Arc::clone(source), probe.clone()))
+            .collect(),
+    )]);
+    cwtools_driver::filter_vanilla_index(probes, root, shadow)
+        .into_values()
+        .flatten()
+        .map(|(source, _)| source)
+        .collect()
+}
+
+/// A merge that lost a race with a newer stage, settings change or merge. The
+/// scan retries it rather than continuing without the file index.
+fn publication_retry() -> FileError {
+    FileError::Io(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        "base-game payload, settings, or merge attempt changed during file indexing; retry",
+    ))
+}
+
+pub(super) fn is_publication_retry(error: &FileError) -> bool {
+    matches!(error, FileError::Io(io) if io.kind() == std::io::ErrorKind::Interrupted)
 }
 
 /// From this many distinct source paths up, canonicalization runs on the rayon pool. The cutoff
@@ -1300,44 +1385,75 @@ mod tests {
     }
 
     #[test]
-    fn blocked_merge_does_not_hold_config_while_waiting_for_info() {
+    fn merge_does_its_filesystem_work_with_no_publication_lock_held() {
+        use crate::state::{HoldGate, HoldPoint};
+
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
-        backend.state.config.write().workspace_roots = vec![tmp.path().to_path_buf()];
-        backend.stage_vanilla_payload(vanilla_data(vec!["pending_var"]));
-        let info_reader = backend.state.info_service.read();
-        let (started, walk_finished) = std::sync::mpsc::channel();
+        let vanilla_root = tmp.path().join("vanilla");
+        std::fs::create_dir_all(&vanilla_root).unwrap();
+        for name in ["old.txt", "new.txt"] {
+            std::fs::write(vanilla_root.join(name), "").unwrap();
+        }
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![tmp.path().to_path_buf()];
+            config.vanilla_dir = Some(vanilla_root.clone());
+        }
+        let payload = |filename: &str, name: &str| {
+            let mut data = vanilla_data(vec![name]);
+            data.per_type.insert(
+                "test_type".into(),
+                vec![(
+                    Arc::from(vanilla_root.join(filename).to_string_lossy().as_ref()),
+                    TypeInstance {
+                        name: name.to_string(),
+                        location: SourceLocation {
+                            line: 0,
+                            col: 0,
+                            end: (0, 1),
+                        },
+                        primary_loc_key: None,
+                        required_loc_keys: Vec::new(),
+                    },
+                )],
+            );
+            data
+        };
+        backend.stage_vanilla_payload(payload("old.txt", "old"));
+        let gate = HoldGate::new(HoldPoint::VanillaMergeIo);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
         std::thread::scope(|scope| {
-            let merge = scope.spawn(|| {
-                backend.merge_pending_vanilla_index_with(|_, _, _, _, _, _| {
-                    started.send(()).unwrap();
-                    Ok(cwtools_info::FileIndex::new())
-                })
-            });
-            let walk_completed = walk_finished
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .is_ok();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            let mut blocked_on_info = false;
-            while walk_completed && std::time::Instant::now() < deadline {
-                if backend.state.vanilla_state.try_lock().is_none() {
-                    blocked_on_info = true;
-                    break;
-                }
+            let merge = scope.spawn(|| backend.merge_pending_vanilla_index());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !gate.has_arrived() && std::time::Instant::now() < deadline {
                 std::thread::yield_now();
             }
-            let config_available = blocked_on_info && backend.state.config.try_write().is_some();
-            // Always release the reader before joining, even on an assertion failure.
-            drop(info_reader);
+            let arrived = gate.has_arrived();
+            // Parked in the filesystem section: every lock the merge publishes under is free.
+            let unlocked = arrived
+                && backend.state.vanilla_state.try_lock().is_some()
+                && backend.state.info_service.try_write().is_some()
+                && backend.state.config.try_write().is_some();
+            // A merge that holds the lock would block this stage until the gate opens.
+            if unlocked {
+                backend.stage_vanilla_payload(payload("new.txt", "new"));
+            }
+            // Always release the merge before joining, even on an assertion failure.
+            gate.release();
             let result = merge.join().unwrap();
-            assert!(walk_completed, "file-index walk did not finish");
-            assert!(blocked_on_info, "merge must reach its publication fence");
-            assert!(
-                config_available,
-                "a waiting merge must not hold config read"
-            );
-            assert!(result.is_ok());
+            assert!(arrived, "the merge never reached its filesystem section");
+            assert!(unlocked, "the merge held a publication lock during I/O");
+            assert!(result.is_err(), "the stale merge must request a retry");
         });
+        assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
+
+        backend.merge_pending_vanilla_index().unwrap();
+        let info = backend.state.info_service.read();
+        let instances = info.type_index.map().get("test_type").unwrap();
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].1.name, "new", "the newer payload must survive");
+        assert!(info.type_index.complete);
     }
 
     #[test]

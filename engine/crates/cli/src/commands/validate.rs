@@ -306,10 +306,9 @@ pub(super) fn run(args: ValidateArgs) {
     if discovery_incomplete {
         eprintln!("error: validation is incomplete because some inputs could not be scanned");
     }
-    let code = validation_exit_code(
+    let code = exit_code(
         failing,
-        discovery_failed,
-        discovery_incomplete,
+        discovery_failed || discovery_incomplete,
         write_failed,
     );
     if code != 0 {
@@ -334,19 +333,6 @@ fn prepare_script_source(
             sources.set_text(key, None);
         }
     }
-}
-
-fn validation_exit_code(
-    failing: usize,
-    discovery_failed: bool,
-    discovery_incomplete: bool,
-    write_failed: bool,
-) -> i32 {
-    exit_code(
-        failing,
-        discovery_failed || discovery_incomplete,
-        write_failed,
-    )
 }
 
 /// Everything one pass reads, resolved once from the flags and `cwtools.toml`.
@@ -752,7 +738,7 @@ fn analyze(job: &Job, first_run: bool) -> Analysis {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_script_source, validation_exit_code};
+    use super::prepare_script_source;
     use crate::diag::SourceLines;
     use cwtools_driver::{RulesInput, Session, SessionConfig};
     use cwtools_file_manager::path_identity;
@@ -801,12 +787,11 @@ mod tests {
             prepare_script_source(&mut sources, &session, source, &key);
             assert_eq!(sources.trimmed_path(&key, &path, 1), "");
             assert!(session.is_incomplete());
+            assert_ne!(
+                crate::run::exit_code(0, session.is_incomplete(), false),
+                0,
+                "an incomplete validation must not exit successfully"
+            );
         }
-    }
-
-    #[test]
-    fn incomplete_validation_is_not_a_successful_exit() {
-        assert_eq!(validation_exit_code(0, false, false, false), 0);
-        assert_ne!(validation_exit_code(0, false, true, false), 0);
     }
 }

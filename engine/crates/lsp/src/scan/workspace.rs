@@ -24,6 +24,7 @@ use crate::validate::{
     validation_error_to_diagnostic,
 };
 
+use super::vanilla::is_publication_retry;
 use super::{
     OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_parse_blocking_for_tests,
     hold_parse_for_tests, hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics,
@@ -200,6 +201,19 @@ impl IndexCollector {
     }
 }
 
+/// One line for a walk's failures: how many it skipped, and the first.
+fn summarize_failures(
+    failures: &[cwtools_file_manager::file_manager::DiscoveryFailure],
+) -> Option<String> {
+    let first = failures.first()?;
+    Some(format!(
+        "{} skipped, first {}: {}",
+        failures.len(),
+        first.path.display(),
+        first.error
+    ))
+}
+
 /// A scanned file's path relative to its own mod root.
 fn scan_logical_path<'a>(
     file: &'a ScannedFile,
@@ -320,6 +334,44 @@ impl Backend {
         *ticker = start_phase(self, progress, quiet, phase, total);
     }
 
+    /// End a scan that failed rather than was cancelled. The first scan's failure
+    /// must not leave `index_ready` unset, or the background reindex never retries it.
+    fn fail_scan(&self) -> bool {
+        self.state.index_ready.store(true, Ordering::Relaxed);
+        false
+    }
+
+    pub(super) async fn warn_incomplete(&self, what: &str, problem: &str) {
+        tracing::warn!(%problem, "{what} incomplete");
+        self.client
+            .log_message(
+                MessageType::WARNING,
+                format!("warning: {what} incomplete: {problem}"),
+            )
+            .await;
+    }
+
+    /// Make `type_index.complete` match what the scan found: the base game is merged
+    /// and every walk saw all of its files. Holds `vanilla_state` against a concurrent
+    /// clear or publication.
+    fn settle_index_completeness(&self, scripts_incomplete: bool) {
+        let changed = {
+            let vanilla = self.state.vanilla_state.lock();
+            let complete = self.state.vanilla_merged.load(Ordering::SeqCst) && !scripts_incomplete;
+            let mut info = self.state.info_service.write();
+            let changed = info.type_index.complete != complete;
+            if changed {
+                Arc::make_mut(&mut info.type_index).complete = complete;
+            }
+            drop(info);
+            drop(vanilla);
+            changed
+        };
+        if changed {
+            self.bump_info_revision();
+        }
+    }
+
     // Invalidate before polling the notification: a blocked client or a dropped
     // scan must not leave an earlier successful fingerprint eligible to skip.
     pub(crate) fn invalidate_vanilla_scan(&self) {
@@ -364,17 +416,18 @@ impl Backend {
                         None,
                     )
                     .await;
-                if outcome != ScanOutcome::Ran {
-                    backend
-                        .client
-                        .log_message(
-                            MessageType::WARNING,
-                            format!(
-                                "{context}: deferred re-validation gave up; a scan held the workspace the whole time"
-                            ),
-                        )
-                        .await;
-                }
+                let reason = match outcome {
+                    ScanOutcome::Ran => return,
+                    ScanOutcome::Busy => "a scan held the workspace the whole time",
+                    ScanOutcome::Cancelled => "the scan failed or was cancelled; see the log",
+                };
+                backend
+                    .client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("{context}: deferred re-validation gave up; {reason}"),
+                    )
+                    .await;
             })
             .await;
         });
@@ -459,10 +512,16 @@ impl Backend {
                 .exclude_dir_patterns
                 .extend(extra_dir_globs.iter().cloned());
             let scan_budget = fm_config.scan_budget;
-            cwtools_driver::discover_workspace_files_with_usage(fm_config)
-                .map(|(files, examined)| (files, examined, scan_budget))
+            // A walk that skipped something still returns the files it found.
+            cwtools_driver::discover_workspace(cwtools_driver::WorkspaceDiscoveryRequest {
+                roots: vec![root_path.clone()],
+                kinds: vec![cwtools_file_manager::FileKind::Script],
+                config: fm_config,
+                policy: cwtools_driver::DiscoveryPolicy::Workspace,
+            })
+            .map(|report| (report, scan_budget))
         });
-        let (primary_files, primary_examined, scan_budget) = match discovery {
+        let (primary_report, scan_budget) = match discovery {
             Ok(found) => found,
             Err(error) => {
                 tracing::error!(path = %root_path.display(), error = %error, "workspace discovery failed");
@@ -476,9 +535,26 @@ impl Backend {
                         ),
                     )
                     .await;
-                return false;
+                return self.fail_scan();
             }
         };
+        // Discovery that skips files or hits a cap is reported and the scan goes on with what
+        // it found, but no later pass may take this one for a complete picture of the mod.
+        let mut scripts_incomplete = false;
+        let mut loc_incomplete = false;
+        if let Some(problem) = summarize_failures(&primary_report.failures) {
+            scripts_incomplete = true;
+            self.warn_incomplete("script discovery", &problem).await;
+        }
+        let primary_examined = primary_report.examined;
+        let primary_files: Vec<cwtools_file_manager::file_manager::DiscoveredFile> = primary_report
+            .files
+            .into_iter()
+            .map(|file| cwtools_file_manager::file_manager::DiscoveredFile {
+                path: file.path,
+                logical_path: file.root_relative_path,
+            })
+            .collect();
         let parent_files = if parent_roots.is_empty() {
             Vec::new()
         } else {
@@ -498,31 +574,23 @@ impl Backend {
             }) {
                 Ok(files) => files,
                 Err(error) => {
-                    tracing::error!(error = %error, "parent workspace discovery failed");
-                    self.client
-                        .log_message(
-                            MessageType::ERROR,
-                            format!("error: parent discovery failed: {error}"),
-                        )
+                    // The driver keeps no partial parent list, so the parent layer is left out.
+                    scripts_incomplete = true;
+                    self.warn_incomplete("parent mod discovery", &error.to_string())
                         .await;
-                    return false;
+                    Vec::new()
                 }
             }
         };
-        // Check localization before mutating scan state or accepting a quiet
-        // fingerprint. A capped parent walk must never become a complete scan.
         let loc_signature =
             match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
-                Ok(signature) => signature,
+                Ok(signature) => Some(signature),
                 Err(error) => {
-                    tracing::error!(error = %error, "localisation discovery failed");
-                    self.client
-                        .log_message(
-                            MessageType::ERROR,
-                            format!("error: localisation discovery failed: {error}"),
-                        )
+                    // No signature means this pass cannot match, or become, a quiet-scan baseline.
+                    loc_incomplete = true;
+                    self.warn_incomplete("localisation discovery", &error.to_string())
                         .await;
-                    return false;
+                    None
                 }
             };
         let files_to_validate: Vec<std::path::PathBuf> =
@@ -894,7 +962,8 @@ impl Backend {
 
         let discovered_uris: HashSet<String> =
             scan_files.iter().map(|file| file.uri.clone()).collect();
-        let removed_uris: Vec<String> = if scan_files.is_empty() {
+        // A walk that skipped files cannot say which indexed files are gone, so nothing is pruned.
+        let removed_uris: Vec<String> = if scan_files.is_empty() || scripts_incomplete {
             Vec::new()
         } else {
             let mut info = self.state.info_service.write();
@@ -957,13 +1026,15 @@ impl Backend {
             None => self.ensure_vanilla_index(progress, false, quiet).await,
         };
         if let Err(error) = vanilla_result {
-            tracing::error!(error = %error, "base-game indexing failed");
+            // Without the base game the scan still validates the mod, against an index that
+            // says it is incomplete. The next pass retries the base-game load.
+            tracing::warn!(error = %error, "base-game indexing failed");
+            scripts_incomplete = true;
             self.report_file_index_failure(self.client.log_message(
-                MessageType::ERROR,
-                format!("error: base-game indexing failed: {error}"),
+                MessageType::WARNING,
+                format!("warning: base-game indexing incomplete: {error}"),
             ))
             .await;
-            return false;
         }
         if cancel.is_cancelled() {
             return false;
@@ -971,16 +1042,28 @@ impl Backend {
 
         let vanilla_revision = match tokio::task::block_in_place(|| merge_vanilla(self)) {
             Ok(revision) => revision,
-            Err(error) => {
-                tracing::error!(error = %error, "file index discovery failed");
+            Err(error) if is_publication_retry(&error) => {
+                tracing::error!(error = %error, "base-game merge lost a publication race");
                 self.report_file_index_failure(self.client.log_message(
                     MessageType::ERROR,
                     format!("error: file index discovery failed: {error}"),
                 ))
                 .await;
-                return false;
+                return self.fail_scan();
+            }
+            Err(error) => {
+                // The staged payload is kept for the next pass, which retries the merge.
+                tracing::warn!(error = %error, "file index discovery failed");
+                scripts_incomplete = true;
+                self.report_file_index_failure(self.client.log_message(
+                    MessageType::WARNING,
+                    format!("warning: file index discovery incomplete: {error}"),
+                ))
+                .await;
+                self.state.vanilla_state.lock().publication_revision
             }
         };
+        self.settle_index_completeness(scripts_incomplete);
         #[cfg(test)]
         self.hold_from_async(crate::state::HoldPoint::ScanAfterVanilla);
         tokio::task::block_in_place(|| self.rebuild_alias_key_index());
@@ -989,16 +1072,18 @@ impl Backend {
 
         self.enter_phase(&mut phase, progress, quiet, Phase::Localisation, 0)
             .await;
-        let loc_unchanged = *self.state.last_loc_signature.lock() == Some(loc_signature);
+        let loc_unchanged =
+            loc_signature.is_some() && *self.state.last_loc_signature.lock() == loc_signature;
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
         } else if !self.rebuild_and_publish_loc(&root_path).await {
-            return false;
+            // The rebuild keeps the previous localisation index and diagnostics.
+            loc_incomplete = true;
         }
         if cancel.is_cancelled() {
             return false;
         }
-        *self.state.last_loc_signature.lock() = Some(loc_signature);
+        *self.state.last_loc_signature.lock() = if loc_incomplete { None } else { loc_signature };
 
         // Rebuild the inline-script registry from this scan (#259), so a script changed outside
         // a watched event is picked up. A full rebuild is the only way a deleted one drops out.
@@ -1412,7 +1497,10 @@ impl Backend {
             return false;
         }
         *self.state.last_scan_summary.lock() = Some(summary);
-        if !scan_files.is_empty() {
+        if scripts_incomplete || loc_incomplete {
+            // An earlier fingerprint must not let a quiet pass skip the retry.
+            *self.state.last_scan_fingerprint.lock() = None;
+        } else if !scan_files.is_empty() {
             *self.state.last_scan_fingerprint.lock() = Some((scan_fingerprint, scan_generation));
         }
         true
@@ -1875,7 +1963,7 @@ mod tests {
             config.cache_dir = Some(workspace.path().join("cache"));
         }
         assert!(
-            !backend
+            backend
                 .validate_entire_workspace_inner_with(
                     false,
                     None,
@@ -1884,14 +1972,14 @@ mod tests {
                     Some(crate::scan::test_capped_vanilla_loader),
                 )
                 .await,
-            "cold loader failure must fail the scan"
+            "a cold loader failure must not abort the mod's own scan"
         );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         assert!(backend.state.vanilla_state.lock().index.is_none());
         assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
         assert!(!backend.state.info_service.read().type_index.complete);
         assert!(
-            !backend
+            backend
                 .validate_entire_workspace_inner_with(
                     true,
                     None,
@@ -1900,9 +1988,12 @@ mod tests {
                     Some(crate::scan::test_capped_vanilla_loader),
                 )
                 .await,
-            "the same cap still fails while both resources exist"
+            "the same cap still fails the base-game load while both resources exist"
         );
-        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(
+            backend.state.last_scan_fingerprint.lock().is_none(),
+            "an incomplete pass must stay retryable"
+        );
         std::fs::remove_file(resources.join("two.dds")).unwrap();
         assert!(
             backend
@@ -1996,7 +2087,7 @@ mod tests {
                 },
             )
         }
-        let failed = backend
+        let completed = backend
             .validate_entire_workspace_inner_with(
                 false,
                 None,
@@ -2005,7 +2096,10 @@ mod tests {
                 None,
             )
             .await;
-        assert!(!failed, "an incomplete auxiliary walk must fail the scan");
+        assert!(
+            completed,
+            "an incomplete auxiliary walk must not abort the scan"
+        );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         assert!(!backend.state.info_service.read().type_index.complete);
         assert!(
@@ -2015,7 +2109,7 @@ mod tests {
 
         // The same cap still fails on a quiet retry until the resource files are removed.
         assert!(
-            !backend
+            backend
                 .validate_entire_workspace_inner_with(
                     true,
                     None,
@@ -2046,23 +2140,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn failed_primary_or_parent_discovery_preserves_scan_state() {
-        for missing_parent in [false, true] {
-            let (backend, tmp) = setup_workspace(None);
-            let missing = tmp.path().join("missing");
-            {
-                let mut config = backend.state.config.write();
-                if missing_parent {
-                    config.parent_roots = vec![missing];
-                } else {
-                    let uri = Url::from_file_path(missing).unwrap();
-                    config.workspace_uri = Some(uri.as_str().into());
-                    config.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri.as_str()));
-                }
-            }
-            assert!(!backend.validate_entire_workspace(false).await);
-            assert_stores_unchanged(&backend);
+    async fn failed_first_scan_preserves_state_and_leaves_background_reindex_free_to_retry() {
+        let (backend, tmp) = setup_workspace(None);
+        let uri = Url::from_file_path(tmp.path().join("missing")).unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_uri = Some(uri.as_str().into());
+            config.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri.as_str()));
         }
+        assert!(!backend.should_run_background_pass(0));
+        assert!(!backend.validate_entire_workspace(false).await);
+        assert_stores_unchanged(&backend);
+        assert!(
+            backend.should_run_background_pass(0),
+            "a failed first scan must not block the background reindex that retries it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn missing_parent_mod_does_not_abort_the_scan() {
+        let (backend, tmp) = setup_workspace(None);
+        backend.state.config.write().parent_roots = vec![tmp.path().join("missing")];
+        assert!(
+            backend.validate_entire_workspace(false).await,
+            "the mod's own files are still scanned"
+        );
+        assert!(
+            backend.state.last_scan_fingerprint.lock().is_none(),
+            "a scan that skipped a parent layer must stay retryable"
+        );
+        assert!(backend.should_run_background_pass(0));
     }
 
     async fn wait_arrived(gate: &HoldGate, point: HoldPoint) {

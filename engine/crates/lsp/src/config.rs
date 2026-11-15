@@ -1235,7 +1235,9 @@ impl Backend {
         // responsive to code-filter changes through the direct path instead.
         let revalidate_without_workspace =
             codes_changed && self.state.config.read().workspace_uri.is_none();
-        if rescan && !self.validate_entire_workspace(false).await {
+        // Only a scan that lost the scan flag is retried. A failed one would fail again.
+        if rescan && self.validate_entire_workspace_tracked(false, None).await == ScanOutcome::Busy
+        {
             self.spawn_deferred_revalidation("didChangeConfiguration");
         }
         if revalidate_without_workspace && self.state.index_ready.load(Ordering::Relaxed) {
@@ -1429,10 +1431,13 @@ impl Backend {
         let status = cwtools_i18n::t(match outcome {
             ScanOutcome::Ran => cwtools_i18n::Key::StatusReindexed,
             ScanOutcome::Busy => cwtools_i18n::Key::StatusReindexPending,
-            ScanOutcome::Cancelled => {
+            // A client cancel still wants the rebuild it was promised. A failed scan would
+            // fail again, so it is not retried.
+            ScanOutcome::Cancelled if progress.is_cancelled() => {
                 self.spawn_deferred_revalidation("clearAllCaches");
                 cwtools_i18n::Key::StatusReindexCancelledRebuilding
             }
+            ScanOutcome::Cancelled => cwtools_i18n::Key::StatusRevalidationCancelled,
         });
         let msg = if failures.is_empty() {
             cwtools_i18n::format(

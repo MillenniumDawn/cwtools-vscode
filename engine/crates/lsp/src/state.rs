@@ -27,10 +27,12 @@ pub(crate) use crate::loc_text::LocText;
 /// The open-buffer uses of a scan have one inside their rayon region (#1152), and its
 /// type-uses merge has one before it takes the `type_uses` write guard (#1163).
 /// A scan has one right after it releases its type index snapshot (#1321).
+/// The base-game merge has one after its filesystem work, before its locks.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
     ScanAfterVanilla,
+    VanillaMergeIo,
     Pass2Before,
     Pass2Mid,
     Pass2After,
@@ -248,9 +250,10 @@ pub(crate) struct VanillaState {
     pub(crate) publication_revision: u64,
 }
 
-/// Vanilla publication orders nested locks as vanilla_state -> info_service -> config;
-/// rule updates order vanilla_state -> rules -> info_service. Other multi-lock paths
-/// document their order at their use sites.
+/// LOCK ORDER: vanilla publication nests vanilla_state -> info_service -> config; rule
+/// updates nest vanilla_state -> rules -> info_service. Release them before doing I/O:
+/// do the filesystem work first, then re-check `publication_revision` under the locks.
+/// Other multi-lock paths document their order at their use sites.
 #[derive(Default)]
 pub(crate) struct PendingExportSweep {
     pub(crate) revision: u64,

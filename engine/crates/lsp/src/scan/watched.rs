@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use tower_lsp::lsp_types::*;
 
 use crate::Backend;
+use crate::command_progress::ScanOutcome;
 use crate::paths::{is_resource_file, is_stray_loc_file, uri_to_path_str};
 use crate::validate::{NameTokens, name_tokens};
 
@@ -212,7 +213,9 @@ impl Backend {
                 deletes = deletes.len(),
                 "watched batch over cap; full rescan"
             );
-            if !self.validate_entire_workspace(true).await {
+            // Only a scan that lost the scan flag is requeued. One that failed would fail
+            // again, so requeueing it would re-arm this window forever.
+            if self.validate_entire_workspace_tracked(true, None).await == ScanOutcome::Busy {
                 if folder_expansion_over_budget {
                     // The folder is requeued whole, so it must still count as created.
                     self.state.watched_created.lock().extend(created);

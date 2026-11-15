@@ -178,11 +178,7 @@ pub(super) fn run(args: FixArgs) {
 
     // Same guards as `validate`: a failed walk, an empty ruleset, or an
     // empty file set must not read as "nothing needed fixing".
-    if fix_incomplete(
-        session.discovery_failed,
-        session.is_incomplete(),
-        rebuild_incomplete,
-    ) {
+    if session.discovery_failed || session.is_incomplete() || rebuild_incomplete {
         eprintln!("error: cannot plan fixes from incomplete inputs");
         std::process::exit(EXIT_DISCOVERY_FAILED);
     }
@@ -217,11 +213,7 @@ pub(super) fn run(args: FixArgs) {
             }
         }
     }
-    if fix_incomplete(
-        session.discovery_failed,
-        session.is_incomplete(),
-        rebuild_incomplete,
-    ) {
+    if session.discovery_failed || session.is_incomplete() || rebuild_incomplete {
         eprintln!("error: cannot apply or preview fixes after incomplete validation");
         std::process::exit(EXIT_DISCOVERY_FAILED);
     }
@@ -322,14 +314,6 @@ pub(super) fn run(args: FixArgs) {
     }
 }
 
-fn fix_incomplete(
-    discovery_failed: bool,
-    validation_incomplete: bool,
-    rebuild_incomplete: bool,
-) -> bool {
-    discovery_failed || validation_incomplete || rebuild_incomplete
-}
-
 /// A unified-diff-style preview of applying `edits` to `old` under `path`. One
 /// hunk per edit (edits are already non-overlapping), showing the touched old
 /// lines (`-`) and the resulting new lines (`+`).
@@ -388,14 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn fix_rejects_incomplete_discovery_rebuild_or_validation() {
-        assert!(!fix_incomplete(false, false, false));
-        assert!(fix_incomplete(true, false, false));
-        assert!(fix_incomplete(false, true, false));
-        assert!(fix_incomplete(false, false, true));
-    }
-
-    #[test]
     fn late_changed_source_blocks_fix_planning() {
         for grow_before_validation in [true, false] {
             let tmp = tempfile::tempdir().unwrap();
@@ -435,11 +411,10 @@ mod tests {
                 .find(|source| source.path == path)
                 .unwrap();
             assert!(session.read_source_utf8(source).is_err());
-            assert!(fix_incomplete(
-                session.discovery_failed,
+            assert!(
                 session.is_incomplete(),
-                false
-            ));
+                "a source that changed after indexing must block fixing"
+            );
             assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
         }
     }

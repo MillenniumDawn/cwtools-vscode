@@ -39,8 +39,8 @@ impl SourceLines {
             .map_or("", String::as_str)
     }
 
-    /// Seed a source read through its indexed snapshot. A failed read is
-    /// memoized as empty so reporting never falls back to an unbounded read.
+    /// Seed `key` from a source already read through its indexed snapshot, so
+    /// the next lookup for it needs no second read. `None` memoizes an empty file.
     pub(crate) fn set_text(&mut self, key: &str, text: Option<&str>) {
         self.lines = text
             .map(|text| text.lines().map(|line| line.trim().to_string()).collect())

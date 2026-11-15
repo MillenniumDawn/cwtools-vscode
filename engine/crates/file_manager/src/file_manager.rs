@@ -662,7 +662,6 @@ impl FileManager {
         (
             files
                 .into_iter()
-                .filter(|(path, logical_path)| accept_script_file(&self.config, path, logical_path))
                 .map(|(path, logical_path)| DiscoveredFile { path, logical_path })
                 .collect(),
             failures,
@@ -1324,11 +1323,11 @@ fn collect_files_recursive(
     }
 }
 
+const FILE_COUNT_BUDGET_ERROR: &str = "file-count budget exhausted";
+
 /// `state.out`. Symlinks and non-regular files (fifos, sockets, devices) are
 /// rejected outright: a symlink can point outside the root or into a cycle,
 /// and the remaining per-scan file budget.
-const FILE_COUNT_BUDGET_ERROR: &str = "file-count budget exhausted";
-
 struct WalkState<T> {
     out: Vec<T>,
     remaining_files: usize,

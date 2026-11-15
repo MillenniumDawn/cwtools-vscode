@@ -483,10 +483,11 @@ impl Backend {
         let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) = match rebuilt {
             Ok(rebuilt) => rebuilt,
             Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "localisation discovery failed; keeping previous indexes and diagnostics"
-                );
+                self.warn_incomplete(
+                    "localisation discovery",
+                    &format!("{error}; keeping the previous localisation index and diagnostics"),
+                )
+                .await;
                 return false;
             }
         };
