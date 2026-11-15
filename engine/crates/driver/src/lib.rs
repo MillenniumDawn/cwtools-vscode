@@ -1119,6 +1119,32 @@ impl SessionWithFiles {
         Ok(text)
     }
 
+    /// Read a localisation file for fix application only if it is byte-identical to
+    /// what was parsed at load, and UTF-8, so a write cannot convert its encoding.
+    pub fn read_loc_source_utf8(&self, path: &Path) -> Result<String, FileError> {
+        let key = path.to_string_lossy();
+        let loc = &self.session.loc_service;
+        let bytes = loc
+            .source_len(&key)
+            .ok_or_else(source_changed)
+            .and_then(|len| read_loc_snapshot_bytes(path, len));
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.validation_incomplete.store(true, Ordering::Relaxed);
+                return Err(error);
+            }
+        };
+        let text = String::from_utf8(bytes).map_err(|error| {
+            FileError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        })?;
+        if !loc.source_matches(&key, text.as_bytes()) {
+            self.validation_incomplete.store(true, Ordering::Relaxed);
+            return Err(source_changed());
+        }
+        Ok(text)
+    }
+
     pub fn validate_all(&self) -> Vec<(PathBuf, Vec<ValidationError>)> {
         self.validate_selected(None)
     }
@@ -1272,6 +1298,24 @@ fn read_source_snapshot_bytes(file: &SourceFile) -> Result<Vec<u8>, FileError> {
         )));
     }
     Ok(bytes)
+}
+
+/// Read at most one byte past `len`, so a file that grew is caught without reading
+/// all of it.
+fn read_loc_snapshot_bytes(path: &Path, len: u64) -> Result<Vec<u8>, FileError> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(len.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != len {
+        return Err(source_changed());
+    }
+    Ok(bytes)
+}
+
+fn source_changed() -> FileError {
+    FileError::Io(std::io::Error::other("source changed after indexing"))
 }
 
 fn read_source_snapshot(file: &SourceFile) -> Result<String, FileError> {
