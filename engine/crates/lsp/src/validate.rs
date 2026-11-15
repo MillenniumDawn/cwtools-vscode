@@ -5756,7 +5756,7 @@ mod ignored_tests {
                 ..Default::default()
             },
         });
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
         let texture = primary.join("gfx/Base.dds");
         std::fs::write(&texture, [0x00]).unwrap();
         let uri = Url::from_file_path(&texture).unwrap().to_string();
@@ -6100,7 +6100,7 @@ mod ignored_tests {
                 ..Default::default()
             },
         });
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
         let doc_uri = open_filepath_dependent(&backend, &primary, "thing.gfx");
         assert!(
             backend
