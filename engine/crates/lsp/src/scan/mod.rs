@@ -21,8 +21,8 @@ mod workspace;
 
 pub(crate) use loc::ParentLocKey;
 #[cfg(test)]
-pub(crate) use vanilla::test_capped_vanilla_loader;
-pub(crate) use vanilla::{VanillaLoader, VanillaLoc, VanillaLocKey, vanilla_fingerprint};
+pub(crate) use vanilla::{FileIndexBuilder, VanillaLoader, test_capped_vanilla_loader};
+pub(crate) use vanilla::{VanillaLoc, VanillaLocKey, vanilla_fingerprint};
 pub use vanilla::{resolve_source_uris, source_uri};
 
 #[derive(Debug, Clone, Default)]

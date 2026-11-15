@@ -440,27 +440,6 @@ impl Backend {
         progress: Option<&CommandProgress>,
         publish_throttle: WorkspacePublishThrottle,
     ) -> bool {
-        self.validate_entire_workspace_inner_with(
-            quiet,
-            progress,
-            publish_throttle,
-            |backend| backend.merge_pending_vanilla_index_versioned(),
-            None,
-        )
-        .await
-    }
-
-    async fn validate_entire_workspace_inner_with<F>(
-        &self,
-        quiet: bool,
-        progress: Option<&CommandProgress>,
-        publish_throttle: WorkspacePublishThrottle,
-        merge_vanilla: F,
-        loader: Option<crate::scan::VanillaLoader>,
-    ) -> bool
-    where
-        F: FnOnce(&Backend) -> Result<u64, cwtools_file_manager::file_manager::FileError> + Send,
-    {
         let cancel = cancel_flag_of(progress);
         cwtools_profiling::log_rss("workspace_scan_start");
         // One ticker at a time, handed from phase to phase. It owns the bar between the
@@ -1018,14 +997,7 @@ impl Backend {
 
         self.enter_phase(&mut phase, progress, quiet, Phase::Vanilla, 0)
             .await;
-        let vanilla_result = match loader {
-            Some(loader) => {
-                self.ensure_vanilla_index_with_loader(progress, false, quiet, Some(loader))
-                    .await
-            }
-            None => self.ensure_vanilla_index(progress, false, quiet).await,
-        };
-        if let Err(error) = vanilla_result {
+        if let Err(error) = self.ensure_vanilla_index(progress, false, quiet).await {
             // Without the base game the scan still validates the mod, against an index that
             // says it is incomplete. The next pass retries the base-game load.
             tracing::warn!(error = %error, "base-game indexing failed");
@@ -1040,29 +1012,30 @@ impl Backend {
             return false;
         }
 
-        let vanilla_revision = match tokio::task::block_in_place(|| merge_vanilla(self)) {
-            Ok(revision) => revision,
-            Err(error) if is_publication_retry(&error) => {
-                tracing::error!(error = %error, "base-game merge lost a publication race");
-                self.report_file_index_failure(self.client.log_message(
-                    MessageType::ERROR,
-                    format!("error: file index discovery failed: {error}"),
-                ))
-                .await;
-                return self.fail_scan();
-            }
-            Err(error) => {
-                // The staged payload is kept for the next pass, which retries the merge.
-                tracing::warn!(error = %error, "file index discovery failed");
-                scripts_incomplete = true;
-                self.report_file_index_failure(self.client.log_message(
-                    MessageType::WARNING,
-                    format!("warning: file index discovery incomplete: {error}"),
-                ))
-                .await;
-                self.state.vanilla_state.lock().publication_revision
-            }
-        };
+        let vanilla_revision =
+            match tokio::task::block_in_place(|| self.merge_pending_vanilla_index_versioned()) {
+                Ok(revision) => revision,
+                Err(error) if is_publication_retry(&error) => {
+                    tracing::error!(error = %error, "base-game merge lost a publication race");
+                    self.report_file_index_failure(self.client.log_message(
+                        MessageType::ERROR,
+                        format!("error: file index discovery failed: {error}"),
+                    ))
+                    .await;
+                    return self.fail_scan();
+                }
+                Err(error) => {
+                    // The staged payload is kept for the next pass, which retries the merge.
+                    tracing::warn!(error = %error, "file index discovery failed");
+                    scripts_incomplete = true;
+                    self.report_file_index_failure(self.client.log_message(
+                        MessageType::WARNING,
+                        format!("warning: file index discovery incomplete: {error}"),
+                    ))
+                    .await;
+                    self.state.vanilla_state.lock().publication_revision
+                }
+            };
         self.settle_index_completeness(scripts_incomplete);
         #[cfg(test)]
         self.hold_from_async(crate::state::HoldPoint::ScanAfterVanilla);
@@ -1882,13 +1855,9 @@ mod tests {
                 .await
         });
         wait_arrived(&gate, HoldPoint::ScanAfterVanilla).await;
-        let command = backend
-            .cache_vanilla_command_with(
-                None,
-                |backend| backend.merge_pending_vanilla_index(),
-                Some(crate::scan::test_capped_vanilla_loader),
-            )
-            .await;
+        *backend.state.vanilla_loader_override.lock() =
+            Some(crate::scan::test_capped_vanilla_loader);
+        let command = backend.cache_vanilla_command(None).await;
         let fingerprint_during_failure = *backend.state.last_scan_fingerprint.lock();
         gate.release();
         let outcome = scan.await.expect("scan panicked");
@@ -1908,13 +1877,7 @@ mod tests {
         std::fs::remove_file(resources.join("two.dds")).unwrap();
         assert!(
             backend
-                .validate_entire_workspace_inner_with(
-                    true,
-                    None,
-                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                    |backend| backend.merge_pending_vanilla_index_versioned(),
-                    Some(crate::scan::test_capped_vanilla_loader),
-                )
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
                 .await
         );
         assert!(backend.state.last_scan_fingerprint.lock().is_some());
@@ -1962,15 +1925,11 @@ mod tests {
             config.vanilla_dir = Some(vanilla.path().to_path_buf());
             config.cache_dir = Some(workspace.path().join("cache"));
         }
+        *backend.state.vanilla_loader_override.lock() =
+            Some(crate::scan::test_capped_vanilla_loader);
         assert!(
             backend
-                .validate_entire_workspace_inner_with(
-                    false,
-                    None,
-                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                    |backend| backend.merge_pending_vanilla_index_versioned(),
-                    Some(crate::scan::test_capped_vanilla_loader),
-                )
+                .validate_entire_workspace_inner(false, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
                 .await,
             "a cold loader failure must not abort the mod's own scan"
         );
@@ -1980,13 +1939,7 @@ mod tests {
         assert!(!backend.state.info_service.read().type_index.complete);
         assert!(
             backend
-                .validate_entire_workspace_inner_with(
-                    true,
-                    None,
-                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                    |backend| backend.merge_pending_vanilla_index_versioned(),
-                    Some(crate::scan::test_capped_vanilla_loader),
-                )
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
                 .await,
             "the same cap still fails the base-game load while both resources exist"
         );
@@ -1997,13 +1950,7 @@ mod tests {
         std::fs::remove_file(resources.join("two.dds")).unwrap();
         assert!(
             backend
-                .validate_entire_workspace_inner_with(
-                    true,
-                    None,
-                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                    |backend| backend.merge_pending_vanilla_index_versioned(),
-                    Some(crate::scan::test_capped_vanilla_loader),
-                )
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
                 .await,
             "quiet scan must retry the cold loader"
         );
@@ -2048,53 +1995,45 @@ mod tests {
             std::fs::write(resources.join(name), b"").unwrap();
         }
         stage();
-        fn capped_merge(backend: &Backend) -> Result<u64, FileError> {
-            backend.merge_pending_vanilla_index_with_revision(
-                |root, parents, ignore_files, ignore_dirs, vanilla_paths, shadow| {
-                    let config = FileManagerConfig {
-                        include_dirs: vec![".".into()],
-                        scan_budget: ScanBudget {
-                            max_files: 4,
-                            ..ScanBudget::default()
-                        },
-                        ..Default::default()
-                    };
-                    let report = cwtools_driver::discover_workspace(
-                        cwtools_driver::WorkspaceDiscoveryRequest {
-                            roots: vec![root.to_path_buf()],
-                            kinds: vec![
-                                FileKind::Script,
-                                FileKind::Localisation,
-                                FileKind::Resource,
-                            ],
-                            config,
-                            policy: cwtools_driver::DiscoveryPolicy::Workspace,
-                        },
-                    )?;
-                    if let Some(failure) = report.failures.iter().find(|f| f.is_file_count_budget())
-                    {
-                        return Err(FileError::FileCountBudget(failure.path.clone()));
-                    }
-                    cwtools_driver::build_file_index_with_vanilla_shadow(
-                        root,
-                        parents,
-                        ignore_files,
-                        ignore_dirs,
-                        cwtools_driver::VanillaFiles::Cached(Cow::Borrowed(vanilla_paths)),
-                        false,
-                        shadow,
-                    )
+        fn capped_file_index(
+            root: &std::path::Path,
+            parents: &[std::path::PathBuf],
+            ignore_files: &[String],
+            ignore_dirs: &[String],
+            vanilla_paths: &[String],
+            shadow: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+        ) -> Result<cwtools_info::FileIndex, FileError> {
+            let config = FileManagerConfig {
+                include_dirs: vec![".".into()],
+                scan_budget: ScanBudget {
+                    max_files: 4,
+                    ..ScanBudget::default()
                 },
+                ..Default::default()
+            };
+            let report =
+                cwtools_driver::discover_workspace(cwtools_driver::WorkspaceDiscoveryRequest {
+                    roots: vec![root.to_path_buf()],
+                    kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
+                    config,
+                    policy: cwtools_driver::DiscoveryPolicy::Workspace,
+                })?;
+            if let Some(failure) = report.failures.iter().find(|f| f.is_file_count_budget()) {
+                return Err(FileError::FileCountBudget(failure.path.clone()));
+            }
+            cwtools_driver::build_file_index_with_vanilla_shadow(
+                root,
+                parents,
+                ignore_files,
+                ignore_dirs,
+                cwtools_driver::VanillaFiles::Cached(Cow::Borrowed(vanilla_paths)),
+                false,
+                shadow,
             )
         }
+        *backend.state.file_index_builder_override.lock() = Some(capped_file_index);
         let completed = backend
-            .validate_entire_workspace_inner_with(
-                false,
-                None,
-                DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                capped_merge,
-                None,
-            )
+            .validate_entire_workspace_inner(false, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
             .await;
         assert!(
             completed,
@@ -2110,26 +2049,14 @@ mod tests {
         // The same cap still fails on a quiet retry until the resource files are removed.
         assert!(
             backend
-                .validate_entire_workspace_inner_with(
-                    true,
-                    None,
-                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                    capped_merge,
-                    None,
-                )
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
                 .await
         );
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
         std::fs::remove_dir_all(resources).unwrap();
         assert!(
             backend
-                .validate_entire_workspace_inner_with(
-                    true,
-                    None,
-                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
-                    capped_merge,
-                    None,
-                )
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
                 .await
         );
         let info = backend.state.info_service.read();

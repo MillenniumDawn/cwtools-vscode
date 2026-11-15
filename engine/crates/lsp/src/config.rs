@@ -1296,10 +1296,6 @@ impl Backend {
     }
 
     fn clear_vanilla_state(&self) {
-        self.clear_vanilla_state_with(|| {});
-    }
-
-    fn clear_vanilla_state_with<F: FnOnce()>(&self, before_info_cleanup: F) {
         // Keep the payload and its auxiliary names under one publication fence.
         // A new stage/merge must not be cleared by an older clear operation.
         let mut vanilla = self.state.vanilla_state.lock();
@@ -1314,7 +1310,8 @@ impl Backend {
         vanilla.scripted_gui_names = None;
         // Keep merged_uris: the next merge uses it to remove old provenance.
         *self.state.vanilla_loc.lock() = None;
-        before_info_cleanup();
+        #[cfg(test)]
+        self.hold(crate::state::HoldPoint::VanillaClearBeforeInfo);
         {
             let mut info = self.state.info_service.write();
             let type_index = Arc::make_mut(&mut info.type_index);
@@ -1332,28 +1329,10 @@ impl Backend {
         self.state.published_workspace_uris.lock().clear();
     }
 
-    async fn cache_vanilla_command(&self, token: Option<ProgressToken>) -> Result<Option<Value>> {
-        self.cache_vanilla_command_with(
-            token,
-            |backend| backend.merge_pending_vanilla_index(),
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn cache_vanilla_command_with<F>(
+    pub(crate) async fn cache_vanilla_command(
         &self,
         token: Option<ProgressToken>,
-        merge_vanilla: F,
-        loader: Option<crate::scan::VanillaLoader>,
-    ) -> Result<Option<Value>>
-    where
-        F: FnOnce(
-                &Backend,
-            )
-                -> std::result::Result<(), cwtools_file_manager::file_manager::FileError>
-            + Send,
-    {
+    ) -> Result<Option<Value>> {
         let progress =
             CommandProgress::begin(self, token, "CWTools: Rebuild base-game cache", false).await;
         if progress.is_cancelled() {
@@ -1367,18 +1346,11 @@ impl Backend {
         // this command never reaches the code that turns it off. The guard covers both
         // exits: the normal one below, and the client cancelling the command mid-index (#204).
         let guard = crate::scan::ScanGuard::for_command(self);
-        let ensured = match loader {
-            Some(loader) => {
-                self.ensure_vanilla_index_with_loader(Some(&progress), true, false, Some(loader))
-                    .await
-            }
-            None => {
-                self.ensure_vanilla_index(Some(&progress), true, false)
-                    .await
-            }
-        };
-        let result = match ensured {
-            Ok(()) => tokio::task::block_in_place(|| merge_vanilla(self)),
+        let result = match self
+            .ensure_vanilla_index(Some(&progress), true, false)
+            .await
+        {
+            Ok(()) => tokio::task::block_in_place(|| self.merge_pending_vanilla_index()),
             Err(error) => Err(error),
         };
         if result.is_ok() {
@@ -1645,25 +1617,71 @@ mod tests {
 
     use crate::testing::test_backend;
 
+    type LoadedPayload = std::result::Result<
+        (
+            HashMap<String, Vec<(Arc<str>, TypeInstance)>>,
+            VanillaCacheAux,
+        ),
+        cwtools_file_manager::file_manager::FileError,
+    >;
+
+    fn loader_staging_one_file_path(
+        _: &std::path::Path,
+        _: &RuleSet,
+        _: &cwtools_string_table::string_table::StringTable,
+        _: Option<&std::path::Path>,
+        _: &str,
+        _: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+    ) -> LoadedPayload {
+        Ok((
+            HashMap::new(),
+            VanillaCacheAux {
+                loc_keys: Vec::new(),
+                file_paths: vec!["gfx/staged.dds".into()],
+                var_names: Vec::new(),
+                complex_enum_values: Vec::new(),
+                value_set_values: Vec::new(),
+                scripted_loc_names: Vec::new(),
+                scripted_gui_names: Vec::new(),
+            },
+        ))
+    }
+
+    fn file_index_over_budget(
+        _: &std::path::Path,
+        _: &[std::path::PathBuf],
+        _: &[String],
+        _: &[String],
+        _: &[String],
+        _: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+    ) -> std::result::Result<cwtools_info::FileIndex, cwtools_file_manager::file_manager::FileError>
+    {
+        Err(
+            cwtools_file_manager::file_manager::FileError::FileCountBudget(
+                "budget-exceeded".into(),
+            ),
+        )
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn vanilla_rebuild_reports_auxiliary_index_failure() {
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
-        backend.state.config.write().vanilla_dir = Some(tmp.path().join("missing"));
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![tmp.path().join("workspace")];
+            config.vanilla_dir = Some(tmp.path().to_path_buf());
+            config.cache_dir = Some(tmp.path().join("cache"));
+        }
+        backend.set_ruleset(RuleSet::new());
+        *backend.state.vanilla_loader_override.lock() = Some(loader_staging_one_file_path);
+        *backend.state.file_index_builder_override.lock() = Some(file_index_over_budget);
         *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
         backend
             .state
             .loading_bar_active
             .store(true, Ordering::SeqCst);
-        let path = std::path::PathBuf::from("budget-exceeded");
-        let outcome = backend
-            .cache_vanilla_command_with(
-                None,
-                |_| Err(cwtools_file_manager::file_manager::FileError::FileCountBudget(path)),
-                None,
-            )
-            .await
-            .unwrap();
+        let outcome = backend.cache_vanilla_command(None).await.unwrap();
         let Some(Value::String(message)) = outcome else {
             panic!("rebuild must return a status message");
         };
@@ -1691,15 +1709,10 @@ mod tests {
             config.cache_dir = Some(tmp.path().join("cache"));
         }
         backend.set_ruleset(RuleSet::new());
+        *backend.state.vanilla_loader_override.lock() =
+            Some(crate::scan::test_capped_vanilla_loader);
         *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
-        let failed = backend
-            .cache_vanilla_command_with(
-                None,
-                |backend| backend.merge_pending_vanilla_index(),
-                Some(crate::scan::test_capped_vanilla_loader),
-            )
-            .await
-            .unwrap();
+        let failed = backend.cache_vanilla_command(None).await.unwrap();
         assert!(matches!(failed, Some(Value::String(message))
             if message.starts_with("Vanilla cache rebuild failed:")));
         assert!(backend.state.last_scan_fingerprint.lock().is_none());
@@ -1708,14 +1721,7 @@ mod tests {
         assert!(!backend.state.info_service.read().type_index.complete);
         assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
         std::fs::remove_file(resources.join("two.dds")).unwrap();
-        let recovered = backend
-            .cache_vanilla_command_with(
-                None,
-                |backend| backend.merge_pending_vanilla_index(),
-                Some(crate::scan::test_capped_vanilla_loader),
-            )
-            .await
-            .unwrap();
+        let recovered = backend.cache_vanilla_command(None).await.unwrap();
         assert_eq!(
             recovered,
             Some(Value::String("Vanilla cache rebuilt.".into()))
@@ -2351,35 +2357,33 @@ mod tests {
         let path = vanilla_dir.join("new.txt");
         std::fs::write(&path, "").unwrap();
         backend.state.config.write().vanilla_dir = Some(vanilla_dir);
-        let (start_stage, stage_started) = std::sync::mpsc::channel();
-        let (ack_stage, stage_acknowledged) = std::sync::mpsc::channel();
+        let gate = crate::state::HoldGate::new(crate::state::HoldPoint::VanillaClearBeforeInfo);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
         std::thread::scope(|scope| {
-            let backend_ref = &backend;
-            let path_ref = &path;
-            scope.spawn(move || {
-                stage_started.recv().unwrap();
-                ack_stage.send(()).unwrap();
-                backend_ref.stage_vanilla_payload(vanilla_data(
-                    path_ref,
+            let clear = scope.spawn(|| backend.clear_vanilla_state());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !gate.has_arrived() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let arrived = gate.has_arrived();
+            // Parked inside the clear: the publication fence must still cover its cleanup.
+            let fenced = arrived && backend.state.vanilla_state.try_lock().is_none();
+            let restage = scope.spawn(|| {
+                backend.stage_vanilla_payload(vanilla_data(
+                    &path,
                     "new_instance",
                     "new_var",
                     "new_loc",
                     "new_gui",
                 ));
-                backend_ref.merge_pending_vanilla_index().unwrap();
+                backend.merge_pending_vanilla_index().unwrap();
             });
-            backend.clear_vanilla_state_with(|| {
-                start_stage.send(()).unwrap();
-                // Wait only until the stage thread starts, never for its merge while
-                // this thread owns the publication fence.
-                stage_acknowledged
-                    .recv_timeout(std::time::Duration::from_secs(2))
-                    .unwrap();
-                assert!(
-                    backend.state.vanilla_state.try_lock().is_none(),
-                    "the publication fence must cover auxiliary cleanup"
-                );
-            });
+            // Always release the clear before joining, even on an assertion failure.
+            gate.release();
+            clear.join().unwrap();
+            restage.join().unwrap();
+            assert!(arrived, "the clear never reached its index cleanup");
+            assert!(fenced, "the publication fence must cover auxiliary cleanup");
         });
         let index = backend.state.info_service.read();
         assert!(index.type_index.var_index.contains("new_var"));

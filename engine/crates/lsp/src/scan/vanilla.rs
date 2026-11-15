@@ -20,6 +20,8 @@ type VanillaIndexPayload = (
     cwtools_info::vanilla_cache::VanillaCacheAux,
 );
 type VanillaIndexResult = Result<VanillaIndexPayload, FileError>;
+/// Test override for the base-game index load (`vanilla_loader_override`).
+#[cfg(test)]
 pub(crate) type VanillaLoader = fn(
     &std::path::Path,
     &RuleSet,
@@ -28,6 +30,17 @@ pub(crate) type VanillaLoader = fn(
     &str,
     Option<&cwtools_file_manager::file_manager::LayerShadow>,
 ) -> VanillaIndexResult;
+
+/// Test override for the merge's file-index walk (`file_index_builder_override`).
+#[cfg(test)]
+pub(crate) type FileIndexBuilder = fn(
+    &std::path::Path,
+    &[std::path::PathBuf],
+    &[String],
+    &[String],
+    &[String],
+    Option<&cwtools_file_manager::file_manager::LayerShadow>,
+) -> Result<cwtools_info::FileIndex, FileError>;
 
 pub(crate) fn index_vanilla_dir(
     dir: &std::path::Path,
@@ -188,14 +201,13 @@ impl Backend {
         &self,
         data: cwtools_info::vanilla_cache::VanillaCacheData,
     ) -> usize {
-        self.stage_vanilla_payload_transaction(data, None, || {})
+        self.stage_vanilla_payload_transaction(data, None)
     }
 
-    fn stage_vanilla_payload_transaction<F: FnOnce()>(
+    fn stage_vanilla_payload_transaction(
         &self,
         data: cwtools_info::vanilla_cache::VanillaCacheData,
         rules_shape: Option<&str>,
-        after_payload_staged: F,
     ) -> usize {
         let cwtools_info::vanilla_cache::VanillaCacheData { per_type, aux } = data;
         let cwtools_info::vanilla_cache::VanillaCacheAux {
@@ -220,7 +232,8 @@ impl Backend {
         vanilla.var_names = Some(Arc::new(var_names));
         vanilla.scripted_loc_names = Some(Arc::new(scripted_loc_names));
         vanilla.scripted_gui_names = Some(Arc::new(scripted_gui_names));
-        after_payload_staged();
+        #[cfg(test)]
+        self.hold(crate::state::HoldPoint::VanillaStageAfterPayload);
         vanilla.rules_shape = rules_shape.map(str::to_owned);
         self.merge_vanilla_dynamic_values(complex_enum_values, value_set_values);
         drop(vanilla);
@@ -233,7 +246,7 @@ impl Backend {
         data: cwtools_info::vanilla_cache::VanillaCacheData,
         rules_shape: &str,
     ) -> usize {
-        self.stage_vanilla_payload_transaction(data, Some(rules_shape), || {})
+        self.stage_vanilla_payload_transaction(data, Some(rules_shape))
     }
 
     /// Whether the held base-game data exists and was not built under another ruleset shape.
@@ -258,6 +271,13 @@ impl Backend {
     }
 
     pub(crate) fn merge_pending_vanilla_index_versioned(&self) -> Result<u64, FileError> {
+        #[cfg(test)]
+        {
+            let build = *self.state.file_index_builder_override.lock();
+            if let Some(build) = build {
+                return self.merge_pending_vanilla_index_with_revision(build);
+            }
+        }
         self.merge_pending_vanilla_index_with_revision(
             |workspace_root, parent_roots, ignore_files, ignore_dirs, vanilla_paths, shadow| {
                 cwtools_driver::build_file_index_with_vanilla_shadow(
@@ -524,17 +544,6 @@ impl Backend {
         force_rebuild: bool,
         quiet: bool,
     ) -> Result<(), FileError> {
-        self.ensure_vanilla_index_with_loader(progress, force_rebuild, quiet, None)
-            .await
-    }
-
-    pub(crate) async fn ensure_vanilla_index_with_loader(
-        &self,
-        progress: Option<&CommandProgress>,
-        force_rebuild: bool,
-        quiet: bool,
-        loader: Option<VanillaLoader>,
-    ) -> Result<(), FileError> {
         let ruleset_opt = self.state.rules.read().ruleset.clone();
         if !force_rebuild && self.base_game_is_current(ruleset_opt.as_deref()) {
             return Ok(());
@@ -664,22 +673,26 @@ impl Backend {
         let index_dir = dir.clone();
         let cache_game = game.clone();
         let shadow = replacement_shadow.clone();
+        #[cfg(test)]
+        let loader = *self.state.vanilla_loader_override.lock();
         let join_result = tokio::task::spawn_blocking(move || {
             let shadow = if has_vanilla_replacements {
                 shadow.as_ref()
             } else {
                 None
             };
+            #[cfg(test)]
             if let Some(loader) = loader {
-                loader(
+                return loader(
                     &index_dir,
                     &ruleset,
                     &table,
                     parse_cache_dir.as_deref(),
                     &cache_game,
                     shadow,
-                )
-            } else if let Some(shadow) = shadow {
+                );
+            }
+            if let Some(shadow) = shadow {
                 index_vanilla_dir_with_shadow(
                     &index_dir,
                     &ruleset,
@@ -1468,25 +1481,29 @@ mod tests {
         };
         let first = payload("first");
         let second = payload("second");
-        let (start_second, second_started) = std::sync::mpsc::channel();
-        let (ack_second, second_acknowledged) = std::sync::mpsc::channel();
+        let gate = crate::state::HoldGate::new(crate::state::HoldPoint::VanillaStageAfterPayload);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
         std::thread::scope(|scope| {
-            let backend_ref = &backend;
-            scope.spawn(move || {
-                second_started.recv().unwrap();
-                ack_second.send(()).unwrap();
-                backend_ref.stage_vanilla_payload_under(second, "second_shape");
-            });
-            backend.stage_vanilla_payload_transaction(first, Some("first_shape"), || {
-                start_second.send(()).unwrap();
-                second_acknowledged
-                    .recv_timeout(std::time::Duration::from_secs(2))
-                    .unwrap();
-                assert!(
-                    backend.state.vanilla_state.try_lock().is_none(),
-                    "staging must retain its payload fence until shape and values are set"
-                );
-            });
+            let staging_first = scope
+                .spawn(|| backend.stage_vanilla_payload_transaction(first, Some("first_shape")));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !gate.has_arrived() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let arrived = gate.has_arrived();
+            // Parked after the payload is in place: the fence must still be held.
+            let fenced = arrived && backend.state.vanilla_state.try_lock().is_none();
+            let staging_second =
+                scope.spawn(|| backend.stage_vanilla_payload_under(second, "second_shape"));
+            // Always release the first stage before joining, even on an assertion failure.
+            gate.release();
+            staging_first.join().unwrap();
+            staging_second.join().unwrap();
+            assert!(arrived, "the first stage never reached its payload point");
+            assert!(
+                fenced,
+                "staging must retain its payload fence until shape and values are set"
+            );
         });
         let vanilla = backend.state.vanilla_state.lock();
         assert_eq!(vanilla.rules_shape.as_deref(), Some("second_shape"));

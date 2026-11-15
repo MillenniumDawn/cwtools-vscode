@@ -27,12 +27,16 @@ pub(crate) use crate::loc_text::LocText;
 /// The open-buffer uses of a scan have one inside their rayon region (#1152), and its
 /// type-uses merge has one before it takes the `type_uses` write guard (#1163).
 /// A scan has one right after it releases its type index snapshot (#1321).
-/// The base-game merge has one after its filesystem work, before its locks.
+/// The base-game merge has one after its filesystem work, before its locks. Staging
+/// has one after its payload is in place and clearing one before its index cleanup,
+/// both inside the publication fence.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
     ScanAfterVanilla,
     VanillaMergeIo,
+    VanillaStageAfterPayload,
+    VanillaClearBeforeInfo,
     Pass2Before,
     Pass2Mid,
     Pass2After,
@@ -376,6 +380,14 @@ pub(crate) struct DocumentState {
     pub(crate) navigation_snapshot_budget_override: parking_lot::Mutex<Option<usize>>,
     #[cfg(test)]
     pub(crate) workspace_scan_budget_override: parking_lot::Mutex<Option<u64>>,
+    #[cfg(test)]
+    pub(crate) loc_scan_budget_override:
+        parking_lot::Mutex<Option<cwtools_file_manager::file_manager::ScanBudget>>,
+    #[cfg(test)]
+    pub(crate) vanilla_loader_override: parking_lot::Mutex<Option<crate::scan::VanillaLoader>>,
+    #[cfg(test)]
+    pub(crate) file_index_builder_override:
+        parking_lot::Mutex<Option<crate::scan::FileIndexBuilder>>,
     #[cfg(test)]
     pub(crate) scan_source_reads: std::sync::atomic::AtomicUsize,
     pub(crate) settings_generation: AtomicU64,
@@ -1943,6 +1955,12 @@ impl DocumentState {
             navigation_snapshot_budget_override: parking_lot::Mutex::new(None),
             #[cfg(test)]
             workspace_scan_budget_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            loc_scan_budget_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            vanilla_loader_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            file_index_builder_override: parking_lot::Mutex::new(None),
             #[cfg(test)]
             scan_source_reads: std::sync::atomic::AtomicUsize::new(0),
             settings_generation: AtomicU64::new(0),

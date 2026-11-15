@@ -318,15 +318,9 @@ impl Backend {
 
     #[tracing::instrument(skip_all)]
     pub(crate) async fn rebuild_and_publish_loc(&self, root_path: &std::path::Path) -> bool {
-        self.rebuild_and_publish_loc_with_budget(root_path, ScanBudget::default())
-            .await
-    }
-
-    async fn rebuild_and_publish_loc_with_budget(
-        &self,
-        root_path: &std::path::Path,
-        budget: ScanBudget,
-    ) -> bool {
+        let budget = ScanBudget::default();
+        #[cfg(test)]
+        let budget = (*self.state.loc_scan_budget_override.lock()).unwrap_or(budget);
         let (loc_languages, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
@@ -708,18 +702,15 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
+            *backend.state.loc_scan_budget_override.lock() = Some(ScanBudget {
+                max_files: 1,
+                ..Default::default()
+            });
             assert!(
-                !backend
-                    .rebuild_and_publish_loc_with_budget(
-                        workspace.path(),
-                        ScanBudget {
-                            max_files: 1,
-                            ..Default::default()
-                        },
-                    )
-                    .await,
+                !backend.rebuild_and_publish_loc(workspace.path()).await,
                 "{failed_layer} discovery should fail"
             );
+            *backend.state.loc_scan_budget_override.lock() = None;
             assert!(Arc::ptr_eq(
                 backend.state.loc_index.read().as_ref().unwrap(),
                 &previous_index,
