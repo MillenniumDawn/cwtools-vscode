@@ -210,12 +210,14 @@ impl Backend {
 
         let text = self.file_text_for(&uri).await;
         let position_encoding = self.position_encoding();
-        let lines = text
-            .as_deref()
-            .map(|text| DocLines::new(text, position_encoding.clone()));
-        if let (Some(text), Some(lines)) = (text.as_deref(), lines.as_ref())
-            && let Some((_, range)) = Self::at_var_rename_target(text, lines, pos)
-        {
+        let variable_range = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::PrepareRenameWalk);
+            let text = text.as_deref()?;
+            let lines = DocLines::new(text, position_encoding.clone());
+            Self::at_var_rename_target(text, &lines, pos).map(|(_, range)| range)
+        });
+        if let Some(range) = variable_range {
             return Ok(Some(PrepareRenameResponse::Range(range)));
         }
 
@@ -223,27 +225,28 @@ impl Backend {
             .loc_rename_key_at_cursor(&uri, pos, &logical_path)
             .await?
         {
-            // `lines` is `text.as_deref().map(..)`, so it is `Some` on exactly
-            // the same condition and the index answers this without the
-            // document rescan `lsp_pos_to_source_in_text` would do (#471).
-            let token = if let (Some(t), Some(lines)) = (text.as_deref(), lines.as_ref()) {
-                let col = lines.source_column(pos);
-                word_at_position(t, pos.line, col as u32).unwrap_or_else(|| key_lower.clone())
-            } else {
-                key_lower.clone()
-            };
-            let range = prepare_rename_range(text.as_deref(), pos, &token, &position_encoding);
+            let range = tokio::task::block_in_place(|| {
+                let token = if let Some(t) = text.as_deref() {
+                    let lines = DocLines::new(t, position_encoding.clone());
+                    let col = lines.source_column(pos);
+                    word_at_position(t, pos.line, col as u32).unwrap_or_else(|| key_lower.clone())
+                } else {
+                    key_lower.clone()
+                };
+                prepare_rename_range(text.as_deref(), pos, &token, &position_encoding)
+            });
             return Ok(Some(PrepareRenameResponse::Range(range)));
         }
 
-        let type_ref = self.type_ref_at_cursor(&uri, pos, &logical_path);
-
-        if let Some((_, instance_name)) = type_ref {
-            let range =
-                prepare_rename_range(text.as_deref(), pos, &instance_name, &position_encoding);
-            return Ok(Some(PrepareRenameResponse::Range(range)));
-        }
-        Ok(None)
+        tokio::task::block_in_place(|| {
+            let type_ref = self.type_ref_at_cursor(&uri, pos, &logical_path);
+            if let Some((_, instance_name)) = type_ref {
+                let range =
+                    prepare_rename_range(text.as_deref(), pos, &instance_name, &position_encoding);
+                return Ok(Some(PrepareRenameResponse::Range(range)));
+            }
+            Ok(None)
+        })
     }
 
     /// `lines` is built from the document's text, so it is also the line
@@ -514,14 +517,21 @@ impl Backend {
         let Some(text) = self.file_text_for(uri).await else {
             return Ok(None);
         };
-        let scan =
-            self.scan_loc_rename_file(uri, &text, &HashMap::from([(key.clone(), key.clone())]))?;
-        Ok(scan
-            .edits
-            .iter()
-            .flat_map(|(_, edits)| edits)
-            .any(|edit| edit.range.start <= pos && pos <= edit.range.end)
-            .then_some(key))
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::LocRenameScanWalk);
+            let scan = self.scan_loc_rename_file(
+                uri,
+                &text,
+                &HashMap::from([(key.clone(), key.clone())]),
+            )?;
+            Ok(scan
+                .edits
+                .iter()
+                .flat_map(|(_, edits)| edits)
+                .any(|edit| edit.range.start <= pos && pos <= edit.range.end)
+                .then_some(key))
+        })
     }
 
     async fn collect_loc_rename_usages(
