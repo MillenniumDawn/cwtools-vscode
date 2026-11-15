@@ -36,6 +36,7 @@
 
 * Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
 * Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
+* Require successful main-branch CI for the exact published commit before building or publishing. CI runs for pushes to main no longer cancel each other. (#1215)
 * Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
 * Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
 * Verify the publishing build checks out the requested commit while keeping the Rust lockfile enforced.

@@ -104,8 +104,11 @@ jobs:
     name: Verify publish inputs
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
+    # CI and Publish start together. Allow up to 90 minutes for CI.
+    timeout-minutes: 95
+    permissions:
+      contents: read
+      actions: read
     outputs:
       has_vsce: ${{ steps.tokens.outputs.has_vsce }}
       has_open_vsx: ${{ steps.tokens.outputs.has_open_vsx }}
@@ -145,6 +148,39 @@ jobs:
             echo "::error::cannot publish release $TAG: $missing not set."
             exit 1
           fi
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require successful CI for the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # CI can still be queued, running, or not yet visible when Publish starts.
+          # Retry only missing or pending CI, never errors or failed CI.
+          retry="re-run CI for $GITHUB_SHA, then re-run the failed Publish jobs"
+          for attempt in $(seq 1 90); do
+            if ! response=$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100"); then
+              echo "::error::Unable to retrieve CI results for $GITHUB_SHA."
+              exit 1
+            fi
+            if printf '%s' "$response" | python3 scripts/build/release_decisions.py; then
+              exit 0
+            else
+              result=$?
+            fi
+            if [ "$result" -ne 2 ]; then
+              echo "::error::CI for $GITHUB_SHA failed, was cancelled, or returned invalid results; $retry."
+              exit 1
+            fi
+            if [ "$attempt" -lt 90 ]; then
+              echo "CI not yet successful; retrying in 60 seconds ($attempt/90)."
+              sleep 60
+            fi
+          done
+          echo "::error::CI for $GITHUB_SHA did not finish within the polling window; $retry."
+          exit 1
 
   # Build the Rust server natively on each platform. To add or remove a
   # platform, edit the matrix below -- the staging step is platform-agnostic.
