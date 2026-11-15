@@ -1,7 +1,5 @@
 ### Unreleased
 
-- Add regression coverage for stale ASTs in dependent validation sweeps.
-
 #### Engine
 
 * Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
@@ -12,6 +10,7 @@
 * Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
 * Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)
 * Keep document tokens from the accepted validation when an older validation finishes late. (#1256)
+* Cover a dependent validation sweep that snapshots current text with an older syntax tree: it neither publishes stale diagnostics nor replaces newer type uses. (#1236)
 * Refresh closed-file diagnostics when ignored error codes change. (#1257)
 * Replace the active rules when a rules directory loads successfully but is empty, while retaining the last good rules on input acquisition failure. (#1258)
 * Rebuild base-game value sets and variables when their collection rules change. (#1213)
