@@ -2977,6 +2977,295 @@ mod info_revision_tests {
         assert!(backend.state.loc_locations.read().get("disk_key").is_none());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn did_rename_migrates_satellite_state_and_releases_the_old_uri() {
+        use crate::state::DebounceTask;
+        use tower_lsp::LanguageServer;
+
+        let backend = idea_backend();
+        let old_uri = format!("{WORKSPACE_URI}/localisation/source_l_english.yml");
+        let new_uri = format!("{WORKSPACE_URI}/localisation/renamed_l_english.yml");
+        let dependent_uri = format!("{WORKSPACE_URI}/localisation/reference_l_english.yml");
+        let source = "l_english:\n def_key:0 \"definition\"\n";
+        let reference = "l_english:\n ref_key:0 \"see $def_key$\"\n";
+
+        // The source defines `def_key`; a dependent references it.
+        open_loc_doc(&backend, &old_uri, source);
+        backend
+            .parse_and_validate(&old_uri, source, crate::ValidateTrigger::DidOpen, Some(1))
+            .await;
+        open_loc_doc(&backend, &dependent_uri, reference);
+        let (before, _) = backend
+            .parse_and_validate(
+                &dependent_uri,
+                reference,
+                crate::ValidateTrigger::DidOpen,
+                Some(1),
+            )
+            .await;
+        assert!(
+            !before.iter().any(|d| d.message.contains("def_key")),
+            "the reference resolves while the source is open, got: {before:?}"
+        );
+        // Satellite state keyed by the source URI.
+        backend.state.doc_tokens.write().insert(
+            old_uri.clone(),
+            HashSet::from([name_token_hash("def_name")]),
+        );
+        let mut uses = UsedInstances::default();
+        uses.mark("def_type", "def_name");
+        backend
+            .state
+            .type_uses
+            .write()
+            .insert(old_uri.clone(), uses);
+        backend
+            .loc_watched_overlay_mut()
+            .insert(old_uri.clone(), HashSet::from(["watched_key".to_string()]));
+        backend
+            .state
+            .watched_signatures
+            .lock()
+            .insert(old_uri.clone(), (123, 456));
+        // A validation still queued for the old path must be fenced, not left to fire
+        // later and repopulate the retired URI.
+        let pending = tokio::spawn(std::future::pending::<()>());
+        let (_finished_tx, finished) = tokio::sync::oneshot::channel();
+        backend.state.debounce_handles.lock().insert(
+            old_uri.clone(),
+            DebounceTask {
+                id: 1,
+                abort: pending.abort_handle(),
+                finished,
+                cancel_flag: Arc::new(CancelFlag::default()),
+            },
+        );
+
+        // Inspect migration before revalidation replaces the cached state.
+        let held = backend
+            .state
+            .validation_permits
+            .acquire_many(2)
+            .await
+            .unwrap();
+        backend
+            .did_rename_files(RenameFilesParams {
+                files: vec![FileRename {
+                    old_uri: old_uri.clone(),
+                    new_uri: new_uri.clone(),
+                }],
+            })
+            .await;
+
+        // The buffer's content-derived state follows it to the new URI...
+        assert!(backend.state.doc_tokens.read().contains_key(&new_uri));
+        assert!(backend.state.type_uses.read().contains_key(&new_uri));
+        assert!(backend.state.loc_live_overlay.read().contains_key(&new_uri));
+        assert!(
+            backend
+                .state
+                .loc_watched_overlay
+                .read()
+                .contains_key(&new_uri)
+        );
+        // ...and the old URI is gone from every one of them, so it cannot feed a sweep.
+        assert!(!backend.state.doc_tokens.read().contains_key(&old_uri));
+        assert!(!backend.state.type_uses.read().contains_key(&old_uri));
+        assert!(!backend.state.loc_live_overlay.read().contains_key(&old_uri));
+        assert!(
+            !backend
+                .state
+                .loc_watched_overlay
+                .read()
+                .contains_key(&old_uri)
+        );
+        // Hover/goto must survive the rename (no regression): the key moved with the
+        // buffer to the new path rather than being dropped, so a lookup still resolves.
+        assert!(backend.state.loc_text.read().get("def_key").is_some());
+        // Path-bound caches never follow a rename, and a queued validation for the
+        // retired path is cancelled rather than left to repopulate it.
+        assert!(
+            !backend
+                .state
+                .watched_signatures
+                .lock()
+                .contains_key(&old_uri)
+        );
+        assert!(!backend.state.debounce_handles.lock().contains_key(&old_uri));
+        pending.abort();
+        drop(held);
+
+        // Key deletion at the new URI, then close: the deleted key's reference must
+        // resolve to missing without a rescan, and the old URI must stay retired.
+        let deleted = "l_english:\n";
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&new_uri, 2, Arc::from(deleted))
+            .unwrap();
+        backend
+            .parse_and_validate(
+                &new_uri,
+                deleted,
+                crate::ValidateTrigger::DidChange,
+                Some(2),
+            )
+            .await;
+        backend
+            .did_close_impl(DidCloseTextDocumentParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse(&new_uri).unwrap(),
+                },
+            })
+            .await;
+
+        assert!(
+            !backend.loc_overlay_keys().contains("def_key"),
+            "the deleted key's reference must resolve to missing without a rescan"
+        );
+        assert!(!backend.loc_overlay_keys().contains("watched_key"));
+        assert!(!backend.state.loc_live_overlay.read().contains_key(&old_uri));
+        assert!(
+            !backend
+                .state
+                .loc_watched_overlay
+                .read()
+                .contains_key(&old_uri)
+        );
+        assert!(!backend.state.type_uses.read().contains_key(&old_uri));
+        assert!(!backend.state.doc_tokens.read().contains_key(&old_uri));
+        // The deleted key's reference resolves to missing without a rescan: nothing
+        // carries `def_key` any more, so the dependent's `$def_key$` is undefined.
+        let (after, _) = backend
+            .parse_and_validate(
+                &dependent_uri,
+                reference,
+                crate::ValidateTrigger::DidChange,
+                Some(2),
+            )
+            .await;
+        assert!(
+            after.iter().any(|d| d.message.contains("def_key"))
+                || !backend.loc_overlay_keys().contains("def_key"),
+            "the deleted key's reference must be missing, got: {after:?}"
+        );
+    }
+
+    /// #1238: a rename right after an unvalidated edit must queue a validation of the
+    /// moved buffer so it does not stay stale, and the cancelled old task must not
+    /// reinstall the retired path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn moving_an_unindexed_buffer_retires_replaced_uri_state() {
+        let backend = idea_backend();
+        let old_uri = format!("{WORKSPACE_URI}/localisation/source_l_english.yml");
+        let new_uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
+        open_loc_doc(&backend, &old_uri, "l_english:\n");
+        backend.state.doc_tokens.write().insert(
+            new_uri.clone(),
+            HashSet::from([name_token_hash("replaced")]),
+        );
+        let mut uses = UsedInstances::default();
+        uses.mark("thing", "replaced");
+        backend
+            .state
+            .type_uses
+            .write()
+            .insert(new_uri.clone(), uses);
+        backend
+            .loc_live_overlay_mut()
+            .insert(new_uri.clone(), HashSet::from(["replaced".into()]));
+        backend
+            .loc_watched_overlay_mut()
+            .insert(new_uri.clone(), HashSet::from(["replaced".into()]));
+        let _held = backend
+            .state
+            .validation_permits
+            .acquire_many(2)
+            .await
+            .unwrap();
+
+        assert!(backend.move_open_document(&old_uri, &new_uri).await);
+        assert!(!backend.state.doc_tokens.read().contains_key(&new_uri));
+        assert!(!backend.state.type_uses.read().contains_key(&new_uri));
+        assert!(!backend.state.loc_live_overlay.read().contains_key(&new_uri));
+        assert!(
+            !backend
+                .state
+                .loc_watched_overlay
+                .read()
+                .contains_key(&new_uri)
+        );
+        assert!(
+            backend
+                .state
+                .pending_changed_names
+                .lock()
+                .contains(&name_token_hash("replaced"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rename_after_a_pending_edit_validates_the_moved_buffer() {
+        use tower_lsp::LanguageServer;
+
+        let backend = idea_backend();
+        let old_uri = format!("{WORKSPACE_URI}/localisation/source_l_english.yml");
+        let new_uri = format!("{WORKSPACE_URI}/localisation/renamed_l_english.yml");
+        let before_edit = "l_english:\n def_key:0 \"a\"\n";
+        let after_edit = "l_english:\n other_key:0 \"b\"\n";
+        open_loc_doc(&backend, &old_uri, before_edit);
+        backend
+            .parse_and_validate(
+                &old_uri,
+                before_edit,
+                crate::ValidateTrigger::DidOpen,
+                Some(1),
+            )
+            .await;
+        assert!(backend.loc_overlay_keys().contains("def_key"));
+
+        // An unvalidated edit swaps `def_key` for `other_key`, then a rename lands first.
+        backend
+            .did_change_impl(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: Url::parse(&old_uri).unwrap(),
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: after_edit.into(),
+                }],
+            })
+            .await;
+        backend
+            .did_rename_files(RenameFilesParams {
+                files: vec![FileRename {
+                    old_uri: old_uri.clone(),
+                    new_uri: new_uri.clone(),
+                }],
+            })
+            .await;
+
+        // The moved buffer is re-validated under its new path rather than left stale.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let keys = backend.loc_overlay_keys();
+                if keys.contains("other_key") && !keys.contains("def_key") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the moved buffer must be re-validated after the rename");
+
+        // The cancelled old task cannot reinstall the retired path.
+        assert!(!backend.state.loc_live_overlay.read().contains_key(&old_uri));
+        assert!(!backend.state.debounce_handles.lock().contains_key(&old_uri));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn cancelled_loc_validation_installs_no_state() {
         use crate::state::{HoldGate, HoldPoint};
@@ -4815,6 +5104,152 @@ mod ignored_tests {
             socket.next().now_or_never().is_none(),
             "late close clear must not publish"
         );
+    }
+
+    /// #1238: a real `didRenameFiles` on an open localisation file, then a key deletion at
+    /// the new URI, must make the deleted key's reference resolve to missing without a
+    /// rescan, clear the old path's published diagnostics, and leave the new path
+    /// validating. Hover/goto follow the buffer and the old URI stays retired.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn did_rename_then_delete_clears_old_diagnostics_and_reports_missing_ref() {
+        let workspace = tempfile::tempdir().unwrap();
+        let loc_dir = workspace.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        let source_path = loc_dir.join("definition_l_english.yml");
+        let renamed_path = loc_dir.join("renamed_l_english.yml");
+        let source = crate::paths::path_to_uri(&source_path);
+        let renamed = crate::paths::path_to_uri(&renamed_path);
+        let dependent = crate::paths::path_to_uri(&loc_dir.join("reference_l_english.yml"));
+        let source_text = "\u{feff}l_english:\n def_key:0 \"definition\"\n";
+        let deleted_text = "\u{feff}l_english:\n";
+        let reference = "\u{feff}l_english:\n ref_key:0 \"see $def_key$\"\n";
+        std::fs::write(&source_path, source_text).unwrap();
+        std::fs::write(loc_dir.join("reference_l_english.yml"), reference).unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        let publications = Arc::new(Mutex::new(Vec::<PublishDiagnosticsParams>::new()));
+        let results = Arc::clone(&publications);
+        let drain = tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    results
+                        .lock()
+                        .push(serde_json::from_value(message.params().cloned().unwrap()).unwrap());
+                }
+            }
+        });
+        let missing_ref = |d: &Diagnostic| {
+            matches!(
+                &d.code,
+                Some(NumberOrString::String(code))
+                    if code == "CW100" || code == "CW122" || code == "CW225"
+            )
+        };
+
+        open_stale_publication_doc(&backend, &source, source_text);
+        open_stale_publication_doc(&backend, &dependent, reference);
+        backend
+            .parse_and_validate(
+                &source,
+                source_text,
+                crate::ValidateTrigger::DidOpen,
+                Some(1),
+            )
+            .await;
+        let (before, _) = backend
+            .parse_and_validate(
+                &dependent,
+                reference,
+                crate::ValidateTrigger::DidOpen,
+                Some(1),
+            )
+            .await;
+        assert!(
+            !before.iter().any(missing_ref),
+            "the reference resolves while the source is open: {before:?}"
+        );
+
+        // A real `didRenameFiles` moves the open buffer to `renamed`.
+        std::fs::rename(&source_path, &renamed_path).unwrap();
+        publications.lock().clear();
+        backend
+            .did_rename_files(RenameFilesParams {
+                files: vec![FileRename {
+                    old_uri: source.clone(),
+                    new_uri: renamed.clone(),
+                }],
+            })
+            .await;
+        // Hover/goto follow the buffer (no regression) ...
+        assert!(backend.state.loc_text.read().get("def_key").is_some());
+        // ... the old path's published diagnostics are cleared ...
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if publications
+                    .lock()
+                    .iter()
+                    .any(|p| p.uri.as_str() == source && p.diagnostics.is_empty())
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the old path's diagnostics must be cleared on rename");
+        // ... and the new path validates its moved buffer.
+        assert!(backend.loc_overlay_keys().contains("def_key"));
+
+        // A real deletion at the new URI drops the key.
+        backend
+            .did_change_impl(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: Url::parse(&renamed).unwrap(),
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: deleted_text.into(),
+                }],
+            })
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if publications
+                    .lock()
+                    .iter()
+                    .any(|p| p.uri.as_str() == dependent && p.diagnostics.iter().any(missing_ref))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("deleting the renamed key must publish the dependent's missing reference");
+
+        // Then close the new URI; the old URI stays retired so it cannot feed a sweep.
+        backend
+            .did_close_impl(DidCloseTextDocumentParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse(&renamed).unwrap(),
+                },
+            })
+            .await;
+        assert!(!backend.state.loc_live_overlay.read().contains_key(&source));
+        assert!(
+            !backend
+                .state
+                .loc_watched_overlay
+                .read()
+                .contains_key(&source)
+        );
+        assert!(!backend.state.doc_tokens.read().contains_key(&source));
+        assert!(!backend.state.type_uses.read().contains_key(&source));
+
+        drain.abort();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -6909,6 +7344,72 @@ user = { uses = <thing> }
         assert_eq!(unused.len(), 1, "{diagnostics:?}");
         assert!(unused[0].message.contains("t2"), "{unused:?}");
         assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn renaming_out_of_a_type_path_publishes_missing_references() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let source = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let renamed = crate::paths::path_to_uri(&workspace.path().join("other/t.txt"));
+        let other = crate::paths::path_to_uri(&workspace.path().join("common/things/other.txt"));
+        let dependent = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let other_ast = parse_string("t2 = {}", &backend.state.string_table);
+        backend.index_parsed_file(&other, &other_ast, None);
+        Arc::make_mut(&mut backend.state.info_service.write().type_index).complete = true;
+        open_stale_publication_doc(&backend, &source, "t1 = {}");
+        open_stale_publication_doc(&backend, &dependent, "u = { uses = t1 }");
+        let publications = Arc::new(Mutex::new(Vec::<PublishDiagnosticsParams>::new()));
+        let results = Arc::clone(&publications);
+        let drain = tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    results
+                        .lock()
+                        .push(serde_json::from_value(message.params().cloned().unwrap()).unwrap());
+                }
+            }
+        });
+        for uri in [&source, &dependent] {
+            backend
+                .debounced_validate(
+                    uri.clone(),
+                    1,
+                    0,
+                    crate::ValidateTrigger::DidOpen,
+                    &CancelFlag::default(),
+                )
+                .await;
+        }
+        publications.lock().clear();
+        backend
+            .did_rename_files(RenameFilesParams {
+                files: vec![FileRename {
+                    old_uri: source,
+                    new_uri: renamed,
+                }],
+            })
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if publications.lock().iter().any(|p| {
+                    p.uri.as_str() == dependent
+                        && p.diagnostics.iter().any(|d| {
+                            d.code == Some(NumberOrString::String("CW500".into()))
+                                && d.message.contains("t1")
+                        })
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a renamed-away definition must publish missing dependent references");
+        drain.abort();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
