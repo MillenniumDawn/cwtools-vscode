@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.9
+
 #### Engine
 
 * Show one hover line per language. A mod key that replaces a base-game key used to list both texts, and the mod's own text is now the only one shown. Hovering a definition's key shows the title its type's localisation binds, such as an explicit `name` field, ahead of the `<key>` guess. A reference to a type titled by its own name, such as a building, no longer shows that title twice.
