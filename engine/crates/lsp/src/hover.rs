@@ -507,7 +507,10 @@ pub(crate) fn append_type_localisation(
     }
     for key in keys {
         if let Some(translations) = loc_text.get(key.as_str()) {
-            md.push_str("\n\n---\n\n**Localisation**:");
+            md.push_str(&format!(
+                "\n\n---\n\n**{}**:",
+                cwtools_i18n::t(cwtools_i18n::Key::HoverLocalisation)
+            ));
             push_translations(md, translations);
             return true;
         }
