@@ -175,6 +175,20 @@ impl LocText {
         }
     }
 
+    /// Move translations without changing their rank, retiring any replaced destination.
+    pub(crate) fn rename_file(&mut self, old_uri: &str, new_uri: &str) {
+        if old_uri == new_uri {
+            return;
+        }
+        self.remove_file(new_uri);
+        let Some(id) = self.file_ids.remove(old_uri) else {
+            return;
+        };
+        self.file_ids.insert(Arc::from(new_uri), id);
+        self.ranks
+            .insert(Arc::from(new_uri), self.files[id as usize].rank);
+    }
+
     /// Drops the entries of every removed file and the keys left without one.
     fn sweep(&mut self) {
         let files = &self.files;
@@ -317,6 +331,34 @@ mod tests {
         assert!(map.get("gone").is_none());
         map.remove_file("file:///never-seen.yml");
         assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn rename_file_over_an_existing_target_replaces_it() {
+        let mut map = LocText::default();
+        map.insert(a("k"), "file:///a.yml", Lang::English, "from_a".into());
+        map.insert(a("k"), "file:///b.yml", Lang::French, "from_b".into());
+        map.rename_file("file:///a.yml", "file:///b.yml");
+        assert_eq!(
+            texts(&map, "k"),
+            Some(vec![(Lang::English, "from_a".to_string())]),
+            "the replaced target's entry must not survive the rename"
+        );
+        map.remove_file("file:///b.yml");
+        assert!(map.get("k").is_none(), "no phantom entry after removal");
+    }
+
+    #[test]
+    fn rename_file_to_the_same_uri_is_a_no_op() {
+        let mut map = LocText::default();
+        map.insert(a("k"), "file:///a.yml", Lang::English, "hi".into());
+        map.rename_file("file:///a.yml", "file:///a.yml");
+        assert_eq!(
+            texts(&map, "k"),
+            Some(vec![(Lang::English, "hi".to_string())])
+        );
+        map.remove_file("file:///a.yml");
+        assert!(map.get("k").is_none());
     }
 
     #[test]

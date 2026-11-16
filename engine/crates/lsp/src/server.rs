@@ -519,7 +519,7 @@ impl Backend {
 /// unit tests can drive them directly without a worker.
 impl Backend {
     pub(crate) async fn move_open_document(&self, old_uri: &str, new_uri: &str) -> bool {
-        let _publication = self.state.diagnostic_publication_lock.lock().await;
+        let publication = self.state.diagnostic_publication_lock.lock().await;
         let mut docs = self.state.documents.lock();
         let Some(content_hash) = docs.content_hash(old_uri) else {
             return false;
@@ -534,16 +534,144 @@ impl Backend {
             .is_err()
         {
             self.state.fixable_edits.lock().remove(old_uri);
+            // A rejected move has already removed the old buffer.
+            drop(docs);
+            self.relocate_uri_satellite_state(old_uri, None);
             return false;
         }
-        let mut fixable_edits = self.state.fixable_edits.lock();
-        if let Some(edits) = fixable_edits.remove(old_uri)
-            && edits.version == Some(document_version)
-            && edits.content_hash == Some(content_hash)
         {
-            fixable_edits.insert(new_uri.to_string(), edits);
+            let mut fixable_edits = self.state.fixable_edits.lock();
+            if let Some(edits) = fixable_edits.remove(old_uri)
+                && edits.version == Some(document_version)
+                && edits.content_hash == Some(content_hash)
+            {
+                fixable_edits.insert(new_uri.to_string(), edits);
+            }
         }
+        // Validation acquires doc_tokens before documents.
+        drop(docs);
+        self.relocate_uri_satellite_state(old_uri, Some(new_uri));
+        drop(publication);
+        // Revalidate pending edits and rules that depend on the new path.
+        let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.spawn_debounced_validate(
+            new_uri.to_string(),
+            document_version,
+            generation,
+            ValidateTrigger::DidChange,
+            0,
+        );
         true
+    }
+
+    /// Move URI-keyed state, or retire it when the buffer could not be moved.
+    fn relocate_uri_satellite_state(&self, old_uri: &str, new_uri: Option<&str>) {
+        {
+            let mut doc_tokens = self.state.doc_tokens.write();
+            let tokens = doc_tokens.remove(old_uri);
+            if let Some(new) = new_uri {
+                doc_tokens.remove(new);
+                if let Some(tokens) = tokens {
+                    doc_tokens.insert(new.to_string(), tokens);
+                }
+            }
+        }
+        let mut dropped_names: Vec<u64> = Vec::new();
+        {
+            let mut type_uses = self.state.type_uses.write();
+            let uses = type_uses.remove(old_uri);
+            let moved = uses.is_some();
+            let discarded = if let Some(new) = new_uri {
+                let replaced = type_uses.remove(new);
+                if let Some(uses) = uses {
+                    type_uses.insert(new.to_string(), uses);
+                }
+                replaced
+            } else {
+                uses
+            };
+            if moved || discarded.is_some() {
+                self.state
+                    .type_uses_revision
+                    .fetch_add(1, Ordering::Release);
+            }
+            if let Some(discarded) = discarded {
+                let gone: std::collections::HashSet<String> = discarded
+                    .changed_names(&Default::default())
+                    .into_iter()
+                    .collect();
+                dropped_names.extend(name_tokens(&gone));
+            }
+        }
+        {
+            let mut live = self.loc_live_overlay_mut();
+            let keys = live.remove(old_uri);
+            if let Some(new) = new_uri {
+                live.remove(new);
+                if let Some(keys) = keys {
+                    live.insert(new.to_string(), keys);
+                }
+            }
+        }
+        {
+            let mut watched = self.loc_watched_overlay_mut();
+            let keys = watched.remove(old_uri);
+            if let Some(new) = new_uri {
+                watched.remove(new);
+                if let Some(keys) = keys {
+                    watched.insert(new.to_string(), keys);
+                }
+            }
+        }
+        {
+            let mut loc_text = self.state.loc_text.write();
+            match new_uri {
+                Some(new) => loc_text.rename_file(old_uri, new),
+                None => loc_text.remove_file(old_uri),
+            }
+        }
+        {
+            let mut loc_locations = self.state.loc_locations.write();
+            match new_uri {
+                Some(new) => loc_locations.rename_file(old_uri, new),
+                None => loc_locations.remove_file(old_uri),
+            }
+        }
+        // The new path may no longer export the old definitions.
+        {
+            let mut info = self.state.info_service.write();
+            dropped_names.extend(export_name_tokens(&info, old_uri));
+            info.clear_file(old_uri);
+        }
+        self.bump_info_revision();
+        if let Some(name) = self.remove_inline_script(old_uri) {
+            self.state
+                .pending_changed_names
+                .lock()
+                .insert(name_token_hash(&name));
+        }
+        if !dropped_names.is_empty() {
+            self.state
+                .pending_changed_names
+                .lock()
+                .extend(dropped_names);
+        }
+        // Path-bound caches never follow a rename.
+        self.state.watched_signatures.lock().remove(old_uri);
+        self.state.completion_generation.lock().remove(old_uri);
+        {
+            let mut fresh = self.state.fresh_ast_cache.lock();
+            if fresh.as_ref().is_some_and(|cached| cached.uri == old_uri) {
+                *fresh = None;
+            }
+        }
+        // The document version/hash checks reject any in-flight old-path install.
+        let stale_validation = self.state.debounce_handles.lock().remove(old_uri);
+        if let Some(validation) = stale_validation {
+            validation.cancel();
+        }
+        // Invalidate snapshot-derived caches keyed on this counter.
+        self.state.edit_generation.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Warn the user once per URI and reason that an open or change was
@@ -1424,6 +1552,12 @@ impl LanguageServer for Backend {
                 } else {
                     backend.invalidate_semantic_tokens(old);
                     backend.invalidate_semantic_tokens(new);
+                    // Closed files can also have URI-keyed index entries.
+                    let _publication = backend.state.diagnostic_publication_lock.lock().await;
+                    backend.relocate_uri_satellite_state(old, Some(new));
+                }
+                if let Ok(old_url) = Url::parse(old) {
+                    backend.publish_if_closed(old_url, Vec::new(), None).await;
                 }
             }
             backend.request_semantic_refresh().await;
