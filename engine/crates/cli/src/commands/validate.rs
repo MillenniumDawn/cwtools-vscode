@@ -113,8 +113,17 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     let game_id = parse_game(&game);
-    let parent_roots =
-        crate::run::resolve_parent_roots(&parent_roots, &directory, game_id, vanilla.as_deref());
+    // Explicit CLI/config parents keep precedence across watch reloads.
+    let parents_are_explicit = !parent_roots.is_empty();
+    let (parent_roots, parent_warnings) = crate::run::resolve_parent_roots_with_warnings(
+        &parent_roots,
+        &directory,
+        game_id,
+        vanilla.as_deref(),
+    );
+    for warning in &parent_warnings {
+        eprintln!("warn: {warning}");
+    }
 
     let rules_label = if rules.is_dir() {
         format!("directory {}", rules.display())
@@ -146,7 +155,7 @@ pub(super) fn run(args: ValidateArgs) {
     // in full rather than patching the last result: a changed file can move
     // diagnostics in any other (cross-file references, the CW239 use pass), and
     // the parse cache already keeps the unchanged files cheap.
-    let job = Job {
+    let mut job = Job {
         game,
         game_id,
         directory,
@@ -286,12 +295,39 @@ pub(super) fn run(args: ValidateArgs) {
 
     // A walk that failed on the first pass has nothing to watch: fall through
     // to the usual exit code. Errors in the report do not end a watch.
+    let mut last_parent_warnings = parent_warnings;
     if !discovery_failed
         && !discovery_incomplete
         && let Some(poller) = poller
     {
         drop(session);
         watch::follow(poller, diags, |poller| {
+            if !parents_are_explicit {
+                let (roots, warnings) = crate::run::resolve_parent_roots_with_warnings(
+                    &[],
+                    &job.directory,
+                    game_id,
+                    job.vanilla.as_deref(),
+                );
+                // Identical warnings were printed by an earlier pass.
+                if warnings != last_parent_warnings {
+                    for warning in &warnings {
+                        eprintln!("warn: {warning}");
+                    }
+                    last_parent_warnings = warnings;
+                }
+                if roots != job.parent_roots {
+                    job.parent_roots = roots;
+                    poller.retune_roots(watch::roots(
+                        &job.rules,
+                        &job.directory,
+                        &job.parent_roots,
+                        job.vanilla.as_deref(),
+                        &job.ignore_dirs,
+                        &job.ignore_files,
+                    ));
+                }
+            }
             let rerun = analyze(&job, false);
             if rerun.discovery_failed || rerun.discovery_incomplete || rerun.rules_unreadable {
                 eprintln!("warn: could not read the inputs; keeping the previous results");
