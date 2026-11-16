@@ -33,7 +33,7 @@ Both binaries drive the same pipeline.
 - `explain CWxxx` prints what one code means, `list-codes` prints the whole catalog, and `completions <shell>` writes a completion script.
 - Reports as text, CSV, JSON, GitHub Actions annotations or SARIF, with severity and code filters, hash baselines, and settings from a `cwtools.toml`.
 - `validate --file` and `--since <git-ref>` scope the report to the files you touched, for a pre-commit hook or a PR job.
-- `validate --watch` prints the report once, then re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, or `no change`. It reports as text, so it cannot combine with `--report-type`, `--output-file`, `--output-hashes` or `--since`.
+- `validate --watch` prints the report once, then re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, or `no change`. It reports as text, so it cannot combine with `--report-type`, `--output-file`, `--output-hashes` or `--since`. Every reload re-resolves the parents discovered from the workspace `descriptor.mod`'s dependencies, so a dependency edit takes effect without restarting; explicit `--parent`/config parents keep precedence and are resolved once. A launcher `.mod` file that is not under a watched root is read again on each reload instead of waking the watch by itself.
 
 Both reuse the on-disk caches: parsed ASTs (`.cwb`) and the base game index,
 each kept until its inputs change.

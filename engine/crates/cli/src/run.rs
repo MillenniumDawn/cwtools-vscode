@@ -45,6 +45,22 @@ pub(crate) fn resolve_parent_roots(
     game: Game,
     vanilla: Option<&Path>,
 ) -> Vec<PathBuf> {
+    let (roots, warnings) =
+        resolve_parent_roots_with_warnings(explicit_parents, workspace, game, vanilla);
+    for warning in warnings {
+        eprintln!("warn: {warning}");
+    }
+    roots
+}
+
+/// [`resolve_parent_roots`], still holding the warnings so a caller that
+/// re-resolves on a watch reload can print only the ones it has not printed yet.
+pub(crate) fn resolve_parent_roots_with_warnings(
+    explicit_parents: &[PathBuf],
+    workspace: &Path,
+    game: Game,
+    vanilla: Option<&Path>,
+) -> (Vec<PathBuf>, Vec<String>) {
     let entries = if !explicit_parents.is_empty() {
         let cwd = std::env::current_dir().unwrap_or_default();
         explicit_parents
@@ -58,23 +74,14 @@ pub(crate) fn resolve_parent_roots(
             })
             .collect::<Vec<_>>()
     } else {
-        let (roots, warnings) = cwtools_driver::parent_mods::discover_parent_roots(
+        return cwtools_driver::parent_mods::discover_parent_roots(
             workspace,
             &game.to_string(),
             vanilla,
             None,
         );
-        for warning in warnings {
-            eprintln!("warn: {warning}");
-        }
-        return roots;
     };
-    let (roots, warnings) =
-        cwtools_driver::parent_mods::resolve_parent_roots(&entries, Some(workspace), vanilla);
-    for warning in warnings {
-        eprintln!("warn: {warning}");
-    }
-    roots
+    cwtools_driver::parent_mods::resolve_parent_roots(&entries, Some(workspace), vanilla)
 }
 
 /// Resolve the run's config file, failing loudly on a broken one. `anchor` is
