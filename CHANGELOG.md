@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Show one hover line per language. A mod key that replaces a base-game key used to list both texts, and the mod's own text is now the only one shown. Hovering a definition's key shows the title its type's localisation binds, such as an explicit `name` field, ahead of the `<key>` guess. A reference to a type titled by its own name, such as a building, no longer shows that title twice.
 * Move localization and reference state when files are renamed, preserve hover and go-to-definition, and clear diagnostics at the old path. Revalidate pending edits and dependent references under the new path without waiting for a rescan. (#1238)
 * Refresh descriptor-derived parent mods on each watch reload, adding and removing watched roots without restarting. Explicit CLI and config parents keep precedence. (#1347)
 * Poll `validate --watch` through the loaders' own discovery instead of a copy of its rules, so hidden rules, explicit include folders, multi-mod members, ignore files and ignore dirs match what a pass reads. Resources are tracked by path only, so re-exporting art no longer revalidates, and the first poll after startup no longer reports a change when nothing was edited. (#1210, #1336)
