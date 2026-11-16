@@ -85,6 +85,8 @@ pub(crate) struct Poller {
     /// The loaded ruleset's folders; empty until the first load reports them.
     folders: Vec<String>,
     seen: u64,
+    /// The attempt's snapshot, adjusted when watched roots change.
+    handoff: Option<u64>,
 }
 
 impl Poller {
@@ -96,6 +98,7 @@ impl Poller {
             roots,
             folders: Vec::new(),
             seen,
+            handoff: None,
         }
     }
 
@@ -113,6 +116,20 @@ impl Poller {
             self.seen = after;
         }
         self.folders = folders;
+    }
+
+    /// Change watched roots without consuming edits saved after the attempt's snapshot.
+    pub(crate) fn retune_roots(&mut self, roots: Vec<Root>) {
+        let after = fingerprint(&roots, &self.folders);
+        if self.handoff == Some(self.current()) {
+            self.handoff = Some(after);
+        }
+        self.roots = roots;
+    }
+
+    /// Adopt the attempt's snapshot, leaving mid-pass edits pending.
+    fn settle(&mut self, snapshot: u64) {
+        self.seen = self.handoff.take().unwrap_or(snapshot);
     }
 
     fn current(&self) -> u64 {
@@ -146,6 +163,10 @@ impl Poller {
 /// result. `rerun` returns `None` when the pass could not read its inputs, which
 /// keeps the previous result, and may retune the poller with what that pass
 /// learned. Never returns: Ctrl-C ends the process.
+///
+/// Changes outside the watched roots do not wake this loop; launcher `.mod`
+/// files are outside them (unless a parent root does cover one) and their
+/// changes are read on the next reload.
 pub(crate) fn follow(
     mut poller: Poller,
     mut previous: Vec<Diag>,
@@ -156,7 +177,7 @@ pub(crate) fn follow(
         let snapshot = poller.wait();
         note("Change detected, validating again");
         let (snapshot, next) = retry(&mut poller, snapshot, &mut rerun, thread::sleep);
-        poller.seen = snapshot;
+        poller.settle(snapshot);
         print!("{}", delta_report(&previous, &next));
         previous = next;
     }
@@ -170,6 +191,8 @@ fn retry<T>(
 ) -> (u64, T) {
     let mut pause = Duration::from_secs(1);
     loop {
+        // Discard any root baseline left by a failed attempt.
+        poller.handoff = Some(snapshot);
         if let Some(result) = rerun(poller) {
             return (snapshot, result);
         }
@@ -1064,5 +1087,158 @@ mod tests {
         );
         poller.retune(strings(["common", "map"]));
         assert_ne!(poller.current(), poller.seen);
+    }
+
+    #[test]
+    fn a_pass_that_updates_the_roots_does_not_wake_again_without_an_edit() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        write(&parent.path().join("common/existing.txt"), "a = 1\n");
+        let mut poller = Poller::new(roots(rules.path(), dir.path(), &[], None, &[], &[]));
+        poller.retune(strings(["common"]));
+        write(&dir.path().join("common/dep.txt"), "a = 1\n");
+        let snapshot = poller.wait_with(|_| {});
+        assert_ne!(snapshot, poller.seen);
+
+        let (snapshot, ()) = retry(
+            &mut poller,
+            snapshot,
+            &mut |poller| {
+                poller.retune_roots(roots(
+                    rules.path(),
+                    dir.path(),
+                    &[parent.path().to_path_buf()],
+                    None,
+                    &[],
+                    &[],
+                ));
+                Some(())
+            },
+            |_| {},
+        );
+        poller.settle(snapshot);
+        assert_eq!(
+            poller.current(),
+            poller.seen,
+            "changed roots alone are not a change"
+        );
+        write(&parent.path().join("common/keep.txt"), "a = 2\n");
+        assert_ne!(poller.current(), poller.seen, "the added root is watched");
+    }
+
+    #[test]
+    fn an_edit_saved_during_a_pass_that_updates_the_roots_stays_pending() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let mut poller = Poller::new(roots(rules.path(), dir.path(), &[], None, &[], &[]));
+        poller.retune(strings(["common"]));
+        write(&dir.path().join("common/dep.txt"), "a = 1\n");
+        let snapshot = poller.wait_with(|_| {});
+
+        let (snapshot, ()) = retry(
+            &mut poller,
+            snapshot,
+            &mut |poller| {
+                poller.retune_roots(roots(
+                    rules.path(),
+                    dir.path(),
+                    &[parent.path().to_path_buf()],
+                    None,
+                    &[],
+                    &[],
+                ));
+                write(&dir.path().join("common/mid.txt"), "a = 1\n");
+                Some(())
+            },
+            |_| {},
+        );
+        poller.settle(snapshot);
+        assert_ne!(
+            poller.current(),
+            poller.seen,
+            "the mid-pass edit stays pending"
+        );
+    }
+
+    #[test]
+    fn an_edit_between_the_wake_and_the_roots_swap_keeps_the_pre_attempt_baseline() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let mut poller = Poller::new(roots(rules.path(), dir.path(), &[], None, &[], &[]));
+        poller.retune(strings(["common"]));
+        write(&dir.path().join("common/dep.txt"), "a = 1\n");
+        let snapshot = poller.wait_with(|_| {});
+
+        let (snapshot, ()) = retry(
+            &mut poller,
+            snapshot,
+            &mut |poller| {
+                // The parents were resolved here; the descriptor (or another
+                // watched file) changes again before the roots are retuned.
+                write(&dir.path().join("common/later.txt"), "a = 1\n");
+                poller.retune_roots(roots(
+                    rules.path(),
+                    dir.path(),
+                    &[parent.path().to_path_buf()],
+                    None,
+                    &[],
+                    &[],
+                ));
+                Some(())
+            },
+            |_| {},
+        );
+        poller.settle(snapshot);
+        assert_ne!(
+            poller.current(),
+            poller.seen,
+            "the edit after the wake stays pending for the next wake"
+        );
+    }
+
+    #[test]
+    fn a_retry_after_a_failing_roots_swapping_attempt_adopts_its_fresh_baseline() {
+        let rules = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let mut poller = Poller::new(roots(rules.path(), dir.path(), &[], None, &[], &[]));
+        poller.retune(strings(["common"]));
+        write(&dir.path().join("common/dep.txt"), "a = 1\n");
+        let snapshot = poller.wait_with(|_| {});
+
+        let mut attempts = 0;
+        let (snapshot, ()) = retry(
+            &mut poller,
+            snapshot,
+            &mut |poller| {
+                attempts += 1;
+                if attempts == 1 {
+                    poller.retune_roots(roots(
+                        rules.path(),
+                        dir.path(),
+                        &[parent.path().to_path_buf()],
+                        None,
+                        &[],
+                        &[],
+                    ));
+                    None // the first pass could not read its inputs
+                } else {
+                    Some(())
+                }
+            },
+            |_| {
+                // An edit lands between the failed attempt and the retry.
+                write(&dir.path().join("common/intervening.txt"), "a = 1\n");
+            },
+        );
+        poller.settle(snapshot);
+        assert_eq!(
+            poller.current(),
+            poller.seen,
+            "the retry's fresh baseline covers the edit its pass validated"
+        );
     }
 }
