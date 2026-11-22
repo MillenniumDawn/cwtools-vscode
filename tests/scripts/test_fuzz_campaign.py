@@ -67,6 +67,8 @@ def test_wall_timeout_stops_group_and_preserves_partial_artifact(
     artifacts.mkdir(parents=True)
     (artifacts / "crash-partial").write_bytes(b"partial")
     monkeypatch.setenv("GITHUB_SHA", "abc123")
+    # CI sets this, and the fake failure would land in the real job summary.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     process = MagicMock(spec=subprocess.Popen)
     process.__enter__.return_value = process
     process.pid = 12345
