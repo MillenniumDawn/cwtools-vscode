@@ -17,8 +17,10 @@ allow = [
   "MIT",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
-  # BSD-3-Clause is used by the existing zstd dependency graph.
+  # The zstd dependency graph: BSD-3-Clause, plus BSD-2-Clause in zstd-sys
+  # 2.1.3, which declares "BSD-3-Clause AND BSD-2-Clause".
   "BSD-3-Clause",
+  "BSD-2-Clause",
   "Unicode-3.0",
   "Unlicense",
   # LGPL-2.1-or-later appears via r-efi. Acceptable for a closed-source
