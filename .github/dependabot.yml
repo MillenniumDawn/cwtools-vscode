@@ -111,9 +111,9 @@ updates:
           - "*"
 
   # The Python helpers under scripts/ and tests/scripts/ are their own
-  # toolchain, pinned in requirements-dev.txt; CI's Python lint & tests job
+  # toolchain, locked in uv.lock; CI's Python lint & tests job
   # is the behavior gate for these PRs.
-  - package-ecosystem: pip
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
@@ -128,11 +128,11 @@ updates:
       include: scope
     groups:
       # Split out so a security fix never queues behind a routine bump.
-      pip-security:
+      uv-security:
         applies-to: security-updates
         patterns:
           - "*"
-      pip:
+      uv:
         applies-to: version-updates
         patterns:
           - "*"

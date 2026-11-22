@@ -119,16 +119,16 @@ def test_fuzz_smoke_pins_the_committed_lockfile_and_never_libfuzzer_args() -> No
     )
 
 
-def test_dependabot_places_pip_beside_the_other_ecosystems() -> None:
+def test_dependabot_places_uv_beside_the_other_ecosystems() -> None:
     source = DEPENDABOT.read_text(encoding="utf-8")
     entries = source.split("\n  - package-ecosystem: ")[1:]
 
     ecosystems = [entry.split("\n", maxsplit=1)[0] for entry in entries]
-    assert ecosystems == ["github-actions", "cargo", "npm", "pip"]
+    assert ecosystems == ["github-actions", "cargo", "npm", "uv"]
 
-    pip = next(entry for entry in entries if entry.startswith("pip\n"))
-    assert entry_directories(pip) == ["/"]
-    # The pip entry follows the shared schedule/security-group contract the
+    python = next(entry for entry in entries if entry.startswith("uv\n"))
+    assert entry_directories(python) == ["/"]
+    # The uv entry follows the shared schedule/security-group contract the
     # other ecosystems use.
     for marker in (
         "interval: weekly",
@@ -138,7 +138,7 @@ def test_dependabot_places_pip_beside_the_other_ecosystems() -> None:
         "cooldown:\n      default-days: 7",
         "applies-to: security-updates",
     ):
-        assert marker in pip
+        assert marker in python
 
     # The cargo entry covers the fuzz workspace's own lockfile as well.
     cargo = next(entry for entry in entries if entry.startswith("cargo\n"))

@@ -138,23 +138,55 @@ are tested from `tests/scripts/`.
 
 ### The Python helpers
 
-`scripts/` and its tests have their own toolchain: ruff, black, pylint, mypy
-and pytest, all configured in [`pyproject.toml`](../pyproject.toml) and pinned
-in [`requirements-dev.txt`](../requirements-dev.txt). Install them into one
-environment so mypy can see pytest's types:
+`scripts/` and its tests have their own toolchain: ruff, black, pylint, mypy,
+pytest and coverage.py. Direct versions and shared settings live in
+[`pyproject.toml`](../pyproject.toml); [`uv.lock`](../uv.lock) records the
+complete resolution and package hashes for all platforms. Install uv 0.13.7
+or later (CI uses 0.13.7), then create the Python 3.12 environment:
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+uv sync --locked --python 3.12
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 ruff check scripts tests/scripts
 black --check scripts tests/scripts
 pylint scripts tests/scripts
 mypy scripts tests/scripts
 pytest
+python scripts/build/python_coverage.py
 ```
 
-The `Python lint & tests` CI job runs exactly that list, and the pre-commit
-hooks in [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) run it on the
-files you touch. mypy is in strict mode and pylint has to stay at 10.00.
+The `Python lint & tests` CI job runs that list, with pytest under the
+coverage script, and the `Non-UI tests` jobs run pytest on Windows and macOS
+from the same lock. mypy is in strict mode and pylint has to stay at 10.00.
+Activate this environment before running the pre-commit hooks in
+[`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
+
+`uv sync --locked` fails if the manifest and lock disagree, rather than
+regenerating the lock in CI. For an intentional tool update, change its
+`dependency-groups.dev` requirement and run `uv lock --python 3.12`; for a
+transitive-only update use `uv lock --upgrade-package <name> --python 3.12`.
+Review both the manifest and lock changes, sync with `--locked`, and run the
+checks above. Dependabot uses the uv ecosystem to update this same lock.
+There is no separate requirements lock to keep in sync.
+
+Linux CI measures production Python line and branch coverage. The initial
+baseline on `ea7c58b8` plus the coverage helper (Python 3.12.13, coverage.py
+7.17.2; 513 passed) was **2,299/2,684 lines = 85.6557%** and
+**743/948 branch exits = 78.3755%** across all 24 `scripts/**/*.py` files.
+The independent regression floors are **85.6% lines** and **78.3% branches**,
+rounded down to the nearest tenth from that measured baseline. Coverage.py's
+combined line-and-branch percentage is not used as either metric's floor.
+The inventory includes unimported helpers and excludes test code.
+
+`python scripts/build/python_coverage.py` clears `coverage-python/`, runs the
+full pytest suite under branch tracing, then checks the complete source
+inventory and both floors before writing a successful shared summary. A
+failed run cannot reuse an older summary. The `coverage-python` CI artifact
+contains `coverage.json` (executed/missing lines and branch arcs), an HTML
+report under `html/`, and `coverage-summary.json` for the shared Rust, host,
+Node and Python PR table. Python function coverage is shown as unavailable.
+The collector waits for the Python job and requires its summary when that job
+succeeds.
 
 `scripts/build/*.py` import each other by bare name, so pytest puts that
 directory on `sys.path` (`pythonpath` in `pyproject.toml`) and pylint resolves

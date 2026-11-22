@@ -57,6 +57,13 @@ SOURCES: tuple[CoverageSource, ...] = (
         scope_note="Modules measured only by Vitest are excluded.",
     ),
     CoverageSource(
+        title="Python helpers",
+        path="coverage-python/coverage-summary.json",
+        html_artifact="coverage-python",
+        required_metrics=("lines", "statements", "branches"),
+        scope_note="Production scripts only; functions are not measured.",
+    ),
+    CoverageSource(
         title="Node unit",
         path="coverage-node/coverage-summary.json",
         html_artifact="coverage-node",
@@ -137,7 +144,7 @@ def listed_files(files: Sequence[str], max_files: int | None) -> tuple[list[str]
 
 def section_details(source: CoverageSource) -> str | None:
     if not source.labels or not source.scopes:
-        return None
+        return source.scope_note or None
     labels = ", ".join(f"`{label}`" for label in source.labels)
     scope = ", ".join(f"`{path}`" for path in source.scopes)
     extra = f" {source.scope_note}" if source.scope_note else ""
@@ -256,6 +263,11 @@ def render_coverage_summary(
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if (
+        "--require-python" in args
+        and not Path("coverage-python/coverage-summary.json").is_file()
+    ):
+        raise RuntimeError("required Python coverage summary is missing")
     selected = (
         [source for source in SOURCES if source.labels]
         if "--host-only" in args

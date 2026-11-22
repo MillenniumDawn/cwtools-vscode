@@ -12,6 +12,8 @@ Scratch.*
 .vitest/
 coverage/
 coverage-node/
+coverage-python/
+.venv/
 corpus/
 *.user
 .vs/
