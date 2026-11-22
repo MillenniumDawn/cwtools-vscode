@@ -34,8 +34,16 @@ interface UpdateFileList {
 	vanillaRoots?: string[];
 }
 
+/** Outcome of a scan wait: the start's scan finished, or its lifecycle ended first. */
+export interface InitialScanOutcome {
+	readonly kind: "ready" | "stopped";
+	/** Whether the start this outcome came from is still the running one. */
+	readonly isCurrent: () => boolean;
+}
+
 export interface ServerNotifications {
-	initialScanDone: Promise<void>;
+	/** Wait for the current start's scan; a fresh start replaces it (#1270). */
+	initialScanDone: () => Promise<InitialScanOutcome>;
 	/** The status bar item's current text, for the host tests. */
 	statusText: () => string | undefined;
 	/** Called once the client's error handler gives up restarting. */
@@ -59,10 +67,23 @@ export function registerServerNotifications(
 	let acceptFileList = true;
 	let suppressedDiagnostics = 0;
 	let ready = false;
-	let resolveInitialScan: () => void;
-	const initialScanDone = new Promise<void>(
-		(resolve) => (resolveInitialScan = resolve),
-	);
+	// One wait per server start (#1270): ready when its scan finishes, stopped if that lifecycle ends first.
+	let resolveScan: ((kind: "ready" | "stopped") => void) | undefined;
+	let currentScanGeneration = 0;
+	const startScanWait = (): Promise<InitialScanOutcome> => {
+		const generation = ++currentScanGeneration;
+		return new Promise<InitialScanOutcome>((resolve) => {
+			resolveScan = (kind) =>
+				resolve({ kind, isCurrent: () => generation === currentScanGeneration });
+		});
+	};
+	const settleScan = (kind: "ready" | "stopped"): void => {
+		if (kind === "stopped") currentScanGeneration++;
+		resolveScan?.(kind);
+		resolveScan = undefined;
+	};
+	let scanDone = startScanWait();
+	const initialScanDone = (): Promise<InitialScanOutcome> => scanDone;
 
 	// Persistent and visible even when idle, rather than the scan-only item
 	// this used to be, so restart/stopped state has somewhere to show.
@@ -93,6 +114,8 @@ export function registerServerNotifications(
 		ready = false;
 		status.text = l10n.t("CWTools: stopped");
 		clearCommandAvailability();
+		// A stopped lifecycle must not leave its scan wait pending.
+		settleScan("stopped");
 	};
 	const setServerContentRoots = (
 		parentRoots: readonly string[],
@@ -113,6 +136,11 @@ export function registerServerNotifications(
 				suppressedDiagnostics = 0;
 				ready = false;
 				status.text = l10n.t("CWTools: starting");
+				// A fresh start owns the wait: end any pending one from the replaced lifecycle.
+				settleScan("stopped");
+				initialScanPending = true;
+				initialScanStarted = false;
+				scanDone = startScanWait();
 			} else if (e.newState === State.Running) {
 				acceptFileList = true;
 				// The library sets initializeResult just before this event fires,
@@ -151,7 +179,7 @@ export function registerServerNotifications(
 				status.text = readyStatusText();
 				if (initialScanPending && initialScanStarted) {
 					initialScanPending = false;
-					resolveInitialScan();
+					settleScan("ready");
 				}
 			}
 		},
@@ -205,6 +233,8 @@ export function registerServerNotifications(
 	// context.subscriptions (like diagnosticsBaselineStatus above) stops the
 	// handlers firing into a disposed extension.
 	context.subscriptions.push(loadingBarListener, updateFileListListener);
+	// Disposal that is not deactivation must also end the scan wait.
+	context.subscriptions.push({ dispose: () => settleScan("stopped") });
 	return {
 		initialScanDone,
 		statusText: () => status.text,

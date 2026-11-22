@@ -283,6 +283,7 @@ suite("registered workspace commands", () => {
 		clearCommandAvailability();
 
 		assert.deepStrictEqual(state.executeCommand.mock.calls, [
+			["setContext", "cwtoolsServerRunning", false],
 			["setContext", "cwtoolsGraphAvailable", false],
 			["setContext", "cwtoolsGraphFromHereAvailable", false],
 			["setContext", "cwtoolsFixAllAvailable", false],

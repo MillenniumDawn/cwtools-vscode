@@ -20,9 +20,10 @@ name: CI
 permissions:
   contents: read
 
-# event_name keeps a push to main from cancelling the weekly deny sweep.
+# event_name keeps a push to main from cancelling the weekly deny sweep. A push
+# groups by commit so no main push cancels another: Publish waits on each one.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -35,13 +36,8 @@ jobs:
   # Fast client gate: typecheck, lint, and unit tests. Gives contributors
   # quick feedback while the heavier jobs catch up.
   check:
-    name: Node checks (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
     if: github.event_name != 'schedule'
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,27 +50,20 @@ jobs:
         run: npm run test:node
 
   # The helpers under scripts/ are their own toolchain, so they get their own
-  # job instead of riding along in the node and Rust ones. uv.lock pins the
-  # complete toolchain; native runners exercise non-UI portability. Only Linux
-  # measures coverage, so there is one baseline and one report artifact.
+  # job instead of riding along in the node and Rust ones. Versions come from
+  # uv.lock and the config for every tool is in pyproject.toml, so this job
+  # runs what a contributor's pre-commit hooks already ran, plus the coverage
+  # floors.
   python:
     if: github.event_name != 'schedule'
-    name: Python lint & tests (${{ matrix.os }})
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    name: Python lint & tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install virtual display test dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes xvfb xauth
@@ -88,13 +77,30 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
-          version: "0.12.19"
+          version: "0.13.7"
           enable-cache: true
-      # Reuse the cross-platform, lockfile-based npm installation for the
-      # esbuild smoke and Node config probes used by the Python tests.
-      - uses: ./.github/actions/setup-node-npm
-      - name: Install checks from the complete lock
-        run: uv sync --locked
+      # No npm cache: this job only installs esbuild, and a cache saved
+      # from here would claim the key the check and build jobs share.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+      - name: Install esbuild for the release-define smoke
+        run: |
+          version="$(
+            node -p 'require("./package-lock.json").packages["node_modules/esbuild"].version'
+          )"
+          prefix="$RUNNER_TEMP/cwtools-esbuild"
+          mkdir -p "$prefix"
+          printf '{"private":true}\n' > "$prefix/package.json"
+          npm install \
+            --prefix "$prefix" \
+            --no-save \
+            --package-lock=false \
+            "esbuild@${version}"
+          mkdir -p node_modules
+          ln -s "$prefix/node_modules/esbuild" node_modules/esbuild
+      - name: Install checks
+        run: uv sync --locked --python 3.12
       - name: ruff
         run: uv run --locked ruff check scripts tests/scripts
       - name: black
@@ -103,19 +109,43 @@ jobs:
         run: uv run --locked pylint scripts tests/scripts
       - name: mypy
         run: uv run --locked mypy scripts tests/scripts
-      - name: pytest (native non-UI)
-        if: runner.os != 'Linux'
-        run: uv run --locked pytest
       - name: pytest with production branch coverage
-        if: runner.os == 'Linux'
         run: uv run --locked python scripts/build/python_coverage.py
       - name: Upload Python coverage
-        if: runner.os == 'Linux'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-python
           path: coverage-python
           if-no-files-found: error
+
+  # Native non-UI coverage supplements the Linux check and Python jobs.
+  non-ui-native:
+    if: github.event_name != 'schedule'
+    name: Non-UI tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.7"
+          enable-cache: true
+      - name: Install Python checks
+        run: uv sync --locked --python 3.12
+      - name: Node unit tests
+        run: npm run test:node
+      - name: Python helper tests
+        run: uv run --locked pytest
 
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
@@ -136,6 +166,19 @@ jobs:
           fail-on-severity: high
           fail-on-scopes: runtime, development
           comment-summary-in-pr: on-failure
+
+  # Semantic workflow validation complements the behavioral regression tests.
+  actionlint:
+    if: github.event_name != 'schedule'
+    name: Workflow semantics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run pinned actionlint
+        run: python3 scripts/build/actionlint.py
 
   # npm's weekly advisory sweep for what a merge already shipped; the PR
   # path stays on dependency-review. Same severity floor, dev deps included.
@@ -287,7 +330,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: cargo clippy
         run: >-
-          cargo clippy --workspace --all-targets --all-features --
+          cargo clippy --locked --workspace --all-targets --all-features --
           -D warnings
       - name: Install cargo-machete
         if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
@@ -337,9 +380,9 @@ jobs:
       # Same feature set as the test step below, or the test step recompiles
       # every crate whose features differ instead of reusing these artifacts.
       - name: cargo build (debug)
-        run: cargo build --workspace --all-targets --all-features
+        run: cargo build --locked --workspace --all-targets --all-features
       - name: cargo test
-        run: cargo test --workspace --all-features --no-fail-fast
+        run: cargo test --locked --workspace --all-features --no-fail-fast
 
   # The client build helpers run on Windows too. No Rust test reads the
   # compiled client, so this runs beside test-rs instead of ahead of cargo.
@@ -405,7 +448,7 @@ jobs:
       - name: cargo build at MSRV
         env:
           MSRV: ${{ steps.msrv.outputs.version }}
-        run: cargo +"$MSRV" build --workspace --all-targets
+        run: cargo +"$MSRV" build --locked --workspace --all-targets
 
   # Fuzzing in CI is a smoke run, not a fuzzing campaign: -runs=0 replays
   # the committed seed corpus once and exits. Deterministic, ~seconds of
@@ -522,6 +565,10 @@ jobs:
       - name: Install cargo-llvm-cov
         if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
         run: cargo install cargo-llvm-cov --locked --version 0.8.7
+      # cargo-llvm-cov 0.8.7 can retain binaries in an older Cargo target
+      # layout after a toolchain update; they pollute the coverage denominator.
+      - name: Clean instrumented coverage artifacts
+        run: cargo llvm-cov clean
       - name: Run coverage (94.4% line floor)
         env:
           COVERAGE_THRESHOLD: 94.4
@@ -564,7 +611,7 @@ jobs:
       # exit 2.
       - name: cargo build --release -p cwtools_cli
         working-directory: engine
-        run: cargo build --release -p cwtools_cli
+        run: cargo build --locked --release -p cwtools_cli
       - name: Run vanilla guard
         env:
           # `validate` always enables the .cwb parse cache and has no flag
@@ -585,6 +632,8 @@ jobs:
     outputs:
       md_rev: ${{ steps.pins.outputs.md_rev }}
       rules_rev: ${{ steps.pins.outputs.rules_rev }}
+      stellaris_corpus_rev: ${{ steps.pins.outputs.stellaris_corpus_rev }}
+      stellaris_rules_rev: ${{ steps.pins.outputs.stellaris_rules_rev }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -640,7 +689,7 @@ jobs:
             ${{ runner.os }}-cargo-release-target-
       - name: cargo build --release -p cwtools_cli
         working-directory: engine
-        run: cargo build --release -p cwtools_cli
+        run: cargo build --locked --release -p cwtools_cli
       # After the build, so a compile error costs no checkout. Most of that
       # working tree is art the guard never opens, and there is no trimming
       # it down: the run indexes whatever is on disk, so a narrower checkout
@@ -680,6 +729,96 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: md-guard-drift
+          path: |
+            ${{ runner.temp }}/guard-work/**/drift.diff
+            ${{ runner.temp }}/guard-work/**/validate.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Pinned real Stellaris corpus and rules, without a game installation.
+  stellaris:
+    if: github.event_name != 'schedule'
+    name: Stellaris tier
+    needs: pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The pins job leaves these empty when the lookup in the Stellaris
+      # repositories fails, so that failure lands here and not on the other
+      # tiers. An empty ref would check out the default branch.
+      - name: Require resolved Stellaris pins
+        env:
+          CORPUS_REV: ${{ needs.pins.outputs.stellaris_corpus_rev }}
+          RULES_REV: ${{ needs.pins.outputs.stellaris_rules_rev }}
+        run: |
+          if [ -z "$CORPUS_REV" ] || [ -z "$RULES_REV" ]; then
+            echo "::error::The Stellaris pins were not resolved; see the Guard pins job."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Restore-only, and not via setup-rust: that composite also contains
+      # cache-save steps, and CodeQL treats them as cache-write even when
+      # save is false. This job later checks out two foreign trees, so a
+      # cache-write in the same job is cache poisoning.
+      - name: Install Rust toolchain
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - name: Restore cargo registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: >-
+            ${{ runner.os }}-cargo-registry-${{
+            hashFiles('engine/Cargo.lock') }}
+      - name: Restore cargo release target
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: engine/target
+          key: >-
+            ${{ runner.os }}-cargo-release-target-${{
+            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-target-
+      - name: cargo build --release -p cwtools_cli
+        working-directory: engine
+        run: cargo build --locked --release -p cwtools_cli
+      # Check out the exact corpus and rules revisions from the baseline.
+      - name: Check out the Stellaris corpus at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: hmlendea/stellaris-ui-prescripted-countries
+          ref: ${{ needs.pins.outputs.stellaris_corpus_rev }}
+          path: _guard-inputs/stellaris-ui-prescripted-countries
+          persist-credentials: false
+          show-progress: false
+      - name: Check out ruleset at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cwtools/cwtools-stellaris-config
+          ref: ${{ needs.pins.outputs.stellaris_rules_rev }}
+          path: _guard-inputs/cwtools-stellaris-config
+          persist-credentials: false
+      # Use isolated caches and retain the drift report and validation log.
+      - name: Run Stellaris guard
+        env:
+          INPUTS: ${{ github.workspace }}/_guard-inputs
+          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
+          TMPDIR: ${{ runner.temp }}/guard-work
+        run: |
+          mkdir -p "$TMPDIR"
+          python3 scripts/guard.py stellaris --no-build \
+            --corpus "$INPUTS/stellaris-ui-prescripted-countries/ui-prescripted-countries" \
+            --rules "$INPUTS/cwtools-stellaris-config/config"
+      - name: Upload drift diff
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stellaris-guard-drift
           path: |
             ${{ runner.temp }}/guard-work/**/drift.diff
             ${{ runner.temp }}/guard-work/**/validate.log

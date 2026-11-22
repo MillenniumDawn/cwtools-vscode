@@ -14,7 +14,7 @@ use cwtools_parser::ast::ParsedFile;
 use cwtools_string_table::string_table::StringTable;
 
 /// Bump when cache layout or fingerprint semantics change so old parse entries miss.
-const CACHE_VERSION: u32 = 11;
+const CACHE_VERSION: u32 = 12;
 
 // Off on Windows: stable std has no file id or ChangeTime, so a restored mtime hides an edit.
 pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);

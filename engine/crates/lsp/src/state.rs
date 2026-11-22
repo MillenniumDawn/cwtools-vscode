@@ -26,18 +26,48 @@ pub(crate) use crate::loc_text::LocText;
 /// validation permit (#477). Validation has one inside its synchronous phase.
 /// The open-buffer uses of a scan have one inside their rayon region (#1152), and its
 /// type-uses merge has one before it takes the `type_uses` write guard (#1163).
+/// A scan has one right after it releases its type index snapshot (#1321).
+/// The base-game merge has one after its filesystem work, before its locks. Staging
+/// has one after its payload is in place and clearing one before its index cleanup,
+/// both inside the publication fence.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
+    ScanAfterVanilla,
+    VanillaMergeIo,
+    VanillaStageAfterPayload,
+    VanillaClearBeforeInfo,
     Pass2Before,
     Pass2Mid,
     Pass2After,
     OpenUses,
+    Pass2SnapshotDropped,
     TypeUsesMerge,
+    DependentSnapshot,
     WatchedFile,
     ValidatePrepared,
     ValidateBeforeAcceptance,
+    LocParsed,
     DependentUsesPrepared,
+    ColorWalk,
+    InlayWalk,
+    HighlightWalk,
+    WorkspaceSymbolWalk,
+    NestedSymbolWalk,
+    FlatSymbolWalk,
+    LocSymbolWalk,
+    PrepareRenameWalk,
+    GotoWalk,
+    ReferencesWalk,
+    LocCursorTextWalk,
+    LocCursorRuleWalk,
+    ReferencesResultWalk,
+    LocRenameScanWalk,
+    LocDefinitionsWalk,
+    LocDefinitionsResultWalk,
+    CwtCursorWalk,
+    NavigationSnapshotWalk,
+    NavigationTextSnapshotWalk,
     ExportSweepSnapshot,
     LoadingBarActiveChecked,
 }
@@ -239,10 +269,15 @@ pub(crate) struct VanillaState {
     /// Shape hash of the ruleset this payload was built under. `None` for a payload of unknown
     /// origin (a client-supplied cache), which a rules reload keeps.
     pub(crate) rules_shape: Option<String>,
+    /// Revisions protected by `vanilla_state`, to order overlapping walks of the
+    /// same retained payload, including an attempted walk that later fails.
+    pub(crate) merge_attempt_revision: u64,
+    pub(crate) publication_revision: u64,
 }
 
-/// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,
-/// then release it before acquiring `config` or `info_service` or doing I/O.
+/// LOCK ORDER: vanilla publication nests vanilla_state -> info_service -> config; rule
+/// updates nest vanilla_state -> rules -> info_service. Release them before doing I/O:
+/// do the filesystem work first, then re-check `publication_revision` under the locks.
 /// Other multi-lock paths document their order at their use sites.
 #[derive(Default)]
 pub(crate) struct PendingExportSweep {
@@ -352,8 +387,7 @@ pub(crate) struct DocumentState {
     pub(crate) validation_permits: tokio::sync::Semaphore,
     pub(crate) info_revision: AtomicU64,
     pub(crate) fallback_cache: parking_lot::Mutex<Option<CompletionCacheEntry>>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) fresh_ast_cache: parking_lot::Mutex<Option<(String, i32, Arc<ParsedFile>)>>,
+    pub(crate) fresh_ast_cache: parking_lot::Mutex<Option<FreshAst>>,
     pub(crate) completion_generation: parking_lot::Mutex<HashMap<String, u64>>,
     pub(crate) next_completion_id: AtomicU64,
     pub(crate) last_loc_signature: parking_lot::Mutex<Option<u64>>,
@@ -367,6 +401,14 @@ pub(crate) struct DocumentState {
     pub(crate) navigation_snapshot_budget_override: parking_lot::Mutex<Option<usize>>,
     #[cfg(test)]
     pub(crate) workspace_scan_budget_override: parking_lot::Mutex<Option<u64>>,
+    #[cfg(test)]
+    pub(crate) loc_scan_budget_override:
+        parking_lot::Mutex<Option<cwtools_file_manager::file_manager::ScanBudget>>,
+    #[cfg(test)]
+    pub(crate) vanilla_loader_override: parking_lot::Mutex<Option<crate::scan::VanillaLoader>>,
+    #[cfg(test)]
+    pub(crate) file_index_builder_override:
+        parking_lot::Mutex<Option<crate::scan::FileIndexBuilder>>,
     #[cfg(test)]
     pub(crate) scan_source_reads: std::sync::atomic::AtomicUsize,
     pub(crate) settings_generation: AtomicU64,
@@ -1034,12 +1076,18 @@ impl DocumentStore {
         &mut self,
         uri: &str,
         version: i32,
+        source_hash: u64,
         cache: Arc<LocDocumentCache>,
     ) -> std::result::Result<bool, DocumentRejection> {
         let Some(document) = self.documents.get(uri) else {
             return Ok(false);
         };
-        if document.version != version || cache.version != version {
+        // Versions may be reused after close/reopen. Check the parsed source
+        // under the same store lock as installation, not only before parsing.
+        if document.version != version
+            || cache.version != version
+            || self.content_hash(uri) != Some(source_hash)
+        {
             return Ok(false);
         }
         let index_bytes = self
@@ -1304,6 +1352,7 @@ mod semantic_line_index_tests {
         docs.set_loc_cache(
             uri,
             2,
+            cwtools_cache::workspace::content_hash("\n\nroot = first\n"),
             Arc::new(LocDocumentCache {
                 version: 2,
                 retained_bytes: 10,
@@ -1442,6 +1491,28 @@ pub(crate) struct FixableEdits {
     pub(crate) content_hash: Option<u64>,
 }
 
+/// The one memoized parse of an open document's current text. The version alone
+/// does not identify the text: a document closed and reopened starts its
+/// versions again, so the text the tree was parsed from is part of the key.
+pub(crate) struct FreshAst {
+    pub(crate) uri: String,
+    pub(crate) version: i32,
+    pub(crate) text: Arc<str>,
+    pub(crate) ast: Arc<ParsedFile>,
+}
+
+impl FreshAst {
+    pub(crate) fn matches(&self, uri: &str, version: i32, text: &str) -> bool {
+        self.uri == uri && self.version == version && same_text(&self.text, text)
+    }
+}
+
+/// Text equality with a pointer check first, since the usual caller holds the
+/// same buffer the entry was stored with.
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
+    (a.len() == b.len() && std::ptr::eq(a.as_ptr(), b.as_ptr())) || a == b
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AstSource {
     StoredCurrent,
@@ -1486,7 +1557,6 @@ pub(crate) enum ValidateTrigger {
     DidClose,
     Watched,
     DidChange,
-    ConfigChange,
     Reindex,
 }
 
@@ -1498,7 +1568,6 @@ impl ValidateTrigger {
             ValidateTrigger::DidClose => "didClose",
             ValidateTrigger::Watched => "watched",
             ValidateTrigger::DidChange => "didChange",
-            ValidateTrigger::ConfigChange => "configChange",
             ValidateTrigger::Reindex => "reindex",
         }
     }
@@ -1914,6 +1983,12 @@ impl DocumentState {
             navigation_snapshot_budget_override: parking_lot::Mutex::new(None),
             #[cfg(test)]
             workspace_scan_budget_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            loc_scan_budget_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            vanilla_loader_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            file_index_builder_override: parking_lot::Mutex::new(None),
             #[cfg(test)]
             scan_source_reads: std::sync::atomic::AtomicUsize::new(0),
             settings_generation: AtomicU64::new(0),

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::common::{DECISION_RULES, TestServer, publish_has_code};
 
@@ -106,6 +106,45 @@ fn test_inline_ignore_directive_suppresses_a_keystroke_diagnostic() {
         "directive must suppress CW281: {publish}"
     );
     server.stop();
+}
+
+#[test]
+fn test_inline_ignore_directive_survives_a_config_revalidation() {
+    // A settings change revalidates every open document from its stored AST.
+    // That pass must filter inline ignores the same way an edit does. The second
+    // CW281 has no directive, so ignoring nothing relevant still republishes it,
+    // and the publish proves the pass ran.
+    let rel = "common/decisions/ignored.txt";
+    let text = "x = { limit = { } } # cwtools-ignore CW281\n\n\ny = { limit = { } }\n";
+    let mut server = decision_server(&[(rel, text)]);
+    server.open(rel, text);
+    let first = server.publish_for(rel, 1);
+    assert_eq!(count_code(&first, "CW281"), 1, "setup: {first}");
+
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "ignoredErrorCodes": ["CW281"] } }),
+    );
+    let cleared = server.publish_for(rel, 1);
+    assert_eq!(count_code(&cleared, "CW281"), 0, "ignored: {cleared}");
+
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "ignoredErrorCodes": [] } }),
+    );
+    let restored = server.publish_for(rel, 1);
+    assert_eq!(
+        count_code(&restored, "CW281"),
+        1,
+        "the directive'd line must stay suppressed after a revalidation: {restored}"
+    );
+    server.stop();
+}
+
+fn count_code(publish: &Value, code: &str) -> usize {
+    publish["params"]["diagnostics"]
+        .as_array()
+        .map_or(0, |d| d.iter().filter(|d| d["code"] == code).count())
 }
 
 #[test]

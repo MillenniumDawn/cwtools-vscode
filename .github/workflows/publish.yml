@@ -88,6 +88,14 @@ jobs:
             echo "release=false"
             python3 scripts/build/build.py prerelease-identity
           } >> "$GITHUB_OUTPUT"
+      # After the outputs are written, so a failure here still tells
+      # `release-failed` which release to open the fix pull request for. Every
+      # other job needs this one, so nothing builds or publishes past a failure.
+      - name: Validate the release metadata
+        if: steps.check.outputs.release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.check.outputs.tag }}
+        run: python3 scripts/build/build.py validate-release-metadata
 
   # Fails the run before the 45-minute matrix rather than after it, and before
   # any target has published. A pre-release skips a registry it has no token
@@ -96,8 +104,11 @@ jobs:
     name: Verify publish inputs
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
+    # CI and Publish start together. Allow up to 90 minutes for CI.
+    timeout-minutes: 95
+    permissions:
+      contents: read
+      actions: read
     outputs:
       has_vsce: ${{ steps.tokens.outputs.has_vsce }}
       has_open_vsx: ${{ steps.tokens.outputs.has_open_vsx }}
@@ -137,6 +148,39 @@ jobs:
             echo "::error::cannot publish release $TAG: $missing not set."
             exit 1
           fi
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require successful CI for the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # CI can still be queued, running, or not yet visible when Publish starts.
+          # Retry only missing or pending CI, never errors or failed CI.
+          retry="re-run CI for $GITHUB_SHA, then re-run the failed Publish jobs"
+          for attempt in $(seq 1 90); do
+            if ! response=$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100"); then
+              echo "::error::Unable to retrieve CI results for $GITHUB_SHA."
+              exit 1
+            fi
+            if printf '%s' "$response" | python3 scripts/build/release_decisions.py; then
+              exit 0
+            else
+              result=$?
+            fi
+            if [ "$result" -ne 2 ]; then
+              echo "::error::CI for $GITHUB_SHA failed, was cancelled, or returned invalid results; $retry."
+              exit 1
+            fi
+            if [ "$attempt" -lt 90 ]; then
+              echo "CI not yet successful; retrying in 60 seconds ($attempt/90)."
+              sleep 60
+            fi
+          done
+          echo "::error::CI for $GITHUB_SHA did not finish within the polling window; $retry."
+          exit 1
 
   # Build the Rust server natively on each platform. To add or remove a
   # platform, edit the matrix below -- the staging step is platform-agnostic.
@@ -193,7 +237,12 @@ jobs:
           workspaces: engine
       - name: Build server
         working-directory: engine
-        run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
+        shell: bash
+        env:
+          CWTOOLS_BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CWTOOLS_BUILD_COMMIT"
+          cargo build --locked --release -p cwtools_lsp --target ${{ matrix.target }}
       - name: Upload binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -247,7 +296,7 @@ jobs:
       # artifact also validate their artifact-level digest, while this gives
       # publishers an explicit check of the exact archives they upload.
       - name: Record packaged VSIX digests
-        run: cd artifacts/vsix && sha256sum *.vsix > SHA256SUMS
+        run: cd artifacts/vsix && sha256sum -- *.vsix > SHA256SUMS
       # The single hand-off to the three publish jobs. They all publish these
       # bytes, so a failed target can be re-run from the artifact rather than
       # rebuilt -- and every target ships identical files.
@@ -408,7 +457,8 @@ jobs:
       - github
     if: >-
       ${{ always() && needs.check.outputs.release == 'true' && (
-          needs.verify.result == 'failure'
+          needs.check.result == 'failure'
+       || needs.verify.result == 'failure'
        || needs.build-server.result == 'failure'
        || needs.package.result == 'failure'
        || needs.marketplace.result == 'failure'

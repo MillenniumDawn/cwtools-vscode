@@ -417,6 +417,480 @@ fn test_create_loc_key_code_action_batch_dedupes_a_shared_new_file() {
     assert!(applied.contains(" my_thing_desc:0 "), "got: {applied:?}");
 }
 
+// The vanilla key enables CW100 even though the workspace localization file is empty.
+fn empty_loc_builder() -> ServerBuilder {
+    thing_builder()
+        .vanilla_file(
+            "localisation/other_l_english.yml",
+            "l_english:\n unrelated_key:0 \"Unrelated\"\n",
+        )
+        .file("localisation/things_l_english.yml", "")
+}
+
+#[test]
+fn test_create_loc_key_code_action_initializes_an_empty_existing_loc_file() {
+    let mut server = empty_loc_builder().spawn_scanned();
+
+    server.open(THING_REL, THING_TEXT);
+    let diags = server.wait_for_diags(THING_REL);
+    let diag = diags
+        .iter()
+        .find(|d| {
+            d["code"] == "CW100"
+                && d["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("my_thing_desc"))
+        })
+        .cloned()
+        .expect("CW100 for my_thing_desc");
+
+    let resp = server.code_actions(THING_REL, &diag, true);
+    server.stop();
+
+    let actions = resp["result"].as_array().expect("array result");
+    assert_eq!(
+        actions.len(),
+        2,
+        "the create-loc-key action plus the ignore action: {resp}"
+    );
+    assert_eq!(actions[0]["title"], "Create localisation key my_thing_desc");
+
+    let ops = actions[0]["edit"]["documentChanges"]
+        .as_array()
+        .expect("documentChanges carries the cross-file edit");
+    assert_eq!(
+        ops.len(),
+        1,
+        "the file exists, so only the initializing edit is needed: {resp}"
+    );
+    assert!(
+        ops[0]["textDocument"]["uri"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("things_l_english.yml")),
+        "got: {ops:?}"
+    );
+    let edits = ops[0]["edits"].as_array().expect("edits array");
+    assert_eq!(edits.len(), 1, "one initializing edit: {resp}");
+    let e = &edits[0];
+    assert_eq!(e["range"]["start"]["line"], 0);
+    assert_eq!(e["range"]["start"]["character"], 0);
+    assert_eq!(
+        e["newText"], "\u{feff}l_english:\n my_thing_desc:0 \"TODO\"\n",
+        "an empty existing target needs the BOM and the l_english: header"
+    );
+}
+
+#[test]
+fn test_create_loc_key_code_action_batch_gives_each_action_one_header_on_a_shared_empty_file() {
+    let mut server = empty_loc_builder().spawn_scanned();
+
+    server.open(THING_REL, THING_TEXT);
+    let diagnostics = server.wait_for_diags(THING_REL);
+    let cw100: Vec<Value> = diagnostics
+        .into_iter()
+        .filter(|d| d["code"] == "CW100")
+        .collect();
+    assert_eq!(cw100.len(), 2, "both keys must be missing: {cw100:#?}");
+
+    let resp = server.call(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": server.uri(THING_REL) },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 1, "character": 0 },
+            },
+            "context": { "diagnostics": cw100, "only": ["quickfix"] },
+        }),
+    );
+    server.stop();
+
+    let actions = resp["result"].as_array().expect("array result");
+    assert_eq!(
+        actions.len(),
+        3,
+        "one create-loc-key action per missing key plus the ignore action: {resp}"
+    );
+    let mut stubs_seen = Vec::new();
+    for action in &actions[..2] {
+        assert_eq!(action["kind"], "quickfix");
+        let ops = action["edit"]["documentChanges"]
+            .as_array()
+            .expect("documentChanges");
+        assert_eq!(ops.len(), 1, "no create op for an existing file: {resp}");
+        let applied: String = ops[0]["edits"]
+            .as_array()
+            .expect("edits array")
+            .iter()
+            .map(|e| e["newText"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            applied.matches("l_english:").count(),
+            1,
+            "each returned action carries exactly one header: {applied:?}"
+        );
+        let stub = applied
+            .lines()
+            .find_map(|l| {
+                let key = l.trim().split(':').next()?;
+                key.starts_with("my_thing").then(|| key.to_string())
+            })
+            .unwrap_or_else(|| panic!("the action's own stub: {applied:?}"));
+        stubs_seen.push(stub);
+    }
+    stubs_seen.sort();
+    assert_eq!(
+        stubs_seen,
+        vec!["my_thing", "my_thing_desc"],
+        "every key lands in one of the returned actions"
+    );
+}
+
+#[test]
+fn test_create_loc_key_code_action_batch_folds_under_one_header_on_a_shared_empty_file() {
+    let mut server = empty_loc_builder()
+        .init_opts(json!({ "localisationLanguages": ["English", "French"] }))
+        .spawn_scanned();
+
+    server.open(THING_REL, THING_TEXT);
+    let diagnostics = server.wait_for_diags(THING_REL);
+    let cw100: Vec<Value> = diagnostics
+        .into_iter()
+        .filter(|d| d["code"] == "CW100")
+        .collect();
+    assert_eq!(cw100.len(), 2, "both keys must be missing: {cw100:#?}");
+
+    let resp = server.call(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": server.uri(THING_REL) },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 1, "character": 0 },
+            },
+            "context": { "diagnostics": cw100, "only": ["quickfix"] },
+        }),
+    );
+    server.stop();
+
+    let actions = resp["result"].as_array().expect("array result");
+    assert_eq!(
+        actions.len(),
+        2,
+        "the second key folds into the first's action; only ignore joins: {resp}"
+    );
+
+    let ops = actions[0]["edit"]["documentChanges"]
+        .as_array()
+        .expect("documentChanges");
+    let en_op = ops
+        .iter()
+        .find(|op| {
+            op["textDocument"]["uri"]
+                .as_str()
+                .is_some_and(|u| u.ends_with("things_l_english.yml"))
+        })
+        .expect("an edit to the empty existing file");
+    let en_applied: String = en_op["edits"]
+        .as_array()
+        .expect("edits array")
+        .iter()
+        .map(|e| e["newText"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        en_applied.matches("l_english:").count(),
+        1,
+        "exactly one header across the whole merged action: {en_applied:?}"
+    );
+    assert!(en_applied.contains(" my_thing:0 "), "got: {en_applied:?}");
+    assert!(
+        en_applied.contains(" my_thing_desc:0 "),
+        "got: {en_applied:?}"
+    );
+    let fr_op = ops
+        .iter()
+        .find(|op| {
+            op["textDocument"]["uri"]
+                .as_str()
+                .is_some_and(|u| u.ends_with("cwtools_generated_l_french.yml"))
+        })
+        .expect("the folded French stub");
+    let fr_applied: String = fr_op["edits"]
+        .as_array()
+        .expect("edits array")
+        .iter()
+        .map(|e| e["newText"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        fr_applied.matches("l_french:").count(),
+        1,
+        "the French new file keeps exactly one header (#142): {fr_applied:?}"
+    );
+    assert!(
+        fr_applied.contains("\u{feff}"),
+        "the French new file opens with the BOM: {fr_applied:?}"
+    );
+    assert!(
+        fr_applied.contains(" my_thing:0 ") && fr_applied.contains(" my_thing_desc:0 "),
+        "both stubs land under the one French header: {fr_applied:?}"
+    );
+    let fr_edits: Vec<&str> = fr_op["edits"]
+        .as_array()
+        .expect("edits array")
+        .iter()
+        .map(|e| e["newText"].as_str().unwrap())
+        .collect();
+    assert!(
+        !fr_edits[1].contains("l_french:") && !fr_edits[1].contains("\u{feff}"),
+        "the folded stub carries neither header nor BOM: {fr_edits:?}"
+    );
+    let create = ops.iter().find(|op| op["kind"] == "create");
+    assert!(
+        create.is_some_and(|op| op["uri"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("cwtools_generated_l_french.yml"))),
+        "only the missing French file is created: {ops:?}"
+    );
+}
+
+#[test]
+fn test_create_loc_key_code_action_initializes_a_bom_only_loc_file() {
+    let mut server = empty_loc_builder()
+        .file("localisation/things_l_english.yml", "\u{FEFF}")
+        .spawn_scanned();
+
+    server.open(THING_REL, THING_TEXT);
+    let diags = server.wait_for_diags(THING_REL);
+    let diag = diags
+        .iter()
+        .find(|d| {
+            d["code"] == "CW100"
+                && d["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("my_thing_desc"))
+        })
+        .cloned()
+        .expect("CW100 for my_thing_desc");
+    let resp = server.code_actions(THING_REL, &diag, true);
+    server.stop();
+
+    let actions = resp["result"].as_array().expect("array result");
+    assert_eq!(
+        actions.len(),
+        2,
+        "the create-loc-key action plus ignore: {resp}"
+    );
+    let ops = actions[0]["edit"]["documentChanges"]
+        .as_array()
+        .expect("documentChanges carries the edit");
+    assert_eq!(ops.len(), 1, "the file exists, so no create op: {resp}");
+    let edits = ops[0]["edits"].as_array().expect("edits array");
+    assert_eq!(edits.len(), 1, "one initializing edit: {resp}");
+    assert_eq!(
+        edits[0]["range"]["start"],
+        json!({ "line": 0, "character": 0 })
+    );
+    assert_eq!(
+        edits[0]["range"]["end"],
+        json!({ "line": 0, "character": 1 }),
+        "the stray BOM must be consumed, not left in the body or doubled"
+    );
+    let applied = edits[0]["newText"].as_str().unwrap();
+    assert_eq!(
+        applied.matches('\u{FEFF}').count(),
+        1,
+        "exactly one BOM: {applied:?}"
+    );
+    let parsed = cwtools_localization::parse_loc_text(applied, "things_l_english.yml")
+        .expect("the initialized content parses");
+    assert_eq!(parsed.language_prefix, "l_english");
+    assert_eq!(
+        parsed
+            .entries
+            .iter()
+            .map(|e| e.key.as_str())
+            .collect::<Vec<_>>(),
+        ["my_thing_desc"],
+        "got: {parsed:?}"
+    );
+}
+
+#[test]
+fn test_create_loc_key_code_action_initializes_a_whitespace_only_loc_file() {
+    let mut server = empty_loc_builder()
+        .file("localisation/things_l_english.yml", "  \n \t\n")
+        .spawn_scanned();
+
+    server.open(THING_REL, THING_TEXT);
+    let diags = server.wait_for_diags(THING_REL);
+    let diag = diags
+        .iter()
+        .find(|d| {
+            d["code"] == "CW100"
+                && d["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("my_thing_desc"))
+        })
+        .cloned()
+        .expect("CW100 for my_thing_desc");
+    let resp = server.code_actions(THING_REL, &diag, true);
+    server.stop();
+
+    let actions = resp["result"].as_array().expect("array result");
+    assert_eq!(
+        actions.len(),
+        2,
+        "the create-loc-key action plus ignore: {resp}"
+    );
+    let ops = actions[0]["edit"]["documentChanges"]
+        .as_array()
+        .expect("documentChanges carries the edit");
+    let edits = ops[0]["edits"].as_array().expect("edits array");
+    assert_eq!(edits.len(), 1, "one initializing edit: {resp}");
+    assert_eq!(
+        edits[0]["range"],
+        json!({
+            "start": { "line": 0, "character": 0 },
+            "end": { "line": 2, "character": 0 },
+        }),
+        "the whole whitespace body is consumed: {resp:?}"
+    );
+    let applied = edits[0]["newText"].as_str().unwrap();
+    assert_eq!(
+        applied, "\u{feff}l_english:\n my_thing_desc:0 \"TODO\"\n",
+        "got: {applied:?}"
+    );
+}
+
+#[test]
+fn test_create_loc_key_code_action_batch_folds_under_one_header_on_a_bom_only_file() {
+    // The BOM-only counterpart of the shared-empty fold test (#1255).
+    let mut server = empty_loc_builder()
+        .file("localisation/things_l_english.yml", "\u{FEFF}")
+        .init_opts(json!({ "localisationLanguages": ["English", "French"] }))
+        .spawn_scanned();
+
+    server.open(THING_REL, THING_TEXT);
+    let diagnostics = server.wait_for_diags(THING_REL);
+    let cw100: Vec<Value> = diagnostics
+        .into_iter()
+        .filter(|d| d["code"] == "CW100")
+        .collect();
+    assert_eq!(cw100.len(), 2, "both keys must be missing: {cw100:#?}");
+
+    let resp = server.call(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": server.uri(THING_REL) },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 1, "character": 0 },
+            },
+            "context": { "diagnostics": cw100, "only": ["quickfix"] },
+        }),
+    );
+    server.stop();
+
+    let actions = resp["result"].as_array().expect("array result");
+    assert_eq!(
+        actions.len(),
+        2,
+        "the second key folds into the first's action; only ignore joins: {resp}"
+    );
+
+    let ops = actions[0]["edit"]["documentChanges"]
+        .as_array()
+        .expect("documentChanges");
+    let en_edits: Vec<Value> = ops
+        .iter()
+        .find(|op| {
+            op["textDocument"]["uri"]
+                .as_str()
+                .is_some_and(|u| u.ends_with("things_l_english.yml"))
+        })
+        .expect("an edit to the BOM-only existing file")["edits"]
+        .as_array()
+        .expect("edits array")
+        .to_vec();
+    assert_eq!(
+        en_edits.len(),
+        2,
+        "the header edit and the folded stub, in one TextDocumentEdit: {en_edits:?}"
+    );
+    // Header edit replaces the whole body; the folded stub inserts past it.
+    assert_eq!(
+        en_edits[0]["range"],
+        json!({ "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }),
+        "got: {en_edits:?}"
+    );
+    assert_eq!(
+        en_edits[1]["range"],
+        json!({ "start": { "line": 0, "character": 1 }, "end": { "line": 0, "character": 1 } }),
+        "the folded stub lands just past the consumed BOM: {en_edits:?}"
+    );
+    let header_edit = en_edits[0]["newText"].as_str().unwrap();
+    assert!(
+        !en_edits[1]["newText"]
+            .as_str()
+            .unwrap()
+            .contains("\u{FEFF}")
+            && !en_edits[1]["newText"]
+                .as_str()
+                .unwrap()
+                .contains("l_english:"),
+        "the folded stub carries neither header nor BOM: {en_edits:?}"
+    );
+    // Applying in array order gives the resulting file.
+    let en_applied = format!("{header_edit}{}", en_edits[1]["newText"].as_str().unwrap());
+    assert_eq!(
+        en_applied.matches('\u{FEFF}').count(),
+        1,
+        "exactly one BOM across the whole folded action: {en_applied:?}"
+    );
+    assert_eq!(
+        en_applied.matches("l_english:").count(),
+        1,
+        "{en_applied:?}"
+    );
+    assert!(en_applied.contains(" my_thing:0 "), "got: {en_applied:?}");
+    assert!(
+        en_applied.contains(" my_thing_desc:0 "),
+        "got: {en_applied:?}"
+    );
+    let parsed = cwtools_localization::parse_loc_text(&en_applied, "things_l_english.yml")
+        .expect("the initialized content parses");
+    let mut keys: Vec<&str> = parsed.entries.iter().map(|e| e.key.as_str()).collect();
+    keys.sort();
+    assert_eq!(keys, ["my_thing", "my_thing_desc"], "got: {parsed:?}");
+
+    let fr_op = ops
+        .iter()
+        .find(|op| {
+            op["textDocument"]["uri"]
+                .as_str()
+                .is_some_and(|u| u.ends_with("cwtools_generated_l_french.yml"))
+        })
+        .expect("the folded French stub");
+    let fr_applied: String = fr_op["edits"]
+        .as_array()
+        .expect("edits array")
+        .iter()
+        .map(|e| e["newText"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        fr_applied.matches("l_french:").count(),
+        1,
+        "the French new file keeps exactly one header (#142): {fr_applied:?}"
+    );
+    let create = ops.iter().find(|op| op["kind"] == "create");
+    assert!(
+        create.is_some_and(|op| op["uri"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("cwtools_generated_l_french.yml"))),
+        "only the missing French file is created: {ops:?}"
+    );
+}
+
 #[test]
 fn test_create_loc_key_code_action_reresolves_once_the_new_file_exists() {
     // Step 4 of #142: the SAFE one-at-a-time flow. Applying the first action

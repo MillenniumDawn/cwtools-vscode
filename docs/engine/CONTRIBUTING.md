@@ -104,7 +104,7 @@ syntax, not volume, so keep it small. Anything corpus-sized belongs in a bench
 that reads the sibling checkouts under `CWTOOLS_PROJECTS`.
 
 No real game rules are committed. A test that needs them calls
-`cwtools_test_support::stellaris_config()` or `hoi4_config()`, which return the
+`cwtools_test_support::stellaris_config()`, `hoi4_config()`, or `vic3_config()`, which return the
 upstream config repo at the commit `rules-pins.json` pins. The first call
 fetches that commit with git into `cwtools/test-rules/` under the user cache
 dir (`XDG_CACHE_HOME`, `LOCALAPPDATA`, else `~/.cache` on every OS), and later
@@ -159,9 +159,9 @@ through the diff.
 
 The Stellaris guard runs the rule loader and rule engine over a real mod's
 scripted prescripted countries and localization. Its rows are mostly rule-config
-and generic field diagnostics, not scope or trigger checks. CI does not run it,
-so run it by hand when changing shared rule-engine code, Stellaris dispatch or
-validation behavior:
+and generic field diagnostics, not scope or trigger checks. CI runs it against
+the revisions pinned in the committed baseline. Run it locally too when changing
+shared rule-engine code, Stellaris dispatch or validation behavior:
 
 ```sh
 python3 scripts/guard.py stellaris

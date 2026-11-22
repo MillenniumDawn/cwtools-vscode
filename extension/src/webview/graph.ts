@@ -54,6 +54,7 @@ const SHADOW_NODE_LIMIT = 300;
 const SHADOW_MIN_ZOOM = 0.4;
 const SHADOW_BLUR = 25;
 const GRAPH_LAYOUT_TIMEOUT_MS = 60_000;
+const HOVER_CLEAR_DELAY_MS = 100;
 
 function drawExtra(
 	nodes: cytoscape.NodeCollection,
@@ -516,15 +517,28 @@ function setupInteraction(
 	});
 
 	// Retain only the current closed neighborhood. Dimming uses classes on
-	// the graph; no complement collection survives an interaction.
+	// the graph; no complement collection survives an interaction. The clear
+	// waits so a quick move to another node swaps hoods instead of restyling all.
 	let hovered: cytoscape.NodeSingular | undefined;
+	let clearTimer: NodeJS.Timeout | undefined;
+	const cancelClear = () => {
+		if (clearTimer !== undefined) {
+			clearTimeout(clearTimer);
+			_hoverTimers.delete(clearTimer);
+			clearTimer = undefined;
+		}
+	};
 	cy.on("mouseover", "node", function (event) {
 		const selected = event.target as cytoscape.NodeSingular;
 		const previous = cy.scratch("_hoverHood") as CollectionReturnValue | undefined;
 		const hood = selected.closedNeighborhood();
+		cancelClear();
 		cy.batch(() => {
-			previous?.removeClass("highlight");
-			cy.elements().difference(hood).addClass("semitransp");
+			if (previous) {
+				previous.removeClass("highlight").addClass("semitransp");
+			} else {
+				cy.elements().difference(hood).addClass("semitransp");
+			}
 			hood.removeClass("semitransp").addClass("highlight");
 		});
 		hovered = selected;
@@ -534,13 +548,20 @@ function setupInteraction(
 		if (event.target !== hovered) {
 			return;
 		}
-		const hood = cy.scratch("_hoverHood") as CollectionReturnValue | undefined;
-		cy.batch(() => {
-			cy.elements().removeClass("semitransp");
-			hood?.removeClass("highlight");
-		});
-		cy.removeScratch("_hoverHood");
-		hovered = undefined;
+		cancelClear();
+		const timer = setTimeout(() => {
+			_hoverTimers.delete(timer);
+			clearTimer = undefined;
+			const hood = cy.scratch("_hoverHood") as CollectionReturnValue | undefined;
+			cy.batch(() => {
+				cy.elements().removeClass("semitransp");
+				hood?.removeClass("highlight");
+			});
+			cy.removeScratch("_hoverHood");
+			hovered = undefined;
+		}, HOVER_CLEAR_DELAY_MS);
+		clearTimer = timer;
+		_hoverTimers.add(timer);
 	});
 
 	cy.on("render", function () {

@@ -36,6 +36,7 @@ test("hovering every node leaves scratch collections bounded to the active hood"
 	cy.$id("n0").emit("mouseout");
 	expect(cy.$id("n1").hasClass("highlight")).toBe(true);
 	cy.$id("n1").emit("mouseout");
+	vi.runOnlyPendingTimers();
 	expect(cy.scratch("_hoverHood")).toBeUndefined();
 	expect(cy.$(".highlight, .semitransp").length).toBe(0);
 	expect(scratchCollections(cy).map((entry) => entry.path)).toEqual([]);
@@ -54,6 +55,17 @@ test("replacing a graph cancels a pending tooltip expansion and destroys the too
 	expect(tip.props.onHidden).toBeUndefined();
 });
 
+test("replacing a graph cancels a pending hover clear", () => {
+	const cy = render([node("a"), node("b")]);
+	cy.$id("a").emit("mouseover");
+	cy.$id("a").emit("mouseout");
+	const dimmed = cy.$id("b");
+	expect(dimmed.hasClass("semitransp")).toBe(true);
+	render([node("replacement")]);
+	vi.advanceTimersByTime(1000);
+	expect(cy.destroyed()).toBe(true);
+	expect(dimmed.hasClass("semitransp")).toBe(true);
+});
 
 test("mouseout before first hover creates no tooltip state", () => {
 	const cy = render([node("a")]);

@@ -344,7 +344,14 @@ pub(super) fn validate_leaf(
             && ctx.scope_checks
             && let Some(sc) = scope_context.as_mut()
         {
-            with_leaf_value_str(&leaf.value, table, |value| {
+            with_leaf_value_str(&leaf.value, table, |raw| {
+                let value = match leaf.value {
+                    Value::QString(_) => raw
+                        .strip_prefix('"')
+                        .and_then(|s| s.strip_suffix('"'))
+                        .unwrap_or(raw),
+                    _ => raw,
+                };
                 validate_scope_target(sc, value, expected, leaf, file_path, errors);
             });
         }
@@ -467,6 +474,9 @@ pub(crate) fn field_matches_value(
         }
         (NewField::ValueField(ValueType::Enum(enum_name)), Value::Float(f)) => {
             enum_contains(ruleset, enum_name, &f.to_string())
+        }
+        (NewField::ValueField(ValueType::Enum(enum_name)), Value::Bool(b)) => {
+            enum_contains(ruleset, enum_name, if *b { "yes" } else { "no" })
         }
 
         (NewField::ValueField(ValueType::Percent), Value::String(t))
@@ -660,10 +670,6 @@ mod tests {
                 NewField::ValueField(ValueType::Float { min: 0.0, max: 1.0 }),
                 clause(),
             ),
-            (
-                NewField::ValueField(ValueType::Enum("e".to_string())),
-                Value::Bool(false),
-            ),
             (NewField::ValueField(ValueType::Percent), clause()),
             (NewField::ValueField(ValueType::Date), Value::Int(2000)),
             (
@@ -756,6 +762,10 @@ mod tests {
             (
                 NewField::ValueField(ValueType::Int { min: 0, max: 10 }),
                 Value::Int(10),
+            ),
+            (
+                NewField::ValueField(ValueType::Enum("e".to_string())),
+                Value::Bool(false),
             ),
             (NewField::ScalarField, clause()),
             (

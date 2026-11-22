@@ -49,17 +49,19 @@ impl Backend {
             return Vec::new();
         };
         let text = self.file_text_for(file_uri.as_ref()).await;
-        let lines = text
-            .as_deref()
-            .map(|text| DocLines::new(text, self.position_encoding()));
-        vec![self.source_location_with_lines(
-            file_uri.as_ref(),
-            line,
-            0,
-            key,
-            fallback,
-            lines.as_ref(),
-        )]
+        tokio::task::block_in_place(|| {
+            let lines = text
+                .as_deref()
+                .map(|text| DocLines::new(text, self.position_encoding()));
+            vec![self.source_location_with_lines(
+                file_uri.as_ref(),
+                line,
+                0,
+                key,
+                fallback,
+                lines.as_ref(),
+            )]
+        })
     }
 
     pub(crate) async fn goto_definition_impl(
@@ -85,33 +87,25 @@ impl Backend {
             return Ok(self.cwt_goto(&uri, pos, fallback).await);
         }
 
-        if let Some(info) = self.rule_info_at_cursor(&uri, pos, &logical_path) {
-            let locations = match &info.hint {
-                ReferenceHint::TypeRef { type_name, value } => {
-                    let value = unquote(value);
-                    let defs = {
-                        let svc = self.state.info_service.read();
-                        svc.type_index
-                            .instances(type_name)
-                            .iter()
-                            .filter(|(_, inst)| inst.name == value)
-                            .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
-                            .collect::<Vec<_>>()
-                    };
-                    locations_at(self, defs, value, fallback).await
-                }
-                ReferenceHint::Variable { name, .. } => {
-                    let defs = {
-                        let svc = self.state.info_service.read();
-                        svc.find_variable_definitions(name)
-                    };
-                    locations_at(self, defs, name, fallback).await
-                }
-                ReferenceHint::LocRef { key } => {
+        let (rule_info, indexed) = tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::GotoWalk);
+            let info = self.rule_info_at_cursor(&uri, pos, &logical_path);
+            let indexed = info
+                .as_ref()
+                .and_then(|info| self.indexed_hint_locations(&info.hint, fallback));
+            (info, indexed)
+        });
+        if let Some(info) = rule_info {
+            let locations = match (indexed, &info.hint) {
+                (Some(locations), _) => locations,
+                (None, ReferenceHint::LocRef { key }) => {
                     self.loc_key_locations(&key.to_lowercase(), fallback).await
                 }
-                ReferenceHint::FileRef { path } => self.file_ref_locations(path, fallback).await,
-                ReferenceHint::EnumRef { enum_name, value } => self
+                (None, ReferenceHint::FileRef { path }) => {
+                    self.file_ref_locations(path, fallback).await
+                }
+                (None, ReferenceHint::EnumRef { enum_name, value }) => self
                     .cwt_def_location(
                         cwtools_rules::rules_types::CwtDefKind::Enum,
                         enum_name,
@@ -121,7 +115,7 @@ impl Backend {
                     .await
                     .into_iter()
                     .collect(),
-                _ => Vec::new(),
+                (None, _) => Vec::new(),
             };
             let locations = dedup_locations(locations);
             if !locations.is_empty() {
@@ -132,7 +126,8 @@ impl Backend {
         // Fallback: try the leaf VALUE before the key, since an event reference like
         // `id = some.1` resolves by its dotted id; the key is second so a definition node
         // (e.g. `decision = { … }`) still resolves (#39).
-        if let Some(element) = self.element_at_cursor(&uri, pos) {
+        let element = tokio::task::block_in_place(|| self.element_at_cursor(&uri, pos));
+        if let Some(element) = element {
             // HOI4 scripted loc files are often untyped (#725).
             if let PositionElement::Leaf { key, value } = &element
                 && is_localization_key_field(key)
@@ -152,39 +147,76 @@ impl Backend {
                 PositionElement::Leaf { key, .. } => vec![key.clone()],
                 PositionElement::LeafValue { value } => vec![unquote(value).to_string()],
             };
-            let candidates_with_locations = {
-                let info = self.state.info_service.read();
-                candidates
-                    .iter()
-                    .map(|symbol| {
-                        let instances = info
-                            .type_index
-                            .instance_locations(symbol)
-                            .into_iter()
-                            .map(|(uri, loc)| (uri.to_string(), loc))
-                            .collect::<Vec<_>>();
-                        let definitions = if instances.is_empty() {
-                            info.find_definitions(symbol).cloned().unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        };
-                        (symbol.clone(), instances, definitions)
-                    })
-                    .collect::<Vec<_>>()
-            };
-            for (symbol, instances, definitions) in candidates_with_locations {
-                let pairs = if instances.is_empty() {
-                    definitions
-                } else {
-                    instances
+            let response = tokio::task::block_in_place(|| {
+                let candidates_with_locations = {
+                    let info = self.state.info_service.read();
+                    candidates
+                        .iter()
+                        .map(|symbol| {
+                            let instances = info
+                                .type_index
+                                .instance_locations(symbol)
+                                .into_iter()
+                                .map(|(uri, loc)| (uri.to_string(), loc))
+                                .collect::<Vec<_>>();
+                            let definitions = if instances.is_empty() {
+                                info.find_definitions(symbol).cloned().unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            };
+                            (symbol.clone(), instances, definitions)
+                        })
+                        .collect::<Vec<_>>()
                 };
-                let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback).await);
-                if !locations.is_empty() {
-                    return Ok(Some(GotoDefinitionResponse::Array(locations)));
+                for (symbol, instances, definitions) in candidates_with_locations {
+                    let pairs = if instances.is_empty() {
+                        definitions
+                    } else {
+                        instances
+                    };
+                    let locations = dedup_locations(locations_at(self, pairs, &symbol, fallback));
+                    if !locations.is_empty() {
+                        return Some(GotoDefinitionResponse::Array(locations));
+                    }
                 }
-            }
+                None
+            });
+            return Ok(response);
         }
         Ok(None)
+    }
+
+    /// Definitions of a type or variable reference, which the index answers
+    /// without an await. `None` for the hints that read files. Call inside
+    /// `block_in_place`.
+    fn indexed_hint_locations(
+        &self,
+        hint: &ReferenceHint,
+        fallback: &Url,
+    ) -> Option<Vec<Location>> {
+        match hint {
+            ReferenceHint::TypeRef { type_name, value } => {
+                let value = unquote(value);
+                let defs = {
+                    let svc = self.state.info_service.read();
+                    svc.type_index
+                        .instances(type_name)
+                        .iter()
+                        .filter(|(_, inst)| inst.name == value)
+                        .map(|(file_uri, inst)| (file_uri.to_string(), inst.location))
+                        .collect::<Vec<_>>()
+                };
+                Some(locations_at(self, defs, value, fallback))
+            }
+            ReferenceHint::Variable { name, .. } => {
+                let defs = {
+                    let svc = self.state.info_service.read();
+                    svc.find_variable_definitions(name)
+                };
+                Some(locations_at(self, defs, name, fallback))
+            }
+            _ => None,
+        }
     }
 
     async fn file_ref_locations(&self, path: &str, fallback: &Url) -> Vec<Location> {
@@ -204,14 +236,18 @@ impl Backend {
         pos: Position,
     ) -> Option<(cwtools_rules::rules_types::CwtDefKind, String)> {
         let text = self.file_text_for(uri).await?;
-        let encoding = self.state.config.read().position_encoding.clone();
-        // One scan for the line, then the column off that line.
-        // `lsp_pos_to_source_in_text` would walk the document to find the same
-        // line a second time (#471).
-        let line = text.lines().nth(pos.line as usize)?;
-        let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
-        let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
-        cwt_ref_at(line, col)
+        tokio::task::block_in_place(|| {
+            #[cfg(test)]
+            self.hold(crate::state::HoldPoint::CwtCursorWalk);
+            let encoding = self.state.config.read().position_encoding.clone();
+            // One scan for the line, then the column off that line.
+            // `lsp_pos_to_source_in_text` would walk the document to find the same
+            // line a second time (#471).
+            let line = text.lines().nth(pos.line as usize)?;
+            let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+            let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+            cwt_ref_at(line, col)
+        })
     }
 
     async fn cwt_goto(
@@ -232,35 +268,37 @@ impl Backend {
         member: Option<&str>,
         fallback: &Url,
     ) -> Option<Location> {
-        let def = {
+        let def = tokio::task::block_in_place(|| {
             let rules = self.state.rules.read();
             let rs = rules.ruleset.as_ref()?;
             rs.def_positions
                 .iter()
                 .find(|d| d.kind == kind && d.name == name)
                 .cloned()
-        }?;
+        })?;
         let target_uri = crate::paths::path_to_uri(&def.file);
         let text = self.file_text_for(&target_uri).await;
-        let line0 = def.line.saturating_sub(1);
-        let (line0, col, token) = member
-            .zip(text.as_deref())
-            .and_then(|(m, text)| {
-                let (line, col) = member_pos_in_block(text, line0, def.col as u32, m)?;
-                Some((line, col, m))
-            })
-            .unwrap_or((line0, def.col as u32, name));
-        let lines = text
-            .as_deref()
-            .map(|text| DocLines::new(text, self.position_encoding()));
-        Some(self.source_location_with_lines(
-            &target_uri,
-            line0,
-            col,
-            token,
-            fallback,
-            lines.as_ref(),
-        ))
+        tokio::task::block_in_place(|| {
+            let line0 = def.line.saturating_sub(1);
+            let (line0, col, token) = member
+                .zip(text.as_deref())
+                .and_then(|(m, text)| {
+                    let (line, col) = member_pos_in_block(text, line0, def.col as u32, m)?;
+                    Some((line, col, m))
+                })
+                .unwrap_or((line0, def.col as u32, name));
+            let lines = text
+                .as_deref()
+                .map(|text| DocLines::new(text, self.position_encoding()));
+            Some(self.source_location_with_lines(
+                &target_uri,
+                line0,
+                col,
+                token,
+                fallback,
+                lines.as_ref(),
+            ))
+        })
     }
 
     pub(crate) fn search_roots(&self) -> Vec<std::path::PathBuf> {
@@ -285,4 +323,82 @@ impl Backend {
 
 fn is_localization_key_field(key: &str) -> bool {
     key.eq_ignore_ascii_case("localization_key") || key.eq_ignore_ascii_case("localisation_key")
+}
+
+#[cfg(test)]
+mod tests {
+    use cwtools_info::SourceLocation;
+
+    use super::*;
+    use crate::access::{MAX_URI_READ_BYTES, read_authorized_text, recorded_reads_under};
+    use crate::paths::path_to_uri;
+    use crate::testing::{open_document, workspace_backend};
+
+    fn at(line: u32, col: u16) -> SourceLocation {
+        SourceLocation {
+            line,
+            col,
+            end: (line, col),
+        }
+    }
+
+    fn range(start: u32, end: u32) -> Range {
+        Range::new(Position::new(0, start), Position::new(0, end))
+    }
+
+    fn fallback() -> Url {
+        Url::parse("file:///unknown").expect("static URI")
+    }
+
+    #[test]
+    fn closed_files_get_their_ranges_without_a_read() {
+        let (backend, workspace) = workspace_backend();
+        let write = |name: &str, text: &str| {
+            let path = workspace.path().join(name);
+            std::fs::write(&path, text).expect("write fixture");
+            path_to_uri(&path)
+        };
+        let ascii = write("ascii.txt", "my_name = 1\n");
+        // Accented and CJK text is one UTF-16 unit per char, so the index
+        // column is already exact after it.
+        let bmp = write("bmp.txt", "caf\u{e9}\u{4e16} my_name = 1\n");
+        let open = path_to_uri(&workspace.path().join("open.txt"));
+        open_document(&backend, &open, "\u{1f600} my_name = 1\n");
+        let before = recorded_reads_under(workspace.path());
+
+        let pairs = vec![(ascii.clone(), at(1, 0)), (bmp, at(1, 6)), (open, at(1, 2))];
+        let locations = locations_at(&backend, pairs, "my_name", &fallback());
+
+        let ranges: Vec<Range> = locations.iter().map(|l| l.range).collect();
+        assert_eq!(ranges, vec![range(0, 7), range(6, 13), range(3, 10)]);
+        assert_eq!(
+            recorded_reads_under(workspace.path()),
+            before,
+            "go-to-definition must answer from the index, not the disk"
+        );
+
+        // A read of the closed file is recorded, so the equality above cannot
+        // hold because the instrumentation went quiet.
+        let roots = backend.state.config.read().authorized_roots.clone();
+        assert!(read_authorized_text(&ascii, &roots, MAX_URI_READ_BYTES).is_some());
+        assert_eq!(recorded_reads_under(workspace.path()), before + 1);
+    }
+
+    /// A closed file is not read, so a column after astral text is the char
+    /// column. UTF-16 counts that text twice, which makes the exact answer one
+    /// unit to the right (an open document gets it). UTF-32 counts chars.
+    #[test]
+    fn a_closed_file_keeps_the_char_column_after_astral_text() {
+        let (backend, workspace) = workspace_backend();
+        let path = workspace.path().join("closed.txt");
+        std::fs::write(&path, "\u{1f600} my_name = 1\n").expect("write fixture");
+        let uri = path_to_uri(&path);
+
+        let utf16 = locations_at(&backend, [(uri.clone(), at(1, 2))], "my_name", &fallback());
+        assert_eq!(utf16[0].range, range(2, 9));
+
+        backend.state.config.write().position_encoding = PositionEncodingKind::UTF32;
+        let utf32 = locations_at(&backend, [(uri, at(1, 2))], "my_name", &fallback());
+        assert_eq!(utf32[0].range, range(2, 9));
+    }
 }

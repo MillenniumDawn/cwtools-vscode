@@ -18,6 +18,7 @@ test("real delegated hover highlights the closed neighborhood and restores class
 	expect(cy.$id("other").hasClass("semitransp")).toBe(true);
 	expect(selected.hasClass("semitransp")).toBe(false);
 	selected.emit("mouseout");
+	vi.runOnlyPendingTimers();
 	expect(cy.$(".highlight, .semitransp").length).toBe(0);
 });
 
@@ -172,7 +173,44 @@ test("hover class updates touch at most the graph size for a fixed-degree node",
 		expect(cy.$(".highlight").length).toBe(5);
 		expect(touched).toBeLessThanOrEqual(cy.elements().length);
 		cy.$id("n0").emit("mouseout");
+		vi.runOnlyPendingTimers();
 		expect(cy.$(".highlight, .semitransp").length).toBe(0);
+	} finally {
+		spy.mockRestore();
+	}
+});
+
+test("a quick move to another node swaps neighborhoods without restyling the rest of the graph", () => {
+	const cy = render(Array.from({ length: 100 }, (_, i) => node(`n${i}`, [`n${(i + 1) % 100}`])));
+	const prototype = Object.getPrototypeOf(cy.nodes()[0]) as { toggleClass: cytoscape.CollectionReturnValue["toggleClass"] };
+	const original = prototype.toggleClass;
+	let touched = 0;
+	const spy = vi.spyOn(prototype, "toggleClass").mockImplementation(function (this: cytoscape.CollectionReturnValue, classes, toggle) {
+		touched += this.length;
+		return original.call(this, classes, toggle);
+	});
+	try {
+		cy.$id("n0").emit("mouseover");
+		cy.$id("n0").emit("mouseout");
+		vi.advanceTimersByTime(10);
+		expect(cy.$id("n0").hasClass("highlight")).toBe(true);
+		expect(cy.$id("n25").hasClass("semitransp")).toBe(true);
+
+		touched = 0;
+		cy.$id("n50").emit("mouseover");
+		expect(touched).toBeLessThanOrEqual(20);
+		expect(cy.$(".highlight").map((e) => e.id()).sort()).toEqual(cy.$id("n50").closedNeighborhood().map((e) => e.id()).sort());
+		expect(cy.$id("n0").hasClass("semitransp")).toBe(true);
+		expect(cy.$id("n0").hasClass("highlight")).toBe(false);
+		expect(cy.$id("n50").hasClass("semitransp")).toBe(false);
+		expect(cy.$(".semitransp").length).toBe(cy.elements().length - 5);
+
+		cy.$id("n50").emit("mouseout");
+		vi.advanceTimersByTime(10);
+		expect(cy.$(".highlight").length).toBe(5);
+		vi.runOnlyPendingTimers();
+		expect(cy.$(".highlight, .semitransp").length).toBe(0);
+		expect(cy.scratch("_hoverHood")).toBeUndefined();
 	} finally {
 		spy.mockRestore();
 	}

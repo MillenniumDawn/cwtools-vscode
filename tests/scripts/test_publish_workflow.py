@@ -6,7 +6,7 @@ Text assertions rather than a YAML parse: PyYAML is not a dev dependency.
 
 from pathlib import Path
 
-from workflow_helpers import job_scope
+from workflow_helpers import job_scope, workflow_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -181,7 +181,7 @@ def test_marketplace_verifies_its_download_before_publishing() -> None:
     workflow = PUBLISH.read_text(encoding="utf-8")
     package_job = job_scope(workflow, "package")
     assert '--expected-version "$CWTOOLS_BUILD_VERSION"' in package_job
-    assert "sha256sum *.vsix > SHA256SUMS" in package_job
+    assert "sha256sum -- *.vsix > SHA256SUMS" in package_job
 
     marketplace = job_scope(workflow, "marketplace")
     _, verify_and_publish = marketplace.split(
@@ -206,3 +206,33 @@ def test_release_failed_guards_every_job_it_waits_on() -> None:
         assert f"needs.{job}.result == 'failure'" in guard, f"{job} missing from if"
     # A run someone cancelled by hand is not a release that broke.
     assert "cancelled" not in guard
+
+
+def test_published_binary_identity_is_checked_before_compilation() -> None:
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    step = workflow_step(workflow, "Build server")
+    assert "CWTOOLS_BUILD_COMMIT: ${{ github.sha }}" in step
+    assert 'test "$(git rev-parse HEAD)" = "$CWTOOLS_BUILD_COMMIT"' in step
+    assert "cargo build --locked --release -p cwtools_lsp" in step
+    assert step.index("git rev-parse HEAD") < step.index("cargo build")
+
+
+def test_publish_requires_exact_source_ci_before_any_registry() -> None:
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    verify = job_scope(workflow, "verify")
+    assert "    if:" not in verify.split("    steps:", maxsplit=1)[0]
+    assert "actions: read" in verify
+    assert "actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" in verify
+    assert "branch=main" in verify
+    assert "gh api --paginate --slurp" in verify
+    assert "scripts/build/release_decisions.py" in verify
+    assert verify.index("Check the publish tokens") < verify.index(
+        "Require successful CI"
+    )
+    assert "needs: verify" in job_scope(workflow, "build-server")
+    assert "needs: [check, verify, build-server]" in job_scope(workflow, "package")
+    for job in PUBLISH_JOBS:
+        assert "package" in job_scope(workflow, job).split("    steps:", maxsplit=1)[0]
+    # A cancelled CI run on main would fail the gate for that commit.
+    ci = (PUBLISH.parent / "ci.yml").read_text(encoding="utf-8")
+    assert "github.event_name == 'push' && github.sha" in ci

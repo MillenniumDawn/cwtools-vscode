@@ -8,14 +8,10 @@
 # rules-source: https://github.com/cwtools/cwtools-stellaris-config
 # rules-commit: 99147efe8072b331005b50536762dcc0b8573224
 file,line,severity,code,message
-common/defines.cwt,3088,Error,CW601,rule references undefined type `modifier`
 effects.cwt,1124,Error,CW601,rule references undefined type `target`
 effects.cwt,18,Error,CW601,rule references undefined type `global_starbase_design`
 effects.cwt,4549,Error,CW601,rule references undefined enum `storm_mission_counter`
 effects.cwt,4562,Error,CW601,rule references undefined enum `storm_mission_counter`
-effects.cwt,6,Error,CW601,rule references undefined enum `scripted_effect_params`
-effects.cwt,8,Error,CW601,rule references undefined enum `scripted_effect_params`
-modifier.cwt,9,Error,CW601,rule references undefined type `modifier`
 modifier_rule.cwt,16,Error,CW601,rule references undefined type `trigger`
 modifier_rule.cwt,181,Error,CW601,rule references undefined type `trigger`
 modifier_rule.cwt,187,Error,CW601,rule references undefined type `trigger`
@@ -23,7 +19,6 @@ modifier_rule.cwt,238,Error,CW601,rule references undefined type `trigger`
 modifier_rule.cwt,26,Error,CW601,rule references undefined type `trigger`
 modifier_rule.cwt,36,Error,CW601,rule references undefined type `trigger`
 modifier_rule.cwt,46,Error,CW601,rule references undefined type `trigger`
-modifier_rule.cwt,99,Error,CW601,rule references undefined type `modifier`
 prescripted_countries/ui_civbe_africa.txt,2,Error,CW263,Unexpected field 'key'
 prescripted_countries/ui_civbe_africa.txt,76,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
 prescripted_countries/ui_civbe_brasilia.txt,2,Error,CW263,Unexpected field 'key'
@@ -176,7 +171,5 @@ scope_changes.cwt,826,Error,CW601,rule references undefined type `trigger`
 scope_changes.cwt,871,Error,CW601,rule references undefined type `trigger`
 scope_changes.cwt,915,Error,CW601,rule references undefined type `trigger`
 scope_changes.cwt,959,Error,CW601,rule references undefined type `trigger`
-triggers.cwt,10,Error,CW601,rule references undefined enum `scripted_effect_params`
-triggers.cwt,12,Error,CW601,rule references undefined enum `scripted_effect_params`
 triggers.cwt,2299,Error,CW601,rule references undefined type `resource_name`
 triggers.cwt,3090,Error,CW605,Malformed alias directive `alias[trigger:is_market_leader`; expected `alias[category:name]` with nonempty names

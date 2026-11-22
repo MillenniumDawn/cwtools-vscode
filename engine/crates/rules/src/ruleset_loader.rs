@@ -160,6 +160,19 @@ fn collect_cwt_files(
     }
 }
 
+/// The files [`load_ruleset_from_dir`] reads under `dir`, for a caller that
+/// watches them. Unreadable directories are left out; the load reports them.
+pub fn ruleset_input_files(dir: &Path, budget: ScanBudget) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    collect_cwt_files(
+        dir,
+        &mut files,
+        &mut Vec::new(),
+        &mut budget.files_remaining(),
+    );
+    files
+}
+
 /// The game-generated `logs/modifiers.log` some configs ship in place of a `modifiers` section.
 fn is_modifiers_log(path: &Path) -> bool {
     let named = |name: Option<&std::ffi::OsStr>, want: &str| {
@@ -618,6 +631,44 @@ thing = { second = any }
         assert!(
             !names.contains(&"link.cwt".to_string()),
             "symlinked .cwt file must be rejected: {names:?}"
+        );
+    }
+
+    #[test]
+    fn ruleset_input_files_lists_what_the_directory_load_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        for relative in [
+            "base.cwt",
+            ".hidden/patch.CWT",
+            "target/tool.cwt",
+            "logs/modifiers.log",
+            "modifiers.log",
+            "README.md",
+        ] {
+            let path = tmp.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "types = { }\n").unwrap();
+        }
+
+        let mut files: Vec<String> = ruleset_input_files(tmp.path(), ScanBudget::default())
+            .iter()
+            .map(|file| {
+                file.strip_prefix(tmp.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        files.sort();
+
+        assert_eq!(
+            files,
+            [
+                ".hidden/patch.CWT",
+                "base.cwt",
+                "logs/modifiers.log",
+                "target/tool.cwt"
+            ]
         );
     }
 

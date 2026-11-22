@@ -2,21 +2,92 @@
 
 #### Tooling
 
-* Lock the complete Python helper environment with uv, enforce measured production line and branch coverage, and run non-UI Python and Node checks natively on Ubuntu, Windows and macOS. (#1225, #1226, #1227)
+* Lock the complete Python helper environment with `uv.lock`, which replaces `requirements-dev.txt`, and install it with `uv sync --locked` in CI. Gate Python line and branch coverage at measured floors and show it in the coverage comment. (#1225, #1226)
+
+### 4.0.9
+
+#### Engine
+
+* Show one hover line per language. A mod key that replaces a base-game key used to list both texts, and the mod's own text is now the only one shown. Hovering a definition's key shows the title its type's localisation binds, such as an explicit `name` field, ahead of the `<key>` guess. A reference to a type titled by its own name, such as a building, no longer shows that title twice.
+* Move localization and reference state when files are renamed, preserve hover and go-to-definition, and clear diagnostics at the old path. Revalidate pending edits and dependent references under the new path without waiting for a rescan. (#1238)
+* Refresh descriptor-derived parent mods on each watch reload, adding and removing watched roots without restarting. Explicit CLI and config parents keep precedence. (#1347)
+* Poll `validate --watch` through the loaders' own discovery instead of a copy of its rules, so hidden rules, explicit include folders, multi-mod members, ignore files and ignore dirs match what a pass reads. Resources are tracked by path only, so re-exporting art no longer revalidates, and the first poll after startup no longer reports a change when nothing was edited. (#1210, #1336)
+* Preserve unset FROM and PREV depths when replacement scopes contain gaps. (#1242)
+* Reject a Victoria 3 rules pin that adds an undefined type, enum, or single alias. `bec10017` comments out `terrain_manipulator` while `buildings.cwt` still references it, and no later upstream commit fixes that, so the pin stays at `ba728e59`. (#1315)
+* Share one discovery file cap across the include directories and roots of a walk, and from a mod into its parent mods' script walks (and, in the CLI, their localisation walks). Count script and localisation files against the cap in the base-game auxiliary walk and the file index, and list resource files without counting them, so a large asset tree cannot fail a scan. Enforce an aggregate read budget over the scripts of a CLI run, and report validation as incomplete when a cap is exceeded. The editor's localisation walks and the other file-index walks keep a cap of their own. (#1266, #1247, #1246)
+* When discovery skips files or reaches a cap, the editor now logs a warning, marks the index incomplete and retries on the next pass, instead of aborting the scan or leaving the background reindex disabled. Workspace-folder, watched-file and configuration rescans retry only while another scan is busy, base-game file indexing is retried after incomplete discovery, and a scan that loses the vanilla publication race clears its quiet-scan fingerprint. The base-game merge no longer holds its locks across filesystem work. (#1266, #1247, #1246)
+* Embed the source commit in published server binaries and expose it in version output and setup reports; local builds without supplied identity report it as unavailable. (#1223)
+* Accept either valid integer or floating-point color channels for dual-form color rules, while rejecting invalid counts, ranges, and mixed forms. (#1264)
+* Run document color, inlay hint, highlight, symbol, go-to-definition, references, and prepare-rename walks outside async runtime workers. (#1326)
+* Preserve PREV and PREVPREV traversal order when rules replace a scope stack. (#1243)
+* Initialize empty, BOM-only, or whitespace-only language-named localization files with one BOM and language header when creating missing keys, including folded actions. (#1255)
+* Stop stale or superseded localization validations, and watched reads of files that are open in the editor, from overwriting newer localization state. (#1325)
+* Recycle localization text file slots after dead entries are swept, preserving translation precedence across edits. (#1259)
+* Refuse to apply `fix` edits to a localization file that changed after it was loaded, as `fix` already does for scripts. The load records each file's byte length and content hash, and the fix rereads at most one byte past that length and compares. A grown, edited, renamed or deleted file stops the run before anything is written, and files that still match are fixed as before. (#1346)
+* Keep document tokens from the accepted validation when an older validation finishes late. (#1256)
+* Cover a dependent validation sweep that snapshots current text with an older syntax tree: it neither publishes stale diagnostics nor replaces newer type uses. (#1236)
+* Refresh closed-file diagnostics when ignored error codes change. (#1257)
+* Replace the active rules when a rules directory loads successfully but is empty, while retaining the last good rules on input acquisition failure. (#1258)
+* Rebuild base-game value sets and variables when their collection rules change. (#1213)
+* Index a boolean as `yes` or `no`, the way the script spells it, instead of `true` or `false`. A type instance named by a `name_field` set to `yes` is now found by a reference spelled `yes`, which no longer raises a false CW500, and variable names and values captured from `yes` or `no` follow the same spelling. Stellaris CW227, CW229, CW109 and CW250 also read a boolean `template`, `area` or `key` as `yes` or `no`. The vanilla cache format version moves to 17, so an existing `.cwv` file is rebuilt once. (#1334)
+* Treat a zero script-file size limit as unlimited during parsing and cold-cache indexing, matching discovery. Keep positive limits and explicit hard-zero reads unchanged. (#1292)
+* Reconcile localization keys with disk on close, including saves whose watched event arrived while the file was open. (#1237)
+* Keep inline `# cwtools-ignore` directives when open documents are revalidated after a rescan, a background reindex or a settings change. Suppressed diagnostics used to come back until the next edit of the file. That pass now also runs off the async workers.
+* Resolve hover, go-to-definition, highlights, references, rename, semantic tokens, inlay hints, colors, document links and the outline against the syntax tree of the current text. Between an edit and its debounced validation they used the previous version's tree under the new positions, and semantic tokens built that way stayed cached until the next edit. Completion still uses the last validated tree. A request and the validation of the same document version share one parse.
+* Offer the whole name when renaming a dotted event id or localisation key from any segment. The range used to start after the last dot before the cursor.
+* Keep parsing after an unclosed `@\[` expression. The scan for `]` ran past the end of the line, to the next `]` anywhere in the file or to its end, so the statements in between were missing from the tree while the expression was being typed. The expression now ends on its own line, and the error is still reported. The parse cache is invalidated once so unchanged files use the new recovery.
+* Rebuild the base-game cache when a type's `path_strict`, `path_file`, `path_extension` or explicit localisation fields change, or a subtype's conditions or `only_if_not` change. Those decide the cached instances, subtype memberships and primary localisation keys but were not part of the cache key. Existing caches rebuild once.
+* Collect an open document's reference sites under a read lock. Call hierarchy and the per-edit refresh no longer block hover, completion and validation while they walk the tree.
+* Return changed names to their queue when the next keystroke aborts the dependent sweep that took them. In configs that track type uses, open files whose unused-instance status changed were otherwise never revalidated.
+* Check every document link's target in one blocking task with the search roots resolved once, and keep the rule walk off the async workers. Each candidate used to resolve itself and every root in its own task, one after another.
+* Store each complex enum and value-set string once across files, and reject lines without the searched name before scanning them for highlights and rename.
+
+#### Tooling
+
+* Run non-UI client and Python helper tests on Windows and macOS as well as Linux. (#1227)
+* Clear stale instrumented Rust binaries before CI coverage so older compiler artifacts cannot distort the line coverage gate.
+* Validate release tags against the manifest and release notes before any publishing jobs start. A failed validation opens the release fix pull request like any other release failure. (#1249)
+* Require successful main-branch CI for the exact published commit before building or publishing. CI runs for pushes to main no longer cancel each other. (#1215)
+* Run the pinned Stellaris diagnostics guard in CI and retain drift artifacts on failure. Update its baseline to remove seven CW601 false positives for the built-in `modifier` type and `scripted_effect_params` enum that #1088 already fixed. (#1224)
+* Correct the error-code reconciliation note to name `crates/error_codes/src/lib.rs`, and list the `vscode-floor` and `parent-language` host labels CI runs.
+* Check GitHub Actions workflow semantics in CI with checksum-pinned actionlint and ShellCheck. (#1228)
+* Verify the publishing build checks out the requested commit while keeping the Rust lockfile enforced.
+* Add an on-demand Ubuntu 26.04 build and extension-host smoke workflow, ahead of the `ubuntu-latest` move.
+* Enforce the committed Rust lockfile in CI, coverage, guard and release builds. (#1218)
+* Run bounded weekly fuzz discovery campaigns that carry their corpus between runs, show failures in the job summary, and keep replay metadata for each crash. (#1230)
+
+#### Extension
+
+* End pending rules-update progress when the server stops or fails to start, and prevent an old scan completion from reloading a stopped or restarted server. (#1270)
+* Hide palette commands that are not registered yet. With CWTools disabled, no `descriptor.mod`, a missing server binary, or a stopped server, the restart, output, base-game, baseline, graph-from-JSON, profiling, reindex, cache, rules-reload and localisation commands no longer appear and fail with "command not found".
+* Stop asking the server for file types when the focused editor is not a script file. Switching to settings, markdown or a diff no longer sends a request or logs a failure while the server is starting.
+* Log a failed language change for an opened document instead of failing activation.
+* Show each path component once in the Files view, using the server's logical path. (#1269)
+
+### 4.0.8
 
 #### Extension
 
 * Refresh diagnostics when a related message, URI, or range changes, while continuing to suppress identical repeats. (#1260)
+* Move the graph hover highlight between nodes by swapping the two neighborhoods instead of restyling every element. The dim now clears 100 ms after the pointer leaves a node, so a quick move to the next node skips the full clear. (#1324)
 
 #### Engine
 
+* Stop reading closed files to place workspace symbol and go-to-definition results. Their ranges now use the indexed column directly, which differs from the old result only for a symbol that follows astral-plane characters (such as emoji) on the same line under UTF-16 positions. Open documents still convert exactly. (#1323)
 * Honor zero as an unlimited ScanBudget file count or per-file size when discovering scripts and loading rules and localization. Explicit hard-zero reads and nonzero limits are unchanged. (#1267)
 * Report missing dollar-delimited localization references in CK2/VIC2 CSV descriptions as CW225, across all supported language columns. (#1245)
+* Release the workspace scan's type index snapshot once pass 2 has validated, instead of holding it through publishing and the open-document revalidation. An index write in that window, such as an open document reindexed after the scan, no longer copies the whole index. An edit made while pass 2 is still validating still copies it, because that pass reads a stable snapshot. Diagnostics are unchanged. (#1321)
 * Fail `cwtools parse <dir>` when a rules directory contains error-severity diagnostics, preserving its summary and errors. Loader warnings still exit successfully. (#1248)
+* Check enums of every size against their listed members. Enums with six or more values accepted any non-empty value, so CW240 never fired for them, and the same cutoff let any key match an enum-keyed rule or alias pattern. Enums with no listed members or with `@` constant members still accept anything. (#1319)
+* Check a quoted value against a `scope[...]` field without its quotes, so `id = "SER"` passes like `id = SER` and no longer reports a false CW244. An unknown quoted target still reports CW244. (#1319)
+* When every overload of an alias fails with the same number of errors, report the one that fails furthest into the block instead of the first one declared. A wrong `id` is no longer blamed on the `type` enum of an unrelated overload, and a missing field counts as failing last. (#1319)
+* Cut the `|format` suffix off localization commands before parsing a Jomini chain, as plain commands already do. `[Root.GetFoo('x')|0]` and `[a.b|U]` no longer end in a bogus `|0` or `b|U` segment that could surface as a false CW226. A `|` inside parentheses or quotes is kept. (#1320)
 
 * Apply the configured min/max bounds to keyed variable_field values, reporting out-of-range numbers as CW240 instead of accepting them. Integer and floating values and numeric strings are checked against the same comparison bare values use. Dynamic values, variable references, and the int-only (CW271) and 32-bit precision (CW270) checks are unchanged. The pinned Millennium Dawn baseline gains three CW240 rows: set_war_support = -1 in common/national_focus/05_georgia.txt, add_war_support = -2 in events/05_australia_events.txt, and add_war_support = 15 in events/05_netherlands.txt. (#1241)
+* Show boolean values as `yes` or `no` in CW240, CW264, CW267 and CW282 messages instead of `true` or `false`. A boolean inline-script argument (`ENABLED = yes`) is now substituted as `yes` or `no`, so `is_x = $ENABLED$` no longer raises a false CW240 on a `bool` field. (#1318)
 * Watch an explicitly supplied `--vanilla` directory in `validate --watch`, deduplicated against the rules, workspace and parent roots, so an edit under the vanilla install reruns validation without another workspace change. Mod ignore-dir exclusions are not applied to the vanilla root, and an unset vanilla adds no root. (#1268)
 * Report the missing UTF-8 BOM error (CW254) once per physical localisation file. Multi-language CSV files parsed one projection per language and repeated the file-level error for every projection; language-specific entry diagnostics are unchanged. (#1263)
+* Accept a bare `yes` or `no` for an `enum[...]` field when the enum lists it. The parser reads these as booleans, which the enum check skipped, so `mode = yes` reported CW240. A value the enum does not list is still reported. (#1317)
 
 ### 4.0.7
 

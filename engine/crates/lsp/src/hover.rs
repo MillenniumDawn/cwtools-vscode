@@ -49,8 +49,6 @@ impl Backend {
                     .state
                     .hover_debug
                     .load(std::sync::atomic::Ordering::Relaxed);
-                // Lock order: rules -> info_service -> loc_text.
-                let rules_guard = self.state.rules.read();
                 let mut md = build_hover_markdown(
                     &element,
                     &hint,
@@ -65,7 +63,7 @@ impl Backend {
                         resolved: resolved_scope.as_deref(),
                     },
                     debug,
-                    rules_guard.ruleset.as_deref(),
+                    self.state.rules.read().ruleset.as_deref(),
                 );
                 if let ReferenceHint::Variable { name, .. } = &hint {
                     let info_guard = self.state.info_service.read();
@@ -80,23 +78,13 @@ impl Backend {
                         md.push_str(&format!("\n\nSet to: {}{}", joined, suffix));
                     }
                 }
-                append_localisation(&mut md, &element, &self.state.loc_text.read());
-                // A reference to a type with a primary loc key (an event id, …) shows the
-                // localized title, from the captured explicit-field key or a name-derived key (#40).
-                if let ReferenceHint::TypeRef { type_name, value } = &hint {
-                    let info_guard = self.state.info_service.read();
-                    let loc_text = self.state.loc_text.read();
-                    if let Some(ruleset) = rules_guard.ruleset.as_ref() {
-                        append_type_localisation(
-                            &mut md,
-                            type_name,
-                            value,
-                            &info_guard.type_index,
-                            ruleset,
-                            &loc_text,
-                        );
+                let type_ref = match &hint {
+                    ReferenceHint::TypeRef { type_name, value } => {
+                        Some((type_name.as_str(), value.as_str()))
                     }
-                }
+                    _ => None,
+                };
+                self.append_hover_localisation(&mut md, &uri, pos, &element, type_ref);
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -123,7 +111,7 @@ impl Backend {
                 } else {
                     String::new()
                 };
-                append_localisation(&mut contents, &element, &self.state.loc_text.read());
+                self.append_hover_localisation(&mut contents, &uri, pos, &element, None);
                 if !contents.trim().is_empty() {
                     return Ok(Some(Hover {
                         contents: HoverContents::Markup(MarkupContent {
@@ -200,13 +188,7 @@ impl Backend {
             loc_text.get(key.as_str())?
         };
         let mut md = format!("**Localisation key** `{}`", key);
-        for (lang, text) in translations {
-            md.push_str(&format!(
-                "\n- {}: {}",
-                lang_display_name(lang),
-                escape_markdown(text),
-            ));
-        }
+        push_translations(&mut md, translations);
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
@@ -223,6 +205,85 @@ impl Backend {
                 },
             }),
         })
+    }
+
+    /// A type reference, or the key of a definition, is titled by the type's loc
+    /// binding instead of the `{key}` guess, so a definition named by an explicit
+    /// field (`name = …`) still shows its title.
+    fn append_hover_localisation(
+        &self,
+        md: &mut String,
+        uri: &str,
+        pos: Position,
+        element: &PositionElement,
+        type_ref: Option<(&str, &str)>,
+    ) {
+        let definition = match element {
+            PositionElement::Leaf { key, value } if type_ref.is_none() && value.is_empty() => {
+                self.definition_at_cursor(uri, pos, key)
+            }
+            _ => None,
+        };
+        let typed = type_ref.or(definition.as_ref().map(|(t, n)| (t.as_str(), n.as_str())));
+        // Lock order: rules -> info_service -> loc_text.
+        let rules = self.state.rules.read();
+        let info = self.state.info_service.read();
+        let loc_text = self.state.loc_text.read();
+        let titled = match (typed, rules.ruleset.as_deref()) {
+            (Some((type_name, name)), Some(ruleset)) => {
+                append_type_localisation(md, type_name, name, &info.type_index, ruleset, &loc_text)
+            }
+            _ => false,
+        };
+        append_localisation(md, element, &loc_text, titled);
+    }
+
+    /// The type and name of the definition whose `key` is under the cursor.
+    fn definition_at_cursor(
+        &self,
+        uri: &str,
+        pos: Position,
+        key: &str,
+    ) -> Option<(String, String)> {
+        let text = self
+            .state
+            .documents
+            .lock()
+            .get(uri)
+            .map(|doc| std::sync::Arc::clone(&doc.text))?;
+        let encoding = self.state.config.read().position_encoding.clone();
+        let (line, col) = crate::paths::lsp_pos_to_source_in_text(&text, pos, &encoding);
+        let width = u16::try_from(key.chars().count()).unwrap_or(u16::MAX);
+        let info = self.state.info_service.read();
+        info.type_index
+            .instances_in_file(uri)
+            .into_iter()
+            .find(|(_, instance)| {
+                let start = instance.location.col;
+                instance.location.line == line
+                    && (start..=start.saturating_add(width)).contains(&col)
+            })
+            .map(|(type_name, instance)| (type_name.to_string(), instance.name.clone()))
+    }
+}
+
+/// One line per language: the first translation, which is the mod's own over the
+/// base game's text it replaces.
+fn push_translations<'a>(
+    md: &mut String,
+    translations: impl Iterator<Item = (cwtools_localization::Lang, &'a str)>,
+) {
+    let mut shown = Vec::new();
+    for (lang, text) in translations {
+        if shown.contains(&lang) {
+            continue;
+        }
+        shown.push(lang);
+        md.push_str(&format!(
+            "\n- {}: {}",
+            lang_display_name(lang),
+            escape_markdown(text),
+        ));
     }
 }
 
@@ -370,8 +431,14 @@ pub(crate) fn build_hover_markdown(
     sections.join("\n\n---\n\n")
 }
 
-/// `"my_war_flag"` is not a key in the loc map (#317).
-pub(crate) fn append_localisation(md: &mut String, element: &PositionElement, loc_text: &LocText) {
+/// `"my_war_flag"` is not a key in the loc map (#317). `titled` skips the name
+/// lookup when the type's title was already shown.
+pub(crate) fn append_localisation(
+    md: &mut String,
+    element: &PositionElement,
+    loc_text: &LocText,
+    titled: bool,
+) {
     let loc_key = |s: &str| {
         let s = s.trim();
         if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
@@ -391,16 +458,10 @@ pub(crate) fn append_localisation(md: &mut String, element: &PositionElement, lo
     let mut emit = |loc_key: &str, label: &str| {
         if let Some(translations) = loc_text.get(loc_key) {
             md.push_str(label);
-            for (lang, text) in translations {
-                md.push_str(&format!(
-                    "\n- {}: {}",
-                    lang_display_name(lang),
-                    escape_markdown(text),
-                ));
-            }
+            push_translations(md, translations);
         }
     };
-    if let Some(nk) = name_key {
+    if let Some(nk) = name_key.filter(|_| !titled) {
         emit(
             &nk,
             &format!(
@@ -423,6 +484,7 @@ pub(crate) fn append_localisation(md: &mut String, element: &PositionElement, lo
 /// Append the localized primary text (e.g. an event's title) for a reference to a type with
 /// a primary loc key. An explicit-field binding uses the key captured at index time; a
 /// name-derived one builds `prefix + id + suffix`. The first key with loc text wins (#40).
+/// Returns whether a title was found.
 pub(crate) fn append_type_localisation(
     md: &mut String,
     type_name: &str,
@@ -430,7 +492,7 @@ pub(crate) fn append_type_localisation(
     type_index: &cwtools_info::TypeIndex,
     ruleset: &cwtools_rules::rules_types::RuleSet,
     loc_text: &LocText,
-) {
+) -> bool {
     let value = value.trim_matches('"');
     let mut keys: Vec<String> = Vec::new();
     if let Some(k) = type_index.primary_loc_key(type_name, value) {
@@ -445,17 +507,15 @@ pub(crate) fn append_type_localisation(
     }
     for key in keys {
         if let Some(translations) = loc_text.get(key.as_str()) {
-            md.push_str("\n\n---\n\n**Localisation**:");
-            for (lang, text) in translations {
-                md.push_str(&format!(
-                    "\n- {}: {}",
-                    lang_display_name(lang),
-                    escape_markdown(text),
-                ));
-            }
-            return;
+            md.push_str(&format!(
+                "\n\n---\n\n**{}**:",
+                cwtools_i18n::t(cwtools_i18n::Key::HoverLocalisation)
+            ));
+            push_translations(md, translations);
+            return true;
         }
     }
+    false
 }
 
 #[cfg(test)]
@@ -920,6 +980,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "my_idea".to_string(),
             },
             &loc_map_with(&[("my_idea", MARKDOWN_LOCALISATION)]),
+            false,
         );
         assert_escaped_localisation(&md);
     }
@@ -1025,6 +1086,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "\"my_war_flag\"".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert!(md.contains("War Flag"), "got: {}", md);
         assert!(md.contains("**Localisation**"), "got: {}", md);
@@ -1040,6 +1102,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "my_idea".to_string(),
             },
             &loc_map_with(&[("my_idea", "My Idea")]),
+            false,
         );
         assert!(md.contains("My Idea"), "got: {}", md);
     }
@@ -1057,6 +1120,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 ("my_great_idea", "Great Idea"),
                 ("my_great_idea_desc", "It is great."),
             ]),
+            false,
         );
         assert!(md.contains("Great Idea"), "got: {}", md);
         assert!(md.contains(r#"It is great\."#), "got: {}", md);
@@ -1071,6 +1135,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "\"my_war_flag\"".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert!(md.contains("War Flag"), "got: {}", md);
     }
@@ -1085,6 +1150,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "\"MY_WAR_FLAG\"".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert!(md.contains("War Flag"), "got: {}", md);
     }
@@ -1099,6 +1165,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: " \"my_war_flag\" ".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert!(md.contains("War Flag"), "got: {}", md);
     }
@@ -1113,6 +1180,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "\" my_war_flag \"".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert!(md.contains("War Flag"), "got: {}", md);
     }
@@ -1136,6 +1204,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                     value: bad.to_string(),
                 },
                 &loc,
+                false,
             );
             assert!(
                 !md.contains("War Flag"),
@@ -1155,6 +1224,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "\"\"".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert!(!md.contains("War Flag"), "got: {}", md);
         assert!(!md.contains("**Localisation**"), "got: {}", md);
@@ -1170,7 +1240,122 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                 value: "\"unknown_flag\"".to_string(),
             },
             &loc_map_with(&[("my_war_flag", "War Flag")]),
+            false,
         );
         assert_eq!(md, "prefix", "got: {}", md);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn definition_hover_shows_its_title_and_one_line_per_language() {
+        use std::sync::Arc;
+
+        use cwtools_localization::Lang;
+        use tower_lsp::lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams, Url};
+
+        use crate::paths::{path_to_uri, workspace_prefix_of};
+
+        const RULES: &str = r#"types = {
+    type[goal] = {
+        path = "game/common/goals"
+        localisation = {
+            ## primary
+            name = name
+        }
+    }
+}
+goal = {
+    name = localisation
+    description = localisation
+}
+"#;
+        const GOAL: &str =
+            "my_goal = {\n    name = my_goal_name\n    description = my_goal_desc\n}\n";
+
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let backend = crate::testing::test_backend();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![workspace.path().to_path_buf()];
+            config.refresh_roots();
+            config.workspace_prefix = Some(workspace_prefix_of(&path_to_uri(workspace.path())));
+        }
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let rules = cwtools_parser::parser::parse_string(RULES, &table);
+        backend.state.rules.write().ruleset = Some(Arc::new(
+            cwtools_rules::rules_converter::ast_to_ruleset(&rules, &table),
+        ));
+        let uri = path_to_uri(&workspace.path().join("common/goals/goals.txt"));
+        let parsed = cwtools_parser::parser::parse_string(GOAL, &backend.state.string_table);
+        crate::testing::open_document(&backend, &uri, GOAL);
+        backend.index_parsed_file(&uri, &parsed, Some(1));
+        {
+            let mut loc = backend.state.loc_text.write();
+            let en = "file:///mod/localisation/english/replace/goals_l_english.yml";
+            loc.insert(
+                Arc::from("my_goal_name"),
+                en,
+                Lang::English,
+                "Goal Title".into(),
+            );
+            loc.insert(
+                Arc::from("my_goal_desc"),
+                en,
+                Lang::English,
+                "Mod text".into(),
+            );
+            loc.insert_fallback(&Arc::from("my_goal_desc"), Lang::English, "Base text");
+            let fr = "file:///mod/localisation/french/goals_l_french.yml";
+            loc.insert(Arc::from("my_goal_desc"), fr, Lang::French, "Texte".into());
+        }
+
+        let hover = backend
+            .hover_impl(HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: Url::parse(&uri).expect("document uri"),
+                    },
+                    position: Position::new(0, 2),
+                },
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .expect("hover request")
+            .expect("a hover on the definition key");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected Markdown hover");
+        };
+        let md = content.value;
+        assert!(md.contains("Goal Title"), "title missing: {md}");
+        assert_eq!(md.matches("Mod text").count(), 1, "got: {md}");
+        assert!(!md.contains("Base text"), "base game text shown: {md}");
+        assert!(md.contains("Texte"), "French line missing: {md}");
+    }
+
+    #[test]
+    fn type_reference_titled_by_its_own_name_shows_it_once() {
+        let backend = crate::testing::test_backend();
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let rules = cwtools_parser::parser::parse_string(
+            "types = { type[building] = { path = \"game/common/buildings\" \
+             localisation = { ## required\n name = \"$\" } } }",
+            &table,
+        );
+        backend.state.rules.write().ruleset = Some(std::sync::Arc::new(
+            cwtools_rules::rules_converter::ast_to_ruleset(&rules, &table),
+        ));
+        *backend.state.loc_text.write() = loc_map_with(&[("arms_factory", "Military Factory")]);
+
+        let mut md = String::new();
+        backend.append_hover_localisation(
+            &mut md,
+            "file:///unused.txt",
+            Position::new(0, 0),
+            &PositionElement::Leaf {
+                key: "type".to_string(),
+                value: "arms_factory".to_string(),
+            },
+            Some(("building", "arms_factory")),
+        );
+        assert_eq!(md.matches("Military Factory").count(), 1, "got: {md}");
     }
 }

@@ -15,7 +15,7 @@ const FILE_PREFIX: &str = "vanilla-";
 const FILE_EXT: &str = ".cwv";
 
 // Bump when serialized fields or derived vanilla-index data change; old versions are rejected.
-const CACHE_VERSION: u8 = 16;
+const CACHE_VERSION: u8 = 17;
 
 /// Hard caps on a `.cwv` read and on what its body may decompress to. The path is
 /// client-chosen (#162), so going over reads as a miss and the install is re-indexed.
@@ -109,6 +109,8 @@ fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     hash
 }
 
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
 /// A stable hash of the ruleset parts that decide which vanilla type instances and
 /// complex enum members get extracted, and under what name. Base-game data built from
 /// changed rules is stale even for the same game version, so this is folded into the
@@ -130,21 +132,39 @@ pub fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
                 .subtypes
                 .iter()
                 .map(|s| {
+                    // The body conditions and `only_if_not` decide membership, which
+                    // the cache stores as `type.subtype` instances.
+                    let body = fnv1a(format!("{:?}", s.rules).as_bytes(), FNV_OFFSET);
                     format!(
-                        "{}|{}|{:?}|{}",
+                        "{}|{}|{:?}|{}|not={:?}|body={body:016x}",
                         s.name,
                         s.type_key_field.as_deref().unwrap_or(""),
                         s.type_key_filter,
                         s.starts_with.as_deref().unwrap_or(""),
+                        s.only_if_not,
                     )
                 })
                 .collect::<Vec<_>>();
             subs.sort();
+            // Only the explicit fields are read into the cache: the primary one as
+            // `primary_loc_key`, the required ones as the keys CW100 checks.
+            let loc = t
+                .localisation
+                .iter()
+                .filter_map(|l| {
+                    let field = l.explicit_field.as_deref()?;
+                    Some(format!("{field}|{}|{}|{}", l.primary, l.required, l.optional))
+                })
+                .collect::<Vec<_>>();
             format!(
-                "{}|nf={}|paths={}|skip={}|sw={}|tpf={}|kp={}|tkf={:?}|uniq={}|subs={}",
+                "{}|nf={}|paths={}|strict={}|file={}|ext={}|loc={}|skip={}|sw={}|tpf={}|kp={}|tkf={:?}|uniq={}|subs={}",
                 t.name,
                 t.name_field.as_deref().unwrap_or(""),
                 paths.join(","),
+                t.path_options.path_strict,
+                t.path_options.path_file.as_deref().unwrap_or(""),
+                t.path_options.path_extension.as_deref().unwrap_or(""),
+                loc.join(";"),
                 skip.join(","),
                 t.starts_with.as_deref().unwrap_or(""),
                 t.type_per_file,
@@ -156,6 +176,25 @@ pub fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
         })
         .collect();
     parts.extend(ruleset.complex_enums.iter().map(complex_enum_shape));
+    // The collectors depend on these derived maps and on variable-defining
+    // effect names. Rebuild from aliases so partially constructed rulesets also
+    // hash correctly without relying on cached lookup indexes.
+    let (effects, fields) = ruleset.value_set_effect_definitions();
+    parts.extend(
+        effects
+            .iter()
+            .map(|(key, ns)| format!("value_set:{key:?}:{ns:?}")),
+    );
+    parts.extend(
+        fields
+            .iter()
+            .map(|(key, fields)| format!("value_set_fields:{key:?}:{fields:?}")),
+    );
+    parts.extend(
+        crate::variable_defining_effects(ruleset)
+            .iter()
+            .map(|key| format!("variable_effect:{key:?}")),
+    );
     parts.sort();
     if !ruleset.folders.is_empty() {
         let mut folders = ruleset.folders.clone();
@@ -165,7 +204,7 @@ pub fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
     if ruleset.supplies_scripted_effect_params() {
         parts.push("supplies=scripted_effect_params".to_string());
     }
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut h = FNV_OFFSET;
     for p in &parts {
         h = fnv1a(p.as_bytes(), h);
         h = fnv1a(b"\x1e", h); // record separator so concatenation is unambiguous
@@ -1262,6 +1301,64 @@ mod tests {
     }
 
     #[test]
+    fn ruleset_shape_hash_follows_type_options_that_decide_cached_instances() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let shape = |cwt: &str| {
+            let parsed = cwtools_parser::parser::parse_string(cwt, &table);
+            ruleset_shape_hash(&cwtools_rules::rules_converter::ast_to_ruleset(
+                &parsed, &table,
+            ))
+        };
+        let types = |options: &str, subtype_body: &str, loc: &str| {
+            format!(
+                "types = {{ type[thing] = {{ path = \"game/common/things\" {options} \
+                 subtype[big] = {{ {subtype_body} }} localisation = {{ {loc} }} }} }}"
+            )
+        };
+        let base = shape(&types("", "size = big", "## primary\nname = \"$\""));
+        assert_eq!(
+            base,
+            shape(&types("", "size = big", "## primary\nname = \"$\""))
+        );
+        for (what, changed) in [
+            (
+                "path_strict",
+                types(
+                    "path_strict = yes",
+                    "size = big",
+                    "## primary\nname = \"$\"",
+                ),
+            ),
+            (
+                "path_file",
+                types(
+                    "path_file = \"things.txt\"",
+                    "size = big",
+                    "## primary\nname = \"$\"",
+                ),
+            ),
+            (
+                "path_extension",
+                types(
+                    "path_extension = .gfx",
+                    "size = big",
+                    "## primary\nname = \"$\"",
+                ),
+            ),
+            (
+                "subtype body",
+                types("", "size = huge", "## primary\nname = \"$\""),
+            ),
+            (
+                "primary localisation field",
+                types("", "size = big", "## primary\nname = title"),
+            ),
+        ] {
+            assert_ne!(base, shape(&changed), "{what} must change the shape");
+        }
+    }
+
+    #[test]
     fn ruleset_shape_hash_follows_complex_enum_definitions() {
         let table = cwtools_string_table::string_table::StringTable::new();
         let shape = |cwt: &str| {
@@ -1302,6 +1399,50 @@ mod tests {
         ] {
             assert_ne!(base, shape(&changed), "{what} must change the shape");
         }
+    }
+
+    #[test]
+    fn ruleset_shape_hash_follows_value_set_and_variable_collection_rules() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let rules = |src: &str| {
+            let parsed = cwtools_parser::parser::parse_string(src, &table);
+            cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table)
+        };
+        let a = rules("alias[effect:set_flag] = value_set[country_flag]");
+        let b = rules("alias[effect:set_flag] = value_set[state_flag]");
+        assert_eq!(ruleset_shape_hash(&a), ruleset_shape_hash(&a));
+        assert_ne!(ruleset_shape_hash(&a), ruleset_shape_hash(&b));
+
+        let fields_a = rules("alias[effect:set_flag] = { flag = value_set[country_flag] }");
+        let fields_b = rules("alias[effect:set_flag] = { name = value_set[country_flag] }");
+        assert_ne!(ruleset_shape_hash(&fields_a), ruleset_shape_hash(&fields_b));
+
+        // First value-set and named fields stay the same; only the variable
+        // collector's effect-name set changes.
+        let plain = rules("alias[effect:toggle] = { value_set[flag] = scalar }");
+        let variable = rules(
+            "alias[effect:toggle] = { value_set[flag] = scalar value_set[variable] = scalar }",
+        );
+        assert_eq!(plain.value_set_effects(), variable.value_set_effects());
+        assert_eq!(
+            plain.value_set_effect_fields(),
+            variable.value_set_effect_fields()
+        );
+        assert_ne!(ruleset_shape_hash(&plain), ruleset_shape_hash(&variable));
+
+        let mut unindexed = RuleSet::new();
+        unindexed.aliases = variable.aliases.clone();
+        assert_eq!(
+            ruleset_shape_hash(&variable),
+            ruleset_shape_hash(&unindexed)
+        );
+
+        let first = "alias[effect:set_a] = value_set[first]";
+        let second = "alias[effect:set_b] = value_set[second]";
+        assert_eq!(
+            ruleset_shape_hash(&rules(&format!("{first}\n{second}"))),
+            ruleset_shape_hash(&rules(&format!("{second}\n{first}")))
+        );
     }
 
     #[test]

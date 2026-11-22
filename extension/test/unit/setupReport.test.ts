@@ -84,7 +84,17 @@ suite("setup report text", () => {
 		assert.match(text, /- Game: hoi4/);
 		assert.match(text, /- Detected by: workspace folder name or content markers/);
 		assert.match(text, /- Server: running, version 3\.4\.0/);
+		assert.match(text, /- Server source commit: unavailable/);
 		assert.match(text, /- Server binary: `\/ext\/bin\/cwtools-server`/);
+	});
+
+	test("shows the running server's embedded source commit", () => {
+		const commit = "a".repeat(40);
+		const text = render(facts(), {
+			...serverReport,
+			server: { ...serverReport.server, buildCommit: commit },
+		});
+		assert.ok(text.includes(`- Server source commit: ${commit}`));
 	});
 
 	test("says so when rules_folder points at a path that does not exist", () => {

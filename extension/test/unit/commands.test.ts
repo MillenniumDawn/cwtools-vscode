@@ -190,6 +190,19 @@ suite("manifest — command registration", () => {
 			"cwtools.fixAllWorkspace": "cwtoolsFixAllAvailable",
 			"cwtools.formatWorkspace": "cwtoolsFormatWorkspaceAvailable",
 			validateWorkspace: "cwtoolsValidateWorkspaceAvailable",
+			// Registered only once activation gets past its early returns.
+			"cwtools.restartServer": "cwtoolsCommandsRegistered",
+			"cwtools.showOutput": "cwtoolsCommandsRegistered",
+			"cwtools.selectBaseGame": "cwtoolsCommandsRegistered",
+			"cwtools.writeDiagnosticsBaseline": "cwtoolsCommandsRegistered",
+			"cwtools.graphFromJson": "cwtoolsCommandsRegistered",
+			"cwtools.exportProfilingLog": "cwtoolsCommandsRegistered",
+			// Registered by the server, so gone whenever it is not running.
+			genlocall: "cwtoolsServerRunning",
+			reloadrulesconfig: "cwtoolsServerRunning",
+			cacheVanilla: "cwtoolsServerRunning",
+			clearAllCaches: "cwtoolsServerRunning",
+			reindexWorkspace: "cwtoolsServerRunning",
 		};
 		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);

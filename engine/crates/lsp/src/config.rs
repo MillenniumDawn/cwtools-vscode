@@ -246,7 +246,9 @@ impl Backend {
         let game = self.state.config.read().game();
         let registry = build_scope_registry_arc(&ruleset, game);
         let var_effects = cwtools_info::variable_defining_effects(&ruleset);
-        // Lock order: rules -> info_service.
+        // Serialize the rules update and generation bump with vanilla publication.
+        // Lock order: vanilla_state -> rules -> info_service.
+        let vanilla = self.state.vanilla_state.lock();
         let mut rules = self.state.rules.write();
         rules.ruleset = Some(Arc::new(ruleset));
         rules.scope_registry = registry;
@@ -255,8 +257,16 @@ impl Backend {
             .write()
             .update_ruleset_data(var_effects);
         drop(rules);
+        self.state
+            .settings_generation
+            .fetch_add(1, Ordering::SeqCst);
+        drop(vanilla);
         self.refresh_open_reference_sites();
         self.bump_info_revision();
+    }
+
+    fn bump_settings_generation(&self) {
+        let _vanilla = self.state.vanilla_state.lock();
         self.state
             .settings_generation
             .fetch_add(1, Ordering::SeqCst);
@@ -735,6 +745,18 @@ impl Backend {
     }
 
     pub(crate) async fn load_rules_config(&self, cache_path: &std::path::Path) -> bool {
+        self.load_rules_config_with_budget(
+            cache_path,
+            cwtools_file_manager::file_manager::ScanBudget::default(),
+        )
+        .await
+    }
+
+    async fn load_rules_config_with_budget(
+        &self,
+        cache_path: &std::path::Path,
+        budget: cwtools_file_manager::file_manager::ScanBudget,
+    ) -> bool {
         // Surface a missing rules dir explicitly. The client may hand us a path that
         // doesn't resolve here (e.g. a Windows `rules_folder`), which otherwise degrades
         // silently to a generic "no rules loaded" with an empty error list.
@@ -748,14 +770,8 @@ impl Backend {
         }
         let dir = cache_path.to_path_buf();
         let table = self.state.string_table.clone();
-        let loaded = tokio::task::spawn_blocking(move || {
-            load_ruleset_from_dir(
-                &dir,
-                &table,
-                cwtools_file_manager::file_manager::ScanBudget::default(),
-            )
-        })
-        .await;
+        let loaded =
+            tokio::task::spawn_blocking(move || load_ruleset_from_dir(&dir, &table, budget)).await;
         let (combined_ruleset, parse_errors) = match loaded {
             Ok(result) => result,
             Err(error) => {
@@ -875,47 +891,47 @@ impl Backend {
             *self.state.last_rules_toast.lock() = None;
         }
 
-        let loaded = !combined_ruleset.types.is_empty()
-            || !combined_ruleset.enums.is_empty()
-            || !combined_ruleset.aliases.is_empty()
-            || !combined_ruleset.root_rules.is_empty();
-
-        if loaded {
-            self.client
-                .log_message(
-                    MessageType::INFO,
-                    format!(
-                        "Loaded rules from {} ({} types, {} enums, {} aliases, {} errors)",
-                        cache_path.display(),
-                        combined_ruleset.types.len(),
-                        combined_ruleset.enums.len(),
-                        combined_ruleset.aliases.len(),
-                        parse_errors.len(),
-                    ),
-                )
-                .await;
-            if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
-                return false;
-            }
-            self.set_ruleset(combined_ruleset);
-            self.rebuild_modifier_keys();
-            // Rule-driven tokens change globally: drop the delta cache so edits do not
-            // patch stale data, and tell the client to re-request them (#184).
-            self.invalidate_all_semantic_tokens();
-            self.request_semantic_refresh().await;
-        } else {
+        // Empty is a valid ruleset. Any acquisition failure, including scan
+        // limits as well as I/O errors, retains the last good rules because an
+        // incomplete read cannot represent the configured directory reliably.
+        if parse_errors
+            .iter()
+            .any(|error| error.code == cwtools_error_codes::CW600_RULES_FILE_UNREADABLE.id)
+        {
             self.client
                 .log_message(
                     MessageType::WARNING,
                     format!(
-                        "No rules loaded from {}. Errors: {:?}",
-                        cache_path.display(),
-                        parse_errors
+                        "Could not read all rules from {}; retaining previous rules",
+                        cache_path.display()
                     ),
                 )
                 .await;
+            return false;
         }
-        loaded
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "Loaded rules from {} ({} types, {} enums, {} aliases, {} errors)",
+                    cache_path.display(),
+                    combined_ruleset.types.len(),
+                    combined_ruleset.enums.len(),
+                    combined_ruleset.aliases.len(),
+                    parse_errors.len(),
+                ),
+            )
+            .await;
+        if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
+            return false;
+        }
+        self.set_ruleset(combined_ruleset);
+        self.rebuild_modifier_keys();
+        // Rule-driven tokens change globally: drop the delta cache so edits do not
+        // patch stale data, and tell the client to re-request them (#184).
+        self.invalidate_all_semantic_tokens();
+        self.request_semantic_refresh().await;
+        true
     }
 
     pub(crate) async fn did_change_workspace_folders_impl(
@@ -1013,20 +1029,18 @@ impl Backend {
         if next.is_none() {
             return;
         }
-        self.state
-            .settings_generation
-            .fetch_add(1, Ordering::SeqCst);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let mut rescanned = self.validate_entire_workspace(false).await;
-        while !rescanned && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            rescanned = self.validate_entire_workspace(false).await;
-        }
-        if !rescanned {
+        self.bump_settings_generation();
+        let outcome = self
+            .wait_for_scan(
+                std::time::Instant::now() + std::time::Duration::from_secs(60),
+                None,
+            )
+            .await;
+        if outcome != ScanOutcome::Ran {
             self.client
                 .log_message(
                     MessageType::WARNING,
-                    "workspace folders changed but a scan stayed in progress; index still points at the previous folder",
+                    "workspace folders changed but the scan did not complete; the index may be incomplete",
                 )
                 .await;
         }
@@ -1150,7 +1164,8 @@ impl Backend {
             || ignore_changed
             || localisation_changed
             || hover_all_changed
-            || workspace_wide_changed;
+            || workspace_wide_changed
+            || codes_changed;
         {
             let mut cfg = self.state.config.write();
             if let Some(files) = files {
@@ -1203,10 +1218,8 @@ impl Backend {
         if ignore_changed {
             *self.state.loc_discovery_cache.lock() = None;
         }
-        if rescan || codes_changed {
-            self.state
-                .settings_generation
-                .fetch_add(1, Ordering::SeqCst);
+        if rescan {
+            self.bump_settings_generation();
         }
         let (n_files, n_dirs, n_codes) = counts;
         tracing::info!(
@@ -1217,12 +1230,18 @@ impl Backend {
             reindex_idle_secs = ?reindex_idle_secs,
             "config updated via didChangeConfiguration"
         );
-        if rescan {
-            if !self.validate_entire_workspace(false).await {
-                self.spawn_deferred_revalidation("didChangeConfiguration");
-            }
-        } else if codes_changed && self.state.index_ready.load(Ordering::Relaxed) {
-            self.revalidate_all_open_docs(crate::ValidateTrigger::ConfigChange)
+        // A workspace scan normally revalidates open documents at its end.
+        // With no workspace root the scan returns early, so keep open buffers
+        // responsive to code-filter changes through the direct path instead.
+        let revalidate_without_workspace =
+            codes_changed && self.state.config.read().workspace_uri.is_none();
+        // Only a scan that lost the scan flag is retried. A failed one would fail again.
+        if rescan && self.validate_entire_workspace_tracked(false, None).await == ScanOutcome::Busy
+        {
+            self.spawn_deferred_revalidation("didChangeConfiguration");
+        }
+        if revalidate_without_workspace && self.state.index_ready.load(Ordering::Relaxed) {
+            self.revalidate_all_open_docs(crate::ValidateTrigger::Reindex)
                 .await;
         }
     }
@@ -1277,26 +1296,31 @@ impl Backend {
     }
 
     fn clear_vanilla_state(&self) {
+        // Keep the payload and its auxiliary names under one publication fence.
+        // A new stage/merge must not be cleared by an older clear operation.
+        let mut vanilla = self.state.vanilla_state.lock();
+        vanilla.publication_revision = vanilla.publication_revision.wrapping_add(1);
+        *self.state.last_scan_fingerprint.lock() = None;
         self.state.vanilla_merged.store(false, Ordering::SeqCst);
-        {
-            let mut vanilla = self.state.vanilla_state.lock();
-            vanilla.index = None;
-            vanilla.loc_keys = None;
-            vanilla.file_paths = None;
-            vanilla.var_names = None;
-            vanilla.scripted_loc_names = None;
-            vanilla.scripted_gui_names = None;
-            // The next merge uses this to remove pre-clear base-game entries.
-            // Clearing it here would leave their old provenance in the index.
-        }
+        vanilla.index = None;
+        vanilla.loc_keys = None;
+        vanilla.file_paths = None;
+        vanilla.var_names = None;
+        vanilla.scripted_loc_names = None;
+        vanilla.scripted_gui_names = None;
+        // Keep merged_uris: the next merge uses it to remove old provenance.
         *self.state.vanilla_loc.lock() = None;
+        #[cfg(test)]
+        self.hold(crate::state::HoldPoint::VanillaClearBeforeInfo);
         {
             let mut info = self.state.info_service.write();
             let type_index = Arc::make_mut(&mut info.type_index);
+            type_index.complete = false;
             type_index.var_index.clear_vanilla_names();
             type_index.scripted_loc_index.set_vanilla_names(&[]);
             type_index.scripted_gui_index.set_vanilla_names(&[]);
         }
+        drop(vanilla);
         self.bump_info_revision();
     }
 
@@ -1305,7 +1329,10 @@ impl Backend {
         self.state.published_workspace_uris.lock().clear();
     }
 
-    async fn cache_vanilla_command(&self, token: Option<ProgressToken>) -> Result<Option<Value>> {
+    pub(crate) async fn cache_vanilla_command(
+        &self,
+        token: Option<ProgressToken>,
+    ) -> Result<Option<Value>> {
         let progress =
             CommandProgress::begin(self, token, "CWTools: Rebuild base-game cache", false).await;
         if progress.is_cancelled() {
@@ -1319,12 +1346,24 @@ impl Backend {
         // this command never reaches the code that turns it off. The guard covers both
         // exits: the normal one below, and the client cancelling the command mid-index (#204).
         let guard = crate::scan::ScanGuard::for_command(self);
-        self.ensure_vanilla_index(Some(&progress), true, false)
-            .await;
-        tokio::task::block_in_place(|| self.merge_pending_vanilla_index());
-        self.rebuild_modifier_keys();
+        let result = match self
+            .ensure_vanilla_index(Some(&progress), true, false)
+            .await
+        {
+            Ok(()) => tokio::task::block_in_place(|| self.merge_pending_vanilla_index()),
+            Err(error) => Err(error),
+        };
+        if result.is_ok() {
+            self.rebuild_modifier_keys();
+        } else {
+            // Do not let an earlier workspace fingerprint skip the next retry.
+            self.invalidate_vanilla_scan();
+        }
         guard.finish().await;
-        let msg = "Vanilla cache rebuilt.".to_string();
+        let msg = match result {
+            Ok(()) => "Vanilla cache rebuilt.".to_string(),
+            Err(error) => format!("Vanilla cache rebuild failed: {error}"),
+        };
         progress.finish(Some(msg.clone())).await;
         Ok(Some(Value::String(msg)))
     }
@@ -1364,10 +1403,13 @@ impl Backend {
         let status = cwtools_i18n::t(match outcome {
             ScanOutcome::Ran => cwtools_i18n::Key::StatusReindexed,
             ScanOutcome::Busy => cwtools_i18n::Key::StatusReindexPending,
-            ScanOutcome::Cancelled => {
+            // A client cancel still wants the rebuild it was promised. A failed scan would
+            // fail again, so it is not retried.
+            ScanOutcome::Cancelled if progress.is_cancelled() => {
                 self.spawn_deferred_revalidation("clearAllCaches");
                 cwtools_i18n::Key::StatusReindexCancelledRebuilding
             }
+            ScanOutcome::Cancelled => cwtools_i18n::Key::StatusRevalidationCancelled,
         });
         let msg = if failures.is_empty() {
             cwtools_i18n::format(
@@ -1575,6 +1617,143 @@ mod tests {
 
     use crate::testing::test_backend;
 
+    type LoadedPayload = std::result::Result<
+        (
+            HashMap<String, Vec<(Arc<str>, TypeInstance)>>,
+            VanillaCacheAux,
+        ),
+        cwtools_file_manager::file_manager::FileError,
+    >;
+
+    fn loader_staging_one_file_path(
+        _: &std::path::Path,
+        _: &RuleSet,
+        _: &cwtools_string_table::string_table::StringTable,
+        _: Option<&std::path::Path>,
+        _: &str,
+        _: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+    ) -> LoadedPayload {
+        Ok((
+            HashMap::new(),
+            VanillaCacheAux {
+                loc_keys: Vec::new(),
+                file_paths: vec!["gfx/staged.dds".into()],
+                var_names: Vec::new(),
+                complex_enum_values: Vec::new(),
+                value_set_values: Vec::new(),
+                scripted_loc_names: Vec::new(),
+                scripted_gui_names: Vec::new(),
+            },
+        ))
+    }
+
+    fn file_index_over_budget(
+        _: &std::path::Path,
+        _: &[std::path::PathBuf],
+        _: &[String],
+        _: &[String],
+        _: &[String],
+        _: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+    ) -> std::result::Result<cwtools_info::FileIndex, cwtools_file_manager::file_manager::FileError>
+    {
+        Err(
+            cwtools_file_manager::file_manager::FileError::FileCountBudget(
+                "budget-exceeded".into(),
+            ),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vanilla_rebuild_reports_auxiliary_index_failure() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![tmp.path().join("workspace")];
+            config.vanilla_dir = Some(tmp.path().to_path_buf());
+            config.cache_dir = Some(tmp.path().join("cache"));
+        }
+        backend.set_ruleset(RuleSet::new());
+        *backend.state.vanilla_loader_override.lock() = Some(loader_staging_one_file_path);
+        *backend.state.file_index_builder_override.lock() = Some(file_index_over_budget);
+        *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
+        backend
+            .state
+            .loading_bar_active
+            .store(true, Ordering::SeqCst);
+        let outcome = backend.cache_vanilla_command(None).await.unwrap();
+        let Some(Value::String(message)) = outcome else {
+            panic!("rebuild must return a status message");
+        };
+        assert!(
+            message.starts_with("Vanilla cache rebuild failed:"),
+            "{message}"
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vanilla_rebuild_reports_cold_loader_failure() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla = tmp.path().join("vanilla");
+        let resources = vanilla.join("gfx");
+        std::fs::create_dir_all(&resources).unwrap();
+        for name in ["one.dds", "two.dds"] {
+            std::fs::write(resources.join(name), b"").unwrap();
+        }
+        {
+            let mut config = backend.state.config.write();
+            config.vanilla_dir = Some(vanilla);
+            config.cache_dir = Some(tmp.path().join("cache"));
+        }
+        backend.set_ruleset(RuleSet::new());
+        *backend.state.vanilla_loader_override.lock() =
+            Some(crate::scan::test_capped_vanilla_loader);
+        *backend.state.last_scan_fingerprint.lock() = Some((123, 456));
+        let failed = backend.cache_vanilla_command(None).await.unwrap();
+        assert!(matches!(failed, Some(Value::String(message))
+            if message.starts_with("Vanilla cache rebuild failed:")));
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(backend.state.vanilla_state.lock().index.is_none());
+        assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
+        assert!(!backend.state.info_service.read().type_index.complete);
+        assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
+        std::fs::remove_file(resources.join("two.dds")).unwrap();
+        let recovered = backend.cache_vanilla_command(None).await.unwrap();
+        assert_eq!(
+            recovered,
+            Some(Value::String("Vanilla cache rebuilt.".into()))
+        );
+        assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_folder_change_does_not_retry_discovery_failure() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-workspace");
+        let uri = Url::from_file_path(&missing).unwrap();
+        let change = DidChangeWorkspaceFoldersParams {
+            event: WorkspaceFoldersChangeEvent {
+                added: vec![WorkspaceFolder {
+                    uri,
+                    name: "missing".to_string(),
+                }],
+                removed: Vec::new(),
+            },
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.did_change_workspace_folders_impl(change),
+        )
+        .await
+        .expect("failed discovery must not retry as though a scan were busy");
+        assert!(!backend.state.scan_in_progress.load(Ordering::SeqCst));
+        assert!(backend.state.last_scan_summary.lock().is_none());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn did_change_configuration_reloads_rules_and_changes_rule_diagnostics() {
         let backend = test_backend();
@@ -1677,6 +1856,104 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("custom")),
             "stale rules must not replace the selected folder's rules: {after_stale_load:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn empty_rules_replace_previous_rules_but_io_failure_retains_them() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let initial = temp.path().join("initial");
+        let empty = temp.path().join("empty");
+        std::fs::create_dir_all(&initial).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        let rule = initial.join("types.cwt");
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = \"common/custom\" } }\ncustom = { value = scalar }\n",
+        )
+        .unwrap();
+        backend.state.config.write().rules_dir = Some(initial.clone());
+        assert!(backend.load_rules_config(&initial).await);
+        {
+            let rules = backend.state.rules.read();
+            let rules = rules.ruleset.as_ref().unwrap();
+            assert!(!rules.types.is_empty());
+            assert!(!rules.root_rules.is_empty());
+        }
+
+        backend.state.config.write().rules_dir = Some(empty.clone());
+        assert!(backend.load_rules_config(&empty).await);
+        {
+            let rules = backend.state.rules.read();
+            let rules = rules.ruleset.as_ref().unwrap();
+            assert!(rules.types.is_empty());
+            assert!(rules.root_rules.is_empty());
+        }
+
+        backend.state.config.write().rules_dir = Some(initial.clone());
+        assert!(backend.load_rules_config(&initial).await);
+        std::fs::remove_file(&rule).unwrap();
+        assert!(backend.load_rules_config(&initial).await);
+        {
+            let rules = backend.state.rules.read();
+            let rules = rules.ruleset.as_ref().unwrap();
+            assert!(rules.types.is_empty());
+            assert!(rules.root_rules.is_empty());
+        }
+
+        // Per-file and aggregate scan caps are acquisition failures too,
+        // even though the loader classifies them as non-retryable.
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = \"common/custom\" } }\n",
+        )
+        .unwrap();
+        assert!(backend.load_rules_config(&initial).await);
+        let previous = Arc::clone(backend.state.rules.read().ruleset.as_ref().unwrap());
+        for budget in [
+            cwtools_file_manager::file_manager::ScanBudget {
+                max_file_size: 1,
+                ..Default::default()
+            },
+            cwtools_file_manager::file_manager::ScanBudget {
+                max_bytes: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                !backend
+                    .load_rules_config_with_budget(&initial, budget)
+                    .await
+            );
+            assert!(Arc::ptr_eq(
+                &previous,
+                backend.state.rules.read().ruleset.as_ref().unwrap()
+            ));
+        }
+
+        // Missing input reports a retryable I/O failure and preserves the
+        // previously loaded nonempty rules instead of installing partial data.
+        std::fs::write(
+            &rule,
+            "types = { type[custom] = { path = common/custom } }\n",
+        )
+        .unwrap();
+        assert!(backend.load_rules_config(&initial).await);
+        let missing = temp.path().join("missing");
+        backend.state.config.write().rules_dir = Some(missing.clone());
+        assert!(!backend.load_rules_config(&missing).await);
+        assert!(
+            !backend
+                .state
+                .rules
+                .read()
+                .ruleset
+                .as_ref()
+                .unwrap()
+                .types
+                .is_empty(),
+            "an acquisition failure must retain the last good rules"
         );
     }
 
@@ -2072,6 +2349,51 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_clear_cannot_erase_newly_merged_auxiliary_names() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla_dir = tmp.path().join("vanilla");
+        std::fs::create_dir_all(&vanilla_dir).unwrap();
+        let path = vanilla_dir.join("new.txt");
+        std::fs::write(&path, "").unwrap();
+        backend.state.config.write().vanilla_dir = Some(vanilla_dir);
+        let gate = crate::state::HoldGate::new(crate::state::HoldPoint::VanillaClearBeforeInfo);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        std::thread::scope(|scope| {
+            let clear = scope.spawn(|| backend.clear_vanilla_state());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !gate.has_arrived() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let arrived = gate.has_arrived();
+            // Parked inside the clear: the publication fence must still cover its cleanup.
+            let fenced = arrived && backend.state.vanilla_state.try_lock().is_none();
+            let restage = scope.spawn(|| {
+                backend.stage_vanilla_payload(vanilla_data(
+                    &path,
+                    "new_instance",
+                    "new_var",
+                    "new_loc",
+                    "new_gui",
+                ));
+                backend.merge_pending_vanilla_index().unwrap();
+            });
+            // Always release the clear before joining, even on an assertion failure.
+            gate.release();
+            clear.join().unwrap();
+            restage.join().unwrap();
+            assert!(arrived, "the clear never reached its index cleanup");
+            assert!(fenced, "the publication fence must cover auxiliary cleanup");
+        });
+        let index = backend.state.info_service.read();
+        assert!(index.type_index.var_index.contains("new_var"));
+        assert!(index.type_index.scripted_loc_index.contains("new_loc"));
+        assert!(index.type_index.scripted_gui_index.contains("new_gui"));
+        assert!(index.type_index.complete);
+        assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn clear_then_restage_removes_old_uris_and_replaces_auxiliary_names() {
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
@@ -2094,7 +2416,7 @@ mod tests {
             "old_scripted_loc",
             "old_scripted_gui",
         ));
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
         let old_uri: Arc<str> =
             crate::paths::path_to_uri(&std::fs::canonicalize(&old_file).unwrap()).into();
         {
@@ -2132,7 +2454,7 @@ mod tests {
             "new_scripted_loc",
             "new_scripted_gui",
         ));
-        backend.merge_pending_vanilla_index();
+        backend.merge_pending_vanilla_index().unwrap();
         let new_uri: Arc<str> =
             crate::paths::path_to_uri(&std::fs::canonicalize(&new_file).unwrap()).into();
         let index = backend.state.info_service.read();

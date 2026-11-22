@@ -5,23 +5,23 @@ use cwtools_string_table::string_table::StringTable;
 
 #[test]
 fn colour_rgb_loads_three_or_four_integer_channels() {
-    let expected = vec![channel(ValueType::Int { min: 0, max: 255 })];
-    assert_eq!(colour_body("rgb"), expected);
+    let expected = vec![vec![channel(ValueType::Int { min: 0, max: 255 })]];
+    assert_eq!(colour_bodies("rgb"), expected);
 }
 
 #[test]
 fn colour_hsv_loads_three_or_four_float_channels() {
-    let expected = vec![channel(ValueType::Float { min: 0.0, max: 2.0 })];
-    assert_eq!(colour_body("hsv"), expected);
+    let expected = vec![vec![channel(ValueType::Float { min: 0.0, max: 2.0 })]];
+    assert_eq!(colour_bodies("hsv"), expected);
 }
 
 #[test]
-fn colour_with_another_format_loads_both_channel_forms() {
+fn colour_with_another_format_loads_one_overload_per_channel_form() {
     let expected = vec![
-        channel(ValueType::Int { min: 0, max: 255 }),
-        channel(ValueType::Float { min: 0.0, max: 2.0 }),
+        vec![channel(ValueType::Int { min: 0, max: 255 })],
+        vec![channel(ValueType::Float { min: 0.0, max: 2.0 })],
     ];
-    assert_eq!(colour_body("something_else"), expected);
+    assert_eq!(colour_bodies("something_else"), expected);
 }
 
 fn channel(value: ValueType) -> NewRule {
@@ -38,9 +38,8 @@ fn channel(value: ValueType) -> NewRule {
     )
 }
 
-/// Loads `thing = { colour = colour[<format>] }` and returns the rules
-/// under `colour`, which the loader turns into a block of channel values.
-fn colour_body(format: &str) -> Vec<NewRule> {
+/// Loads `thing = { colour = colour[<format>] }`; returns each `colour` overload body.
+fn colour_bodies(format: &str) -> Vec<Vec<NewRule>> {
     let table = StringTable::new();
     let parsed = parse_string(&format!("thing = {{ colour = colour[{format}] }}"), &table);
     let ruleset = ast_to_ruleset(&parsed, &table);
@@ -50,9 +49,14 @@ fn colour_body(format: &str) -> Vec<NewRule> {
     else {
         panic!("expected one block rule, got {:?}", ruleset.root_rules);
     };
-    let [(RuleType::NodeRule { left, rules: body }, _)] = &rules[..] else {
-        panic!("expected one rule under the block, got {rules:?}");
-    };
-    assert_eq!(left, &NewField::SpecificField("colour".to_string()));
-    body.to_vec()
+    rules
+        .iter()
+        .map(|(rule_type, _)| match rule_type {
+            RuleType::NodeRule { left, rules: body } => {
+                assert_eq!(left, &NewField::SpecificField("colour".to_string()));
+                body.to_vec()
+            }
+            other => panic!("expected a colour block overload, got {other:?}"),
+        })
+        .collect()
 }

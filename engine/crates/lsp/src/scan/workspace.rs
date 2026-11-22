@@ -24,6 +24,7 @@ use crate::validate::{
     validation_error_to_diagnostic,
 };
 
+use super::vanilla::is_publication_retry;
 use super::{
     OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_parse_blocking_for_tests,
     hold_parse_for_tests, hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics,
@@ -200,6 +201,19 @@ impl IndexCollector {
     }
 }
 
+/// One line for a walk's failures: how many it skipped, and the first.
+fn summarize_failures(
+    failures: &[cwtools_file_manager::file_manager::DiscoveryFailure],
+) -> Option<String> {
+    let first = failures.first()?;
+    Some(format!(
+        "{} skipped, first {}: {}",
+        failures.len(),
+        first.path.display(),
+        first.error
+    ))
+}
+
 /// A scanned file's path relative to its own mod root.
 fn scan_logical_path<'a>(
     file: &'a ScannedFile,
@@ -320,6 +334,70 @@ impl Backend {
         *ticker = start_phase(self, progress, quiet, phase, total);
     }
 
+    /// End a scan that failed rather than was cancelled. The first scan's failure
+    /// must not leave `index_ready` unset, or the background reindex never retries it.
+    fn fail_scan(&self) -> bool {
+        self.state.index_ready.store(true, Ordering::Relaxed);
+        false
+    }
+
+    pub(super) async fn warn_incomplete(&self, what: &str, problem: &str) {
+        tracing::warn!(%problem, "{what} incomplete");
+        self.client
+            .log_message(
+                MessageType::WARNING,
+                format!("warning: {what} incomplete: {problem}"),
+            )
+            .await;
+    }
+
+    /// Make `type_index.complete` match what the scan found: the base game is merged
+    /// and every walk saw all of its files. Holds `vanilla_state` against a concurrent
+    /// clear or publication.
+    fn settle_index_completeness(&self, scripts_incomplete: bool) {
+        let changed = {
+            let vanilla = self.state.vanilla_state.lock();
+            let complete = self.state.vanilla_merged.load(Ordering::SeqCst) && !scripts_incomplete;
+            let mut info = self.state.info_service.write();
+            let changed = info.type_index.complete != complete;
+            if changed {
+                Arc::make_mut(&mut info.type_index).complete = complete;
+            }
+            drop(info);
+            drop(vanilla);
+            changed
+        };
+        if changed {
+            self.bump_info_revision();
+        }
+    }
+
+    // Invalidate before polling the notification: a blocked client or a dropped
+    // scan must not leave an earlier successful fingerprint eligible to skip.
+    pub(crate) fn invalidate_vanilla_scan(&self) {
+        let mut vanilla = self.state.vanilla_state.lock();
+        vanilla.publication_revision = vanilla.publication_revision.wrapping_add(1);
+        *self.state.last_scan_fingerprint.lock() = None;
+    }
+
+    /// Drop a stale quiet-scan fingerprint while holding `vanilla_state`.
+    fn publication_moved(&self, revision: u64) -> bool {
+        let vanilla = self.state.vanilla_state.lock();
+        if vanilla.publication_revision == revision {
+            return false;
+        }
+        *self.state.last_scan_fingerprint.lock() = None;
+        true
+    }
+
+    async fn report_file_index_failure<F: std::future::Future<Output = ()>>(
+        &self,
+        notification: F,
+    ) {
+        self.invalidate_vanilla_scan();
+        notification.await;
+    }
+
     async fn end_phase(&self, ticker: &mut PhaseTicker) {
         if let Some(summary) = std::mem::replace(ticker, PhaseTicker::inert()).stop() {
             self.client.log_message(MessageType::INFO, summary).await;
@@ -338,17 +416,18 @@ impl Backend {
                         None,
                     )
                     .await;
-                if outcome != ScanOutcome::Ran {
-                    backend
-                        .client
-                        .log_message(
-                            MessageType::WARNING,
-                            format!(
-                                "{context}: deferred re-validation gave up; a scan held the workspace the whole time"
-                            ),
-                        )
-                        .await;
-                }
+                let reason = match outcome {
+                    ScanOutcome::Ran => return,
+                    ScanOutcome::Busy => "a scan held the workspace the whole time",
+                    ScanOutcome::Cancelled => "the scan failed or was cancelled; see the log",
+                };
+                backend
+                    .client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("{context}: deferred re-validation gave up; {reason}"),
+                    )
+                    .await;
             })
             .await;
         });
@@ -411,10 +490,18 @@ impl Backend {
             fm_config
                 .exclude_dir_patterns
                 .extend(extra_dir_globs.iter().cloned());
-            cwtools_driver::discover_workspace_files(fm_config)
+            let scan_budget = fm_config.scan_budget;
+            // A walk that skipped something still returns the files it found.
+            cwtools_driver::discover_workspace(cwtools_driver::WorkspaceDiscoveryRequest {
+                roots: vec![root_path.clone()],
+                kinds: vec![cwtools_file_manager::FileKind::Script],
+                config: fm_config,
+                policy: cwtools_driver::DiscoveryPolicy::Workspace,
+            })
+            .map(|report| (report, scan_budget))
         });
-        let primary_files = match discovery {
-            Ok(files) => files,
+        let (primary_report, scan_budget) = match discovery {
+            Ok(found) => found,
             Err(error) => {
                 tracing::error!(path = %root_path.display(), error = %error, "workspace discovery failed");
                 self.client
@@ -427,23 +514,64 @@ impl Backend {
                         ),
                     )
                     .await;
-                Vec::new()
+                return self.fail_scan();
             }
         };
+        // Discovery that skips files or hits a cap is reported and the scan goes on with what
+        // it found, but no later pass may take this one for a complete picture of the mod.
+        let mut scripts_incomplete = false;
+        let mut loc_incomplete = false;
+        if let Some(problem) = summarize_failures(&primary_report.failures) {
+            scripts_incomplete = true;
+            self.warn_incomplete("script discovery", &problem).await;
+        }
+        let primary_examined = primary_report.examined;
+        let primary_files: Vec<cwtools_file_manager::file_manager::DiscoveredFile> = primary_report
+            .files
+            .into_iter()
+            .map(|file| cwtools_file_manager::file_manager::DiscoveredFile {
+                path: file.path,
+                logical_path: file.root_relative_path,
+            })
+            .collect();
         let parent_files = if parent_roots.is_empty() {
             Vec::new()
         } else {
-            tokio::task::block_in_place(|| {
-                cwtools_driver::discover_parent_script_files(
+            match tokio::task::block_in_place(|| {
+                cwtools_driver::discover_parent_script_files_sharing(
                     &parent_roots,
                     &root_path,
                     &primary_files,
                     ruleset.as_deref(),
                     &extra_file_globs,
                     &extra_dir_globs,
+                    cwtools_driver::ContinuedScan {
+                        budget: scan_budget,
+                        examined: primary_examined,
+                    },
                 )
-            })
+            }) {
+                Ok(files) => files,
+                Err(error) => {
+                    // The driver keeps no partial parent list, so the parent layer is left out.
+                    scripts_incomplete = true;
+                    self.warn_incomplete("parent mod discovery", &error.to_string())
+                        .await;
+                    Vec::new()
+                }
+            }
         };
+        let loc_signature =
+            match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
+                Ok(signature) => Some(signature),
+                Err(error) => {
+                    // No signature means this pass cannot match, or become, a quiet-scan baseline.
+                    loc_incomplete = true;
+                    self.warn_incomplete("localisation discovery", &error.to_string())
+                        .await;
+                    None
+                }
+            };
         let files_to_validate: Vec<std::path::PathBuf> =
             primary_files.into_iter().map(|f| f.path).collect();
         let primary_len = files_to_validate.len();
@@ -813,7 +941,8 @@ impl Backend {
 
         let discovered_uris: HashSet<String> =
             scan_files.iter().map(|file| file.uri.clone()).collect();
-        let removed_uris: Vec<String> = if scan_files.is_empty() {
+        // A walk that skipped files cannot say which indexed files are gone, so nothing is pruned.
+        let removed_uris: Vec<String> = if scan_files.is_empty() || scripts_incomplete {
             Vec::new()
         } else {
             let mut info = self.state.info_service.write();
@@ -868,29 +997,66 @@ impl Backend {
 
         self.enter_phase(&mut phase, progress, quiet, Phase::Vanilla, 0)
             .await;
-        self.ensure_vanilla_index(progress, false, quiet).await;
+        if let Err(error) = self.ensure_vanilla_index(progress, false, quiet).await {
+            // Without the base game the scan still validates the mod, against an index that
+            // says it is incomplete. The next pass retries the base-game load.
+            tracing::warn!(error = %error, "base-game indexing failed");
+            scripts_incomplete = true;
+            self.report_file_index_failure(self.client.log_message(
+                MessageType::WARNING,
+                format!("warning: base-game indexing incomplete: {error}"),
+            ))
+            .await;
+        }
         if cancel.is_cancelled() {
             return false;
         }
 
-        tokio::task::block_in_place(|| self.merge_pending_vanilla_index());
+        let vanilla_revision =
+            match tokio::task::block_in_place(|| self.merge_pending_vanilla_index_versioned()) {
+                Ok(revision) => revision,
+                Err(error) if is_publication_retry(&error) => {
+                    tracing::error!(error = %error, "base-game merge lost a publication race");
+                    self.report_file_index_failure(self.client.log_message(
+                        MessageType::ERROR,
+                        format!("error: file index discovery failed: {error}"),
+                    ))
+                    .await;
+                    return self.fail_scan();
+                }
+                Err(error) => {
+                    // The staged payload is kept for the next pass, which retries the merge.
+                    tracing::warn!(error = %error, "file index discovery failed");
+                    scripts_incomplete = true;
+                    self.report_file_index_failure(self.client.log_message(
+                        MessageType::WARNING,
+                        format!("warning: file index discovery incomplete: {error}"),
+                    ))
+                    .await;
+                    self.state.vanilla_state.lock().publication_revision
+                }
+            };
+        self.settle_index_completeness(scripts_incomplete);
+        #[cfg(test)]
+        self.hold_from_async(crate::state::HoldPoint::ScanAfterVanilla);
         tokio::task::block_in_place(|| self.rebuild_alias_key_index());
 
         self.rebuild_modifier_keys();
 
         self.enter_phase(&mut phase, progress, quiet, Phase::Localisation, 0)
             .await;
-        let loc_signature = tokio::task::block_in_place(|| self.compute_loc_signature(&root_path));
-        let loc_unchanged = *self.state.last_loc_signature.lock() == Some(loc_signature);
+        let loc_unchanged =
+            loc_signature.is_some() && *self.state.last_loc_signature.lock() == loc_signature;
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
-        } else {
-            self.rebuild_and_publish_loc(&root_path).await;
+        } else if !self.rebuild_and_publish_loc(&root_path).await {
+            // The rebuild keeps the previous localisation index and diagnostics.
+            loc_incomplete = true;
         }
         if cancel.is_cancelled() {
             return false;
         }
-        *self.state.last_loc_signature.lock() = Some(loc_signature);
+        *self.state.last_loc_signature.lock() = if loc_incomplete { None } else { loc_signature };
 
         // Rebuild the inline-script registry from this scan (#259), so a script changed outside
         // a watched event is picked up. A full rebuild is the only way a deleted one drops out.
@@ -1112,6 +1278,10 @@ impl Backend {
                 }
             }
         }
+        // Last reader. A held snapshot makes the next index write deep-clone the index.
+        drop(type_index_snap);
+        #[cfg(test)]
+        self.hold_from_async(crate::state::HoldPoint::Pass2SnapshotDropped);
         if let Some(inline_scripts) = fresh_inline_scripts {
             *self.state.inline_scripts.write() = inline_scripts;
         }
@@ -1211,7 +1381,7 @@ impl Backend {
             }
         }
 
-        *self.state.last_scan_summary.lock() = Some(ScanSummary {
+        let summary = ScanSummary {
             total_files,
             validated_files: publish_total,
             files_with_errors,
@@ -1219,11 +1389,14 @@ impl Backend {
             total_warnings,
             total_infos,
             total_hints,
-        });
+        };
 
         drop(parsed_files);
 
         self.end_phase(&mut phase).await;
+        if self.publication_moved(vanilla_revision) {
+            return false;
+        }
         self.client
             .log_message(
                 MessageType::INFO,
@@ -1252,10 +1425,6 @@ impl Backend {
             })
             .collect();
         self.send_update_file_list(file_list).await;
-
-        if !scan_files.is_empty() {
-            *self.state.last_scan_fingerprint.lock() = Some((scan_fingerprint, scan_generation));
-        }
 
         if cwtools_profiling::profile_enabled() {
             let st = self.state.string_table.stats();
@@ -1293,6 +1462,20 @@ impl Backend {
         self.invalidate_all_semantic_tokens();
         self.request_semantic_refresh().await;
         self.request_code_lens_refresh().await;
+        // Commit the summary and fingerprint under the same fence used by
+        // vanilla invalidation. There are no awaits after this check.
+        let vanilla = self.state.vanilla_state.lock();
+        if vanilla.publication_revision != vanilla_revision {
+            *self.state.last_scan_fingerprint.lock() = None;
+            return false;
+        }
+        *self.state.last_scan_summary.lock() = Some(summary);
+        if scripts_incomplete || loc_incomplete {
+            // An earlier fingerprint must not let a quiet pass skip the retry.
+            *self.state.last_scan_fingerprint.lock() = None;
+        } else if !scan_files.is_empty() {
+            *self.state.last_scan_fingerprint.lock() = Some((scan_fingerprint, scan_generation));
+        }
         true
     }
 
@@ -1420,22 +1603,31 @@ impl Backend {
             let diagnostics = match current_ast {
                 Some(ast) => {
                     let lines = DocLines::new(&text, encoding.clone());
-                    let diags = match ruleset_snap.as_ref() {
-                        Some(ruleset) => {
-                            self.validate_parsed_prebuilt(
-                                &uri,
-                                &ast,
-                                &modifier_keys_snap,
-                                ruleset,
-                                game,
-                                registry_snap.as_ref(),
-                                &lines,
-                                true,
-                            )
-                            .0
-                        }
-                        None => parse_errors_to_diagnostics(&ast.errors, &lines),
-                    };
+                    // A whole-file validation: keep it off the async workers. The
+                    // inline ignores match what an edit publishes, so a rescan
+                    // cannot bring back a suppressed diagnostic. The validation
+                    // has already capped its own output.
+                    let diags = tokio::task::block_in_place(|| {
+                        let mut diags = match ruleset_snap.as_ref() {
+                            Some(ruleset) => {
+                                self.validate_parsed_prebuilt(
+                                    &uri,
+                                    &ast,
+                                    &modifier_keys_snap,
+                                    ruleset,
+                                    game,
+                                    registry_snap.as_ref(),
+                                    &lines,
+                                    true,
+                                )
+                                .0
+                            }
+                            None => parse_errors_to_diagnostics(&ast.errors, &lines),
+                        };
+                        let inline_ignored = extract_inline_ignored_codes(&text);
+                        crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
+                        diags
+                    });
                     tracing::info!(
                         target: "cwtools::profile",
                         "[validate] ({}) {} diagnostics (prebuilt, no reparse)",
@@ -1615,6 +1807,298 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn file_index_failure_invalidates_before_a_blocked_notification() {
+        let (backend, _tmp) = setup_workspace(None);
+        assert_eq!(
+            *backend.state.last_scan_fingerprint.lock(),
+            Some(SENTINEL_FP)
+        );
+        let notification = async {
+            assert!(backend.state.last_scan_fingerprint.lock().is_none());
+            std::future::pending::<()>().await;
+        };
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                backend.report_file_index_failure(notification),
+            )
+            .await
+            .is_err()
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_rebuild_after_vanilla_merge_fences_scan_success() {
+        let (backend, workspace) = setup_workspace(None);
+        let vanilla = tempfile::tempdir().unwrap();
+        let resources = vanilla.path().join("gfx");
+        std::fs::create_dir_all(&resources).unwrap();
+        for name in ["one.dds", "two.dds"] {
+            std::fs::write(resources.join(name), b"").unwrap();
+        }
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![workspace.path().to_path_buf()];
+            config.vanilla_dir = Some(vanilla.path().to_path_buf());
+            config.cache_dir = Some(workspace.path().join("cache"));
+        }
+        assert!(backend.validate_entire_workspace(false).await);
+        assert!(backend.state.last_scan_fingerprint.lock().is_some());
+        let gate = HoldGate::new(HoldPoint::ScanAfterVanilla);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let scan_backend = clone_backend(&backend);
+        let scan = tokio::spawn(async move {
+            scan_backend
+                .validate_entire_workspace_tracked(false, None)
+                .await
+        });
+        wait_arrived(&gate, HoldPoint::ScanAfterVanilla).await;
+        *backend.state.vanilla_loader_override.lock() =
+            Some(crate::scan::test_capped_vanilla_loader);
+        let command = backend.cache_vanilla_command(None).await;
+        let fingerprint_during_failure = *backend.state.last_scan_fingerprint.lock();
+        gate.release();
+        let outcome = scan.await.expect("scan panicked");
+        assert!(
+            matches!(command.unwrap(), Some(serde_json::Value::String(message))
+            if message.starts_with("Vanilla cache rebuild failed:"))
+        );
+        assert!(fingerprint_during_failure.is_none());
+        assert_eq!(outcome, ScanOutcome::Cancelled);
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
+        assert!(!backend.state.info_service.read().type_index.complete);
+        assert!(backend.state.vanilla_state.lock().index.is_none());
+
+        // Force a cold retry through the same loader rather than an older disk cache.
+        std::fs::remove_dir_all(workspace.path().join("cache")).unwrap();
+        std::fs::remove_file(resources.join("two.dds")).unwrap();
+        assert!(
+            backend
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+                .await
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_some());
+        assert!(backend.state.vanilla_merged.load(Ordering::SeqCst));
+        assert!(backend.state.info_service.read().type_index.complete);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_vanilla_publication_clears_the_quiet_scan_fingerprint() {
+        let gate = HoldGate::new(HoldPoint::ScanAfterVanilla);
+        let (backend, _workspace) = setup_workspace(Some(gate.clone()));
+        let scan_backend = clone_backend(&backend);
+        let scan = tokio::spawn(async move {
+            scan_backend
+                .validate_entire_workspace_tracked(false, None)
+                .await
+        });
+        wait_arrived(&gate, HoldPoint::ScanAfterVanilla).await;
+        {
+            let mut vanilla = backend.state.vanilla_state.lock();
+            vanilla.publication_revision = vanilla.publication_revision.wrapping_add(1);
+        }
+        gate.release();
+        let outcome = scan.await.expect("scan panicked");
+        assert_eq!(outcome, ScanOutcome::Cancelled);
+        assert!(
+            backend.state.last_scan_fingerprint.lock().is_none(),
+            "a fenced abort must not leave a fingerprint a quiet scan can skip"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cold_vanilla_loader_failure_retries_quiet_scan() {
+        let (backend, workspace) = setup_workspace(None);
+        let vanilla = tempfile::tempdir().unwrap();
+        let resources = vanilla.path().join("gfx");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::create_dir_all(vanilla.path().join("common/things")).unwrap();
+        for name in ["one.dds", "two.dds"] {
+            std::fs::write(resources.join(name), b"").unwrap();
+        }
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![workspace.path().to_path_buf()];
+            config.vanilla_dir = Some(vanilla.path().to_path_buf());
+            config.cache_dir = Some(workspace.path().join("cache"));
+        }
+        *backend.state.vanilla_loader_override.lock() =
+            Some(crate::scan::test_capped_vanilla_loader);
+        assert!(
+            backend
+                .validate_entire_workspace_inner(false, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+                .await,
+            "a cold loader failure must not abort the mod's own scan"
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(backend.state.vanilla_state.lock().index.is_none());
+        assert!(!backend.state.vanilla_merged.load(Ordering::SeqCst));
+        assert!(!backend.state.info_service.read().type_index.complete);
+        assert!(
+            backend
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+                .await,
+            "the same cap still fails the base-game load while both resources exist"
+        );
+        assert!(
+            backend.state.last_scan_fingerprint.lock().is_none(),
+            "an incomplete pass must stay retryable"
+        );
+        std::fs::remove_file(resources.join("two.dds")).unwrap();
+        assert!(
+            backend
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+                .await,
+            "quiet scan must retry the cold loader"
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_some());
+        let info = backend.state.info_service.read();
+        assert!(info.type_index.complete);
+        assert!(info.type_index.file_index.contains("gfx/one.dds"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn file_index_budget_failure_retries_quiet_scan_after_resources_removed() {
+        use cwtools_file_manager::file_manager::{
+            FileError, FileKind, FileManagerConfig, ScanBudget,
+        };
+        use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
+
+        let (backend, tmp) = setup_workspace(None);
+        backend.state.config.write().workspace_roots = vec![tmp.path().to_path_buf()];
+        let stage = || {
+            backend.stage_vanilla_payload(VanillaCacheData {
+                per_type: HashMap::new(),
+                aux: VanillaCacheAux {
+                    loc_keys: Vec::new(),
+                    file_paths: vec!["gfx/vanilla_kept.dds".into()],
+                    var_names: Vec::new(),
+                    complex_enum_values: Vec::new(),
+                    value_set_values: Vec::new(),
+                    scripted_loc_names: Vec::new(),
+                    scripted_gui_names: Vec::new(),
+                },
+            })
+        };
+        stage();
+        assert!(backend.validate_entire_workspace(false).await);
+        let prior = *backend.state.last_scan_fingerprint.lock();
+        assert!(prior.is_some());
+
+        // Resources are indexed for file references, but do not change the script fingerprint.
+        let resources = tmp.path().join("gfx");
+        std::fs::create_dir_all(&resources).unwrap();
+        for name in ["one.dds", "two.dds"] {
+            std::fs::write(resources.join(name), b"").unwrap();
+        }
+        stage();
+        fn capped_file_index(
+            root: &std::path::Path,
+            parents: &[std::path::PathBuf],
+            ignore_files: &[String],
+            ignore_dirs: &[String],
+            vanilla_paths: &[String],
+            shadow: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+        ) -> Result<cwtools_info::FileIndex, FileError> {
+            let config = FileManagerConfig {
+                include_dirs: vec![".".into()],
+                scan_budget: ScanBudget {
+                    max_files: 4,
+                    ..ScanBudget::default()
+                },
+                ..Default::default()
+            };
+            let report =
+                cwtools_driver::discover_workspace(cwtools_driver::WorkspaceDiscoveryRequest {
+                    roots: vec![root.to_path_buf()],
+                    kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
+                    config,
+                    policy: cwtools_driver::DiscoveryPolicy::Workspace,
+                })?;
+            if let Some(failure) = report.failures.iter().find(|f| f.is_file_count_budget()) {
+                return Err(FileError::FileCountBudget(failure.path.clone()));
+            }
+            cwtools_driver::build_file_index_with_vanilla_shadow(
+                root,
+                parents,
+                ignore_files,
+                ignore_dirs,
+                cwtools_driver::VanillaFiles::Cached(Cow::Borrowed(vanilla_paths)),
+                false,
+                shadow,
+            )
+        }
+        *backend.state.file_index_builder_override.lock() = Some(capped_file_index);
+        let completed = backend
+            .validate_entire_workspace_inner(false, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+            .await;
+        assert!(
+            completed,
+            "an incomplete auxiliary walk must not abort the scan"
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        assert!(!backend.state.info_service.read().type_index.complete);
+        assert!(
+            backend.state.vanilla_state.lock().index.is_some(),
+            "retain the staged payload"
+        );
+
+        // The same cap still fails on a quiet retry until the resource files are removed.
+        assert!(
+            backend
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+                .await
+        );
+        assert!(backend.state.last_scan_fingerprint.lock().is_none());
+        std::fs::remove_dir_all(resources).unwrap();
+        assert!(
+            backend
+                .validate_entire_workspace_inner(true, None, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+                .await
+        );
+        let info = backend.state.info_service.read();
+        assert!(info.type_index.complete, "quiet scan must retry the merge");
+        assert!(info.type_index.file_index.contains("gfx/vanilla_kept.dds"));
+        drop(info);
+        assert_eq!(*backend.state.last_scan_fingerprint.lock(), prior);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_first_scan_preserves_state_and_leaves_background_reindex_free_to_retry() {
+        let (backend, tmp) = setup_workspace(None);
+        let uri = Url::from_file_path(tmp.path().join("missing")).unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_uri = Some(uri.as_str().into());
+            config.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri.as_str()));
+        }
+        assert!(!backend.should_run_background_pass(0));
+        assert!(!backend.validate_entire_workspace(false).await);
+        assert_stores_unchanged(&backend);
+        assert!(
+            backend.should_run_background_pass(0),
+            "a failed first scan must not block the background reindex that retries it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn missing_parent_mod_does_not_abort_the_scan() {
+        let (backend, tmp) = setup_workspace(None);
+        backend.state.config.write().parent_roots = vec![tmp.path().join("missing")];
+        assert!(
+            backend.validate_entire_workspace(false).await,
+            "the mod's own files are still scanned"
+        );
+        assert!(
+            backend.state.last_scan_fingerprint.lock().is_none(),
+            "a scan that skipped a parent layer must stay retryable"
+        );
+        assert!(backend.should_run_background_pass(0));
+    }
+
     async fn wait_arrived(gate: &HoldGate, point: HoldPoint) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
@@ -1733,6 +2217,80 @@ mod tests {
             drop(state.type_uses.write());
         })
         .await;
+    }
+
+    fn spawn_scan(backend: &Backend) -> tokio::task::JoinHandle<bool> {
+        let scan_backend = clone_backend(backend);
+        tokio::spawn(async move {
+            let progress = CommandProgress::for_tests(
+                scan_backend.state.clone(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            scan_backend
+                .validate_entire_workspace_inner(
+                    false,
+                    Some(&progress),
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                )
+                .await
+        })
+    }
+
+    fn index_edited_thing(backend: &Backend, tmp: &tempfile::TempDir) {
+        let uri = Url::from_file_path(tmp.path().join("common/things/edited.txt"))
+            .unwrap()
+            .to_string();
+        let parsed = cwtools_parser::parser::parse_string(
+            "thing_edited = { }\n",
+            &backend.state.string_table,
+        );
+        backend.index_parsed_file(&uri, &parsed, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_releases_type_index_snapshot_before_publishing() {
+        let gate = HoldGate::new(HoldPoint::Pass2SnapshotDropped);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
+        let scan = spawn_scan(&backend);
+        wait_arrived(&gate, HoldPoint::Pass2SnapshotDropped).await;
+
+        let holders = Arc::strong_count(&backend.state.info_service.read().type_index);
+        let before = Arc::as_ptr(&backend.state.info_service.read().type_index);
+        index_edited_thing(&backend, &tmp);
+        let after = Arc::as_ptr(&backend.state.info_service.read().type_index);
+        gate.release();
+        assert!(scan.await.expect("scan panicked"), "scan must complete");
+
+        assert_eq!(holders, 1, "the scan kept its type index snapshot");
+        assert_eq!(
+            before, after,
+            "an index write after pass 2 copied the index"
+        );
+        assert!(
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .contains("thing", "thing_edited")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_edit_during_snapshot_window_reaches_final_index() {
+        let gate = HoldGate::new(HoldPoint::Pass2Before);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
+        let scan = spawn_scan(&backend);
+        wait_arrived(&gate, HoldPoint::Pass2Before).await;
+
+        index_edited_thing(&backend, &tmp);
+        gate.release();
+        assert!(scan.await.expect("scan panicked"), "scan must complete");
+
+        let info = backend.state.info_service.read();
+        for name in ["thing_edited", "thing_0", "thing_1", "thing_2"] {
+            assert!(info.type_index.contains("thing", name), "lost {name}");
+        }
     }
 
     fn open_buffer(backend: &Backend, tmp: &tempfile::TempDir, name: &str, parsed: bool) -> String {
@@ -2603,7 +3161,7 @@ mod tests {
         )
         .await
         .expect("missing-root workspace validation timed out");
-        assert!(scan);
+        assert!(!scan);
         let msg = tokio::time::timeout(std::time::Duration::from_secs(2), found_rx)
             .await
             .expect("missing-root log message timed out")

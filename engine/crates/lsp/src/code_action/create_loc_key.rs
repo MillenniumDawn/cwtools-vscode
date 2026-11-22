@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use tower_lsp::lsp_types::*;
@@ -131,18 +131,29 @@ fn insert_stub_after_line(
     }
 }
 
+/// A BOM is not `is_whitespace`, so BOM-only and whitespace-only files still count as empty (#1255).
+fn is_effectively_empty(text: &str) -> bool {
+    text.chars().all(|c| c == '\u{FEFF}' || c.is_whitespace())
+}
+
 fn insert_edit_op(
     uri: Url,
     version: Option<i32>,
     pos: Position,
     new_text: String,
 ) -> DocumentChangeOperation {
+    range_edit_op(uri, version, Range::new(pos, pos), new_text)
+}
+
+fn range_edit_op(
+    uri: Url,
+    version: Option<i32>,
+    range: Range,
+    new_text: String,
+) -> DocumentChangeOperation {
     DocumentChangeOperation::Edit(TextDocumentEdit {
         text_document: OptionalVersionedTextDocumentIdentifier { uri, version },
-        edits: vec![OneOf::Left(TextEdit {
-            range: Range::new(pos, pos),
-            new_text,
-        })],
+        edits: vec![OneOf::Left(TextEdit { range, new_text })],
     })
 }
 
@@ -174,10 +185,19 @@ fn candidate_operations(
     cand: &LocKeyCandidate<'_>,
     owners: &HashMap<Lang, usize>,
     self_idx: usize,
-    existing_file_ops: &mut impl FnMut(&LocInsertTarget, &str) -> Option<Vec<DocumentChangeOperation>>,
+    headed: &mut HashSet<(Lang, String)>,
+    empty_targets: &HashSet<(Lang, String)>,
+    existing_file_ops: &mut impl FnMut(
+        &LocInsertTarget,
+        Lang,
+        bool,
+        &str,
+    ) -> Option<Vec<DocumentChangeOperation>>,
 ) -> Option<Vec<DocumentChangeOperation>> {
     let stub = stub_line(&cand.key);
     let mut operations = Vec::new();
+    // Failed candidates must not reserve headers their discarded edits never insert.
+    let mut headed_here = HashSet::new();
     for (lang, target) in &cand.targets {
         let ops = match target {
             LocInsertTarget::NewFile { uri } if owners.get(lang) == Some(&self_idx) => Some(vec![
@@ -202,10 +222,26 @@ fn candidate_operations(
                 Position::new(0, 0),
                 format!("{stub}\n"),
             )]),
-            other => existing_file_ops(other, &stub),
+            other => {
+                let site = match other {
+                    LocInsertTarget::ExistingFileAppend { uri } => Some((*lang, uri.to_string())),
+                    _ => None,
+                };
+                let write_header = site.as_ref().is_some_and(|site| {
+                    empty_targets.contains(site)
+                        && !headed.contains(site)
+                        && !headed_here.contains(site)
+                });
+                let ops = existing_file_ops(other, *lang, write_header, &stub)?;
+                if let Some(site) = write_header.then_some(site).flatten() {
+                    headed_here.insert(site);
+                }
+                Some(ops)
+            }
         };
         operations.extend(ops?);
     }
+    headed.extend(headed_here);
     Some(operations)
 }
 
@@ -233,10 +269,16 @@ fn merge_operations(
     }
 }
 
-/// (#142). `existing_file_ops` builds the two existing-file `LocInsertTarget`
+/// Initialize each empty target once per returned action.
 fn build_create_loc_key_batch<'d>(
     candidates: &[LocKeyCandidate<'d>],
-    mut existing_file_ops: impl FnMut(&LocInsertTarget, &str) -> Option<Vec<DocumentChangeOperation>>,
+    empty_targets: &HashSet<(Lang, String)>,
+    mut existing_file_ops: impl FnMut(
+        &LocInsertTarget,
+        Lang,
+        bool,
+        &str,
+    ) -> Option<Vec<DocumentChangeOperation>>,
 ) -> Vec<CodeAction> {
     let owners = new_file_owners(candidates.iter().map(|c| c.targets.as_slice()));
     let fold_into: Vec<Option<usize>> = candidates
@@ -255,16 +297,25 @@ fn build_create_loc_key_batch<'d>(
 
     let mut actions: Vec<CodeAction> = Vec::new();
     let mut built_index: Vec<Option<usize>> = vec![None; candidates.len()];
+    let mut headed_by_action: Vec<HashSet<(Lang, String)>> = Vec::new();
 
     for (idx, cand) in candidates.iter().enumerate() {
         if fold_into[idx].is_some() {
             continue;
         }
-        let Some(operations) = candidate_operations(cand, &owners, idx, &mut existing_file_ops)
-        else {
+        let mut headed = HashSet::new();
+        let Some(operations) = candidate_operations(
+            cand,
+            &owners,
+            idx,
+            &mut headed,
+            empty_targets,
+            &mut existing_file_ops,
+        ) else {
             continue;
         };
         built_index[idx] = Some(actions.len());
+        headed_by_action.push(headed);
         actions.push(CodeAction {
             title: cand.title.clone(),
             kind: Some(CodeActionKind::QUICKFIX),
@@ -282,12 +333,21 @@ fn build_create_loc_key_batch<'d>(
         let Some(owner_idx) = fold_into[idx] else {
             continue;
         };
-        let Some(owner_action) = built_index[owner_idx].and_then(|pos| actions.get_mut(pos)) else {
+        let Some(owner_pos) = built_index[owner_idx] else {
             continue; // the owner's own action failed to build; drop this too
         };
-        let Some(folded_ops) = candidate_operations(cand, &owners, idx, &mut existing_file_ops)
-        else {
+        let Some(folded_ops) = candidate_operations(
+            cand,
+            &owners,
+            idx,
+            &mut headed_by_action[owner_pos],
+            empty_targets,
+            &mut existing_file_ops,
+        ) else {
             continue; // this candidate's own languages didn't all build
+        };
+        let Some(owner_action) = actions.get_mut(owner_pos) else {
+            continue;
         };
         if let Some(WorkspaceEdit {
             document_changes: Some(DocumentChanges::Operations(ops)),
@@ -455,10 +515,28 @@ impl Backend {
             })
             .collect();
         let texts = self.file_text_snapshots_for(&target_uris).await;
+        let empty_targets: HashSet<(Lang, String)> = resolved
+            .iter()
+            .flat_map(|candidate| candidate.targets.iter())
+            .filter_map(|(lang, target)| match target {
+                LocInsertTarget::ExistingFileAppend { uri }
+                    if texts
+                        .get(uri.as_str())
+                        .is_some_and(|s| is_effectively_empty(&s.text)) =>
+                {
+                    Some((*lang, uri.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
 
-        build_create_loc_key_batch(&resolved, |target, stub| {
-            self.loc_insert_operations(target, stub, encoding, &texts)
-        })
+        build_create_loc_key_batch(
+            &resolved,
+            &empty_targets,
+            |target, lang, write_header, stub| {
+                self.loc_insert_operations(target, lang, write_header, stub, encoding, &texts)
+            },
+        )
         .into_iter()
         .map(CodeActionOrCommand::CodeAction)
         .collect()
@@ -498,6 +576,8 @@ impl Backend {
     fn loc_insert_operations(
         &self,
         target: &LocInsertTarget,
+        lang: Lang,
+        write_header: bool,
         stub: &str,
         encoding: &PositionEncodingKind,
         texts: &HashMap<String, crate::FileTextSnapshot>,
@@ -526,6 +606,27 @@ impl Backend {
             }
             LocInsertTarget::ExistingFileAppend { uri } => {
                 let snapshot = texts.get(uri.as_str())?;
+                if is_effectively_empty(&snapshot.text) {
+                    // One header edit replaces the whole body, so a stray BOM is consumed and a folded stub lands past it (#1255).
+                    let end = crate::lines::DocLines::new(&snapshot.text, encoding.clone())
+                        .document_end_position();
+                    let op = if write_header {
+                        range_edit_op(
+                            uri.clone(),
+                            snapshot.version,
+                            Range::new(Position::new(0, 0), end),
+                            format!("\u{FEFF}l_{lang}:\n{stub}\n"),
+                        )
+                    } else {
+                        range_edit_op(
+                            uri.clone(),
+                            snapshot.version,
+                            Range::new(end, end),
+                            format!("{stub}\n"),
+                        )
+                    };
+                    return Some(vec![op]);
+                }
                 let last_line0 = snapshot.text.lines().count().saturating_sub(1) as u32;
                 let (pos, insert_text) =
                     insert_stub_after_line(&snapshot.text, last_line0, stub, encoding);
@@ -781,6 +882,28 @@ mod tests {
     }
 
     #[test]
+    fn is_effectively_empty_accepts_only_bom_and_whitespace() {
+        for empty in [
+            "",
+            "\u{FEFF}",
+            " \t\n ",
+            "\u{FEFF}\u{FEFF} \n",
+            "\u{FEFF} \t\n",
+        ] {
+            assert!(
+                is_effectively_empty(empty),
+                "expected effectively empty: {empty:?}"
+            );
+        }
+        for content in ["l_english:", " my_key:0 \"x\"", "\nx", "\u{FEFF}l_english:"] {
+            assert!(
+                !is_effectively_empty(content),
+                "expected content: {content:?}"
+            );
+        }
+    }
+
+    #[test]
     fn insert_stub_after_line_uses_the_files_dominant_crlf_eol() {
         let text = "l_english:\r\n my_thing:0 \"Thing\"\r\n";
         let (pos, insert) = insert_stub_after_line(
@@ -998,7 +1121,7 @@ mod tests {
             },
         ];
 
-        let actions = build_create_loc_key_batch(&candidates, |_, _| {
+        let actions = build_create_loc_key_batch(&candidates, &HashSet::new(), |_, _, _, _| {
             panic!("no existing-file target in this batch")
         });
 
@@ -1100,17 +1223,22 @@ mod tests {
             },
         ];
 
-        let actions = build_create_loc_key_batch(&candidates, |target, stub| {
-            let LocInsertTarget::ExistingFileAppend { uri } = target else {
-                panic!("no other existing-file target in this batch: {target:?}");
-            };
-            Some(vec![insert_edit_op(
-                uri.clone(),
-                Some(7),
-                Position::new(3, 0),
-                format!("{stub}\n"),
-            )])
-        });
+        let actions = build_create_loc_key_batch(
+            &candidates,
+            &HashSet::new(),
+            |target, _lang, write_header, stub| {
+                let LocInsertTarget::ExistingFileAppend { uri } = target else {
+                    panic!("no other existing-file target in this batch: {target:?}");
+                };
+                debug_assert!(!write_header);
+                Some(vec![insert_edit_op(
+                    uri.clone(),
+                    Some(7),
+                    Position::new(3, 0),
+                    format!("{stub}\n"),
+                )])
+            },
+        );
 
         assert_eq!(
             actions.len(),
@@ -1169,6 +1297,158 @@ mod tests {
         assert!(
             fr_combined.contains(" my_thing_title:0 "),
             "got: {fr_combined:?}"
+        );
+    }
+
+    #[test]
+    fn build_create_loc_key_batch_commits_nothing_when_a_candidate_fails_partway() {
+        let en_uri: Url = "file:///ws/localisation/things_l_english.yml"
+            .parse()
+            .unwrap();
+        let fr_uri: Url = "file:///ws/localisation/unreadable_l_german.yml"
+            .parse()
+            .unwrap();
+        let gen_fr_uri: Url = "file:///ws/localisation/cwtools_generated_l_french.yml"
+            .parse()
+            .unwrap();
+        let diag_a = super::super::payload::create_loc_key_diag();
+        let diag_b = super::super::payload::create_loc_key_diag();
+        let diag_c = super::super::payload::create_loc_key_diag();
+        let empty_targets: HashSet<(Lang, String)> =
+            [(Lang::English, en_uri.to_string())].into_iter().collect();
+
+        fn candidate<'d>(
+            diag: &'d Diagnostic,
+            key: &'static str,
+            targets: Vec<(Lang, LocInsertTarget)>,
+        ) -> LocKeyCandidate<'d> {
+            LocKeyCandidate {
+                diag,
+                title: format!("Create localisation key {key}"),
+                key: key.to_string(),
+                targets,
+            }
+        }
+        let append = |uri: &Url| LocInsertTarget::ExistingFileAppend { uri: uri.clone() };
+        let candidates = vec![
+            candidate(
+                &diag_a,
+                "my_thing",
+                vec![(
+                    Lang::French,
+                    LocInsertTarget::NewFile {
+                        uri: gen_fr_uri.clone(),
+                    },
+                )],
+            ),
+            candidate(
+                &diag_b,
+                "my_thing_name",
+                vec![
+                    (Lang::English, append(&en_uri)),
+                    (Lang::German, append(&fr_uri)),
+                    (
+                        Lang::French,
+                        LocInsertTarget::NewFile {
+                            uri: gen_fr_uri.clone(),
+                        },
+                    ),
+                ],
+            ),
+            candidate(
+                &diag_c,
+                "my_thing_title",
+                vec![
+                    (Lang::English, append(&en_uri)),
+                    (
+                        Lang::French,
+                        LocInsertTarget::NewFile {
+                            uri: gen_fr_uri.clone(),
+                        },
+                    ),
+                ],
+            ),
+        ];
+
+        let actions = build_create_loc_key_batch(
+            &candidates,
+            &empty_targets,
+            |target, lang, write_header, stub| {
+                let LocInsertTarget::ExistingFileAppend { uri } = target else {
+                    panic!("the batch must pass only existing-file targets: {target:?}");
+                };
+                if uri == &fr_uri {
+                    return None; // no text snapshot: the candidate cannot build
+                }
+                let text = if write_header {
+                    format!("\u{FEFF}l_{lang}:\n{stub}\n")
+                } else {
+                    format!("{stub}\n")
+                };
+                Some(vec![insert_edit_op(
+                    uri.clone(),
+                    Some(9),
+                    Position::new(0, 0),
+                    text,
+                )])
+            },
+        );
+
+        assert_eq!(
+            actions.len(),
+            1,
+            "the failing candidate is dropped; the owner action absorbs the third: {actions:?}"
+        );
+        assert_eq!(
+            actions[0].diagnostics.as_ref().map(Vec::len),
+            Some(2),
+            "the folded candidate's diagnostic lands with the owner's"
+        );
+
+        let Some(WorkspaceEdit {
+            document_changes: Some(DocumentChanges::Operations(ops)),
+            ..
+        }) = &actions[0].edit
+        else {
+            panic!("expected document_changes operations");
+        };
+
+        let en_texts = edit_texts(ops, &en_uri);
+        assert_eq!(
+            en_texts.len(),
+            1,
+            "successful folded candidate: {en_texts:?}"
+        );
+        assert!(
+            en_texts[0].contains("l_english:") && en_texts[0].contains("\u{FEFF}"),
+            "the successful folded candidate initializes the empty file: {en_texts:?}"
+        );
+        let en_combined = en_texts.concat();
+        assert_eq!(
+            en_combined.matches("l_english:").count(),
+            1,
+            "exactly one header across the merged action: {en_combined:?}"
+        );
+        assert!(
+            en_combined.contains(" my_thing_title:0 "),
+            "got: {en_combined:?}"
+        );
+        assert!(
+            !en_combined.contains(" my_thing_name:0 "),
+            "every op of the failed candidate is discarded: {en_combined:?}"
+        );
+
+        let creates = ops
+            .iter()
+            .filter(|op| matches!(op, DocumentChangeOperation::Op(ResourceOp::Create(_))))
+            .count();
+        assert_eq!(creates, 1);
+        let fr_texts = edit_texts(ops, &gen_fr_uri);
+        assert_eq!(fr_texts.len(), 2, "header edit + folded stub: {fr_texts:?}");
+        assert_eq!(
+            fr_texts.concat().matches("l_french:").count(),
+            1,
+            "new-file header still exactly once: {fr_texts:?}"
         );
     }
 }

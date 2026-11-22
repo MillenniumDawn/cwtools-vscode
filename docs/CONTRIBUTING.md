@@ -141,8 +141,8 @@ are tested from `tests/scripts/`.
 `scripts/` and its tests have their own toolchain: ruff, black, pylint, mypy,
 pytest and coverage.py. Direct versions and shared settings live in
 [`pyproject.toml`](../pyproject.toml); [`uv.lock`](../uv.lock) records the
-complete resolution and package hashes for all platforms. Install uv 0.12.19
-(the version CI uses), then create the Python 3.12 environment:
+complete resolution and package hashes for all platforms. Install uv 0.13.7
+or later (CI uses 0.13.7), then create the Python 3.12 environment:
 
 ```bash
 uv sync --locked --python 3.12
@@ -155,13 +155,11 @@ pytest
 python scripts/build/python_coverage.py
 ```
 
-The `Python lint & tests` CI matrix runs all five checks on Ubuntu, Windows
-and macOS. The Node check matrix also runs on those native platforms. These
-jobs run non-UI tests; the extension-host suites remain headless on Linux.
-The process-tree tests that inspect `/proc` and the real `xvfb-run` exit-code
-probe retain their narrow platform/backend skips. mypy is strict and pylint
-must stay at 10.00. Activate this same environment before running the system
-pre-commit hooks in [`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
+The `Python lint & tests` CI job runs that list, with pytest under the
+coverage script, and the `Non-UI tests` jobs run pytest on Windows and macOS
+from the same lock. mypy is in strict mode and pylint has to stay at 10.00.
+Activate this environment before running the pre-commit hooks in
+[`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
 
 `uv sync --locked` fails if the manifest and lock disagree, rather than
 regenerating the lock in CI. For an intentional tool update, change its
@@ -172,10 +170,10 @@ checks above. Dependabot uses the uv ecosystem to update this same lock.
 There is no separate requirements lock to keep in sync.
 
 Linux CI measures production Python line and branch coverage. The initial
-baseline at `1b7ddca5` (Python 3.12.14, coverage.py 7.17.2; 443 passed, one
-unavailable-xvfb skip) was **1,999/2,357 lines = 84.8112%** and
-**665/854 branch exits = 77.8689%** across all 20 `scripts/**/*.py` files.
-The independent regression floors are **84.8% lines** and **77.8% branches**,
+baseline on `ea7c58b8` plus the coverage helper (Python 3.12.13, coverage.py
+7.17.2; 513 passed) was **2,299/2,684 lines = 85.6557%** and
+**743/948 branch exits = 78.3755%** across all 24 `scripts/**/*.py` files.
+The independent regression floors are **85.6% lines** and **78.3% branches**,
 rounded down to the nearest tenth from that measured baseline. Coverage.py's
 combined line-and-branch percentage is not used as either metric's floor.
 The inventory includes unimported helpers and excludes test code.
@@ -187,8 +185,8 @@ failed run cannot reuse an older summary. The `coverage-python` CI artifact
 contains `coverage.json` (executed/missing lines and branch arcs), an HTML
 report under `html/`, and `coverage-summary.json` for the shared Rust, host,
 Node and Python PR table. Python function coverage is shown as unavailable.
-Only Linux uploads that named artifact; the collector waits for the entire
-Python matrix and requires its summary after a successful matrix result.
+The collector waits for the Python job and requires its summary when that job
+succeeds.
 
 `scripts/build/*.py` import each other by bare name, so pytest puts that
 directory on `sys.path` (`pythonpath` in `pyproject.toml`) and pylint resolves

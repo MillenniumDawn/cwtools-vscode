@@ -223,6 +223,99 @@ fn replace_scope_seeds_root_state_scope() {
     assert!(!c.contains(&"CW105".to_string()), "got: {:?}", c);
 }
 
+const REPLACE_SCOPE_PREV_RULES: &str = r#"
+scopes = {
+    Country = { aliases = { country } }
+    State = { aliases = { state } }
+    Province = { aliases = { province } }
+}
+types = { type[foo] = { path = "game/common/foo" } }
+## replace_scope = { this = country root = country prev = province prevprev = state }
+foo = {
+    prev = {
+        prev = {
+            alias_name[trigger] = alias_match_left[trigger]
+        }
+        alias_name[trigger] = alias_match_left[trigger]
+    }
+    alias_name[trigger] = alias_match_left[trigger]
+}
+## scope = province
+alias[trigger:province_only] = bool
+## scope = state
+alias[trigger:state_only] = bool
+"#;
+
+#[test]
+fn replace_scope_prev_chain_orders_prev_blocks() {
+    let c = codes(
+        REPLACE_SCOPE_PREV_RULES,
+        "foo = { prev = { province_only = yes } }",
+        &HOI4,
+    );
+    assert!(!c.contains(&"CW104".to_string()), "got: {:?}", c);
+
+    let c = codes(
+        REPLACE_SCOPE_PREV_RULES,
+        "foo = { prev = { state_only = yes } }",
+        &HOI4,
+    );
+    assert!(c.contains(&"CW104".to_string()), "got: {:?}", c);
+
+    let c = codes(
+        REPLACE_SCOPE_PREV_RULES,
+        "foo = { prev = { prev = { state_only = yes } } }",
+        &HOI4,
+    );
+    assert!(!c.contains(&"CW104".to_string()), "got: {:?}", c);
+}
+
+#[test]
+fn sparse_replacement_scopes_keep_their_parsed_depth() {
+    for depth in [
+        "fromfrom",
+        "fromfromfromfrom",
+        "prevprevprev",
+        "prevprevprevprev",
+    ] {
+        let near = if depth.starts_with("from") {
+            "from"
+        } else {
+            "prev"
+        };
+        let rules = format!(
+            r#"
+scopes = {{
+    Country = {{ aliases = {{ country }} }}
+    State = {{ aliases = {{ state }} }}
+}}
+types = {{ type[foo] = {{ path = "game/common/foo" }} }}
+## replace_scope = {{ this = country root = country {depth} = state }}
+foo = {{
+    {depth} = {{ alias_name[trigger] = alias_match_left[trigger] }}
+    {near} = {{ alias_name[trigger] = alias_match_left[trigger] }}
+}}
+## scope = state
+alias[trigger:state_only] = bool
+## scope = country
+alias[trigger:country_only] = bool
+"#
+        );
+        let valid = format!("foo = {{ {depth} = {{ state_only = yes }} }}");
+        let invalid = format!("foo = {{ {depth} = {{ country_only = yes }} }}");
+        let c = codes(&rules, &valid, &HOI4);
+        assert!(!c.contains(&"CW104".to_string()), "{depth}: {c:?}");
+        let c = codes(&rules, &invalid, &HOI4);
+        assert!(c.contains(&"CW104".to_string()), "{depth}: {c:?}");
+
+        // An unset shallower slot is ANY. Before this fix the only configured
+        // scope shifted here, causing the country-only trigger to be rejected.
+        let hole = format!("foo = {{ {near} = {{ country_only = yes }} }}");
+        let c = codes(&rules, &hole, &HOI4);
+        assert!(!c.contains(&"CW104".to_string()), "{depth} hole: {c:?}");
+    }
+}
+
 /// A `scope[country]` target field. Resolving the chain from the default country
 /// scope catches a target that lands in the wrong scope (CW243) or uses a link in
 /// the wrong scope (CW245).
@@ -265,6 +358,38 @@ fn target_resolving_to_country_is_clean() {
     let c = codes(TARGET_RULES, "foo = { tgt = faction_leader }", &HOI4);
     assert!(!c.contains(&"CW243".to_string()), "got: {:?}", c);
     assert!(!c.contains(&"CW245".to_string()), "got: {:?}", c);
+}
+
+#[test]
+fn quoted_target_is_checked_without_its_quotes() {
+    for script in [
+        r#"foo = { tgt = "SER" }"#,
+        r#"foo = { tgt = SER }"#,
+        r#"foo = { tgt = "faction_leader" }"#,
+        r#"foo = { tgt = faction_leader }"#,
+    ] {
+        let c = codes(TARGET_RULES, script, &HOI4);
+        assert!(c.is_empty(), "{script} got: {c:?}");
+    }
+}
+
+#[test]
+fn quoted_unknown_target_is_still_cw244() {
+    for script in [
+        r#"foo = { tgt = "NOT_A_TAG_OR_SCOPE" }"#,
+        r#"foo = { tgt = NOT_A_TAG_OR_SCOPE }"#,
+        r#"foo = { tgt = "not_a_link" }"#,
+        r#"foo = { tgt = not_a_link }"#,
+    ] {
+        let c = codes(TARGET_RULES, script, &HOI4);
+        assert_eq!(c, ["CW244"], "{script}");
+    }
+}
+
+#[test]
+fn quoted_target_in_the_wrong_scope_is_still_cw243() {
+    let c = codes(TARGET_RULES, r#"foo = { tgt = "capital_scope" }"#, &HOI4);
+    assert_eq!(c, ["CW243"]);
 }
 
 #[test]

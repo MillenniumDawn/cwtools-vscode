@@ -101,6 +101,23 @@ foo = {
 }
 
 #[test]
+fn a_bool_value_is_quoted_as_yes_or_no_in_cw240() {
+    for value in ["yes", "no"] {
+        let source = format!("foo = {{ required_field = ok count = {value} }}");
+        let errors = validate(RULES, &source, &Opts::DEFAULT);
+        let err = errors
+            .iter()
+            .find(|e| e.code == Some("CW240"))
+            .expect("CW240 emitted");
+        assert!(
+            err.message.contains(&format!("has value '{value}'")),
+            "got: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
 fn missing_required_is_cw242() {
     // `required_field` has `## cardinality = 1..1` and is omitted.
     let codes = codes(
@@ -340,6 +357,24 @@ fn cw240_boolean_enum_suggestion_stays_a_string() {
     );
 }
 
+#[test]
+fn enum_accepts_bare_boolean_it_lists() {
+    let errors = validate(BOOLEAN_ENUM_RULES, "foo = { mode = yes }", &Opts::DEFAULT);
+    assert!(
+        !errors.iter().any(|e| e.code == Some("CW240")),
+        "bare yes is a member of the enum, got: {errors:?}"
+    );
+}
+
+#[test]
+fn enum_rejects_bare_boolean_it_does_not_list() {
+    let errors = validate(BOOLEAN_ENUM_RULES, "foo = { mode = no }", &Opts::DEFAULT);
+    assert!(
+        errors.iter().any(|e| e.code == Some("CW240")),
+        "bare no is not a member of the enum, got: {errors:?}"
+    );
+}
+
 const ESCAPED_ENUM_RULES: &str = r#"
 types = { type[foo] = { path = "game/common/foo" } }
 enums = { enum[mode] = { "hist\"oric\\mode" fantasy sandbox } }
@@ -385,6 +420,146 @@ fn cw240_enum_ambiguous_match_has_no_fix() {
     assert!(
         err.fix.is_none(),
         "ambiguous suggestion must not carry a fix"
+    );
+}
+
+const LARGE_ENUM_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+enums = { enum[mode] = { historic fantasy sandbox ironman tutorial scenario } }
+foo = { mode = enum[mode] }
+"#;
+
+#[test]
+fn cw240_enum_with_more_than_five_values_rejects_a_non_member() {
+    let codes = codes(LARGE_ENUM_RULES, "foo = { mode = bogus }", &Opts::DEFAULT);
+    assert_eq!(codes, ["CW240"]);
+}
+
+#[test]
+fn enum_with_more_than_five_values_accepts_members_in_any_case() {
+    for value in ["scenario", "SCENARIO"] {
+        let script = format!("foo = {{ mode = {value} }}");
+        let codes = codes(LARGE_ENUM_RULES, &script, &Opts::DEFAULT);
+        assert!(codes.is_empty(), "{value} must be a member, got: {codes:?}");
+    }
+}
+
+#[test]
+fn enum_with_at_constants_accepts_any_value_however_large() {
+    const RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+enums = { enum[cap] = { @tier1 @tier2 @tier3 @tier4 @tier5 @tier6 } }
+foo = { cap = enum[cap] }
+"#;
+    let codes = codes(RULES, "foo = { cap = 10 }", &Opts::DEFAULT);
+    assert!(codes.is_empty(), "got: {codes:?}");
+}
+
+const LARGE_ENUM_KEY_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+enums = { enum[mode] = { historic fantasy sandbox ironman tutorial scenario } }
+foo = { enum[mode] = int }
+"#;
+
+#[test]
+fn enum_with_more_than_five_values_keyed_rule_matches_members_only() {
+    let member = codes(
+        LARGE_ENUM_KEY_RULES,
+        "foo = { sandbox = 1 }",
+        &Opts::DEFAULT,
+    );
+    assert!(member.is_empty(), "got: {member:?}");
+
+    let non_member = codes(LARGE_ENUM_KEY_RULES, "foo = { bogus = 1 }", &Opts::DEFAULT);
+    assert_eq!(non_member, ["CW263"]);
+}
+
+const LARGE_ENUM_PATTERN_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+enums = { enum[mode] = { historic fantasy sandbox ironman tutorial scenario } }
+foo = { alias_name[trigger] = alias_match_left[trigger] }
+alias[trigger:enum[mode]_active] = bool
+"#;
+
+#[test]
+fn enum_with_more_than_five_values_alias_pattern_matches_members_only() {
+    let member = codes(
+        LARGE_ENUM_PATTERN_RULES,
+        "foo = { sandbox_active = yes }",
+        &Opts::DEFAULT,
+    );
+    assert!(member.is_empty(), "got: {member:?}");
+
+    let non_member = codes(
+        LARGE_ENUM_PATTERN_RULES,
+        "foo = { bogus_active = yes }",
+        &Opts::DEFAULT,
+    );
+    assert_eq!(non_member, ["CW263"]);
+}
+
+const OVERLOAD_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+enums = { enum[kind_a] = { alpha } enum[kind_b] = { beta } }
+foo = { alias_name[strategy] = alias_match_left[strategy] }
+alias[strategy:plan] = {
+    type = enum[kind_a]
+    id = scalar
+}
+alias[strategy:plan] = {
+    type = enum[kind_b]
+    id = int
+}
+"#;
+
+#[test]
+fn alias_overload_with_clean_match_is_still_accepted() {
+    for script in [
+        "foo = { plan = { type = alpha id = x } }",
+        "foo = { plan = { type = beta id = 5 } }",
+    ] {
+        let codes = codes(OVERLOAD_RULES, script, &Opts::DEFAULT);
+        assert!(codes.is_empty(), "{script} got: {codes:?}");
+    }
+}
+
+#[test]
+fn alias_overload_error_comes_from_the_overload_whose_discriminator_matched() {
+    let errors = validate(
+        OVERLOAD_RULES,
+        "foo = { plan = { type = beta id = bogus } }",
+        &Opts::DEFAULT,
+    );
+    assert_eq!(errors.len(), 1, "got: {errors:?}");
+    assert_eq!(errors[0].code, Some("CW240"));
+    assert!(
+        errors[0].message.starts_with("Field 'id'"),
+        "got: {}",
+        errors[0].message
+    );
+}
+
+#[test]
+fn alias_overload_missing_field_outranks_a_rejected_discriminator() {
+    const RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+enums = { enum[kind_a] = { alpha } enum[kind_b] = { beta } }
+foo = { alias_name[strategy] = alias_match_left[strategy] }
+alias[strategy:plan] = {
+    type = enum[kind_b]
+}
+alias[strategy:plan] = {
+    type = enum[kind_a]
+    needed = int
+}
+"#;
+    let errors = validate(RULES, "foo = { plan = { type = alpha } }", &Opts::DEFAULT);
+    assert_eq!(errors.len(), 1, "got: {errors:?}");
+    assert_eq!(errors[0].code, Some("CW242"));
+    assert!(
+        errors[0].message.contains("'needed'"),
+        "got: {}",
+        errors[0].message
     );
 }
 

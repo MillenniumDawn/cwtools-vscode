@@ -1,5 +1,5 @@
 use super::common::{as_block, child_key_eq, key_len, under_dir_segment, walk_blocks};
-use crate::common::value_is_zero;
+use crate::common::{leaf_value_to_string, value_is_zero};
 use crate::ctx::ValidationCtx;
 use crate::{ValidationError, error_codes};
 use cwtools_index::TypeIndex;
@@ -577,9 +577,9 @@ fn child_scalar(
                     .trim_matches('"')
                     .to_string(),
             ),
-            Value::Bool(b) => Some(b.to_string()),
-            Value::Int(n) => Some(n.to_string()),
-            Value::Float(n) => Some(n.to_string()),
+            Value::Bool(_) | Value::Int(_) | Value::Float(_) => {
+                Some(leaf_value_to_string(&leaf.value, table))
+            }
             _ => None,
         };
     }
@@ -1072,6 +1072,24 @@ mod tests {
     }
 
     #[test]
+    fn planet_killer_boolean_key_reads_as_script_spelling() {
+        let idx = index_with(&[
+            ("on_action", "on_destroy_planet_with_yes"),
+            ("scripted_trigger", "can_destroy_planet_with_yes"),
+        ]);
+        let c = codes_with(
+            COMPONENTS,
+            "weapon_component_template = {\n\
+             key = yes\n\
+             type = planet_killer\n\
+             }\n",
+            &RuleSet::new(),
+            Some(&idx),
+        );
+        assert!(!has_code(&c, "CW250"), "got: {:?}", c);
+    }
+
+    #[test]
     fn planet_killer_missing_only_trigger_is_one_cw250() {
         let idx = index_with(&[
             ("on_action", "on_destroy_planet_with_PLANET_KILLER_TEST"),
@@ -1128,6 +1146,30 @@ mod tests {
             "unknown section template should emit CW227, got: {:?}",
             c
         );
+    }
+
+    #[test]
+    fn ship_design_boolean_template_is_reported_as_script_spelling() {
+        let idx = index_with(&[("section_template", "SSM_known_01")]);
+        let table = StringTable::new();
+        let ast = parse_string(
+            "ship_design = { section = { template = yes slot = \"A\" } }\n",
+            &table,
+        );
+        let mut errors = Vec::new();
+        validate_stellaris(
+            &ast,
+            &RuleSet::new(),
+            &table,
+            &EVENTS.into(),
+            Some(&idx),
+            &mut errors,
+        );
+        let err = errors
+            .iter()
+            .find(|e| e.code == Some("CW227"))
+            .expect("CW227 emitted");
+        assert!(err.message.contains("yes"), "got: {}", err.message);
     }
 
     #[test]

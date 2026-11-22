@@ -41,6 +41,7 @@ export function scratchCollections(cy: cytoscape.Core) {
 
 export function traverseHovers(cy: cytoscape.Core) {
 	cy.nodes().forEach((n) => { n.emit("mouseover"); n.emit("mouseout"); });
+	vi.runOnlyPendingTimers();
 }
 
 export function measuredRender(size: number) {

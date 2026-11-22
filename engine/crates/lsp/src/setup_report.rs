@@ -101,7 +101,10 @@ impl Backend {
             .map(crate::scan::ScanSummary::to_json);
 
         json!({
-            "server": { "version": env!("CARGO_PKG_VERSION") },
+            "server": {
+                "version": env!("CARGO_PKG_VERSION"),
+                "buildCommit": crate::build_identity::build_commit(),
+            },
             "state": {
                 "indexReady": self.state.index_ready.load(Ordering::Relaxed),
                 "scanInProgress": self.state.scan_in_progress.load(Ordering::Relaxed),
@@ -296,6 +299,10 @@ mod tests {
         let report = backend.get_setup_report();
 
         assert_eq!(report["server"]["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            report["server"]["buildCommit"],
+            json!(crate::build_identity::build_commit())
+        );
         assert_eq!(report["game"], json!({ "language": "hoi4", "known": true }));
         assert_eq!(
             report["workspace"]["roots"],

@@ -58,7 +58,7 @@ jobs:
         id: build
         run: |
           $timer = [System.Diagnostics.Stopwatch]::StartNew()
-          cargo build --workspace --release
+          cargo build --locked --workspace --release
           $timer.Stop()
           "duration_ms=$($timer.ElapsedMilliseconds)" |
             Out-File -FilePath $env:GITHUB_OUTPUT -Append

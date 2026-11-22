@@ -70,13 +70,18 @@ pub fn leaf_value_string(value: &Value, table: &StringTable) -> String {
         Value::String(t) | Value::QString(t) => get_string_or_empty(table, t.normal),
         Value::Float(f) => f.to_string(),
         Value::Int(i) => i.to_string(),
-        Value::Bool(b) => b.to_string(),
+        Value::Bool(b) => bool_text(*b).to_string(),
         Value::Clause(_) => String::new(),
     }
 }
 
+/// Booleans index as the script spells them, so a lookup with the script text hits.
+fn bool_text(b: bool) -> &'static str {
+    if b { "yes" } else { "no" }
+}
+
 /// Call `f` with the leaf value as a `&str`. String-typed values borrow straight
-/// from the string table (no allocation); numeric/bool values are formatted into
+/// from the string table (no allocation); numeric values are formatted into
 /// a scratch buffer that is owned by this call. Clauses yield `""`. Internal
 /// allocation-free counterpart to [`leaf_value_string`] for the index collectors.
 /// For string values, `f` runs under the table's read lock and must not re-enter it.
@@ -97,7 +102,7 @@ pub(crate) fn with_leaf_value_str<R>(
         }
         Value::Float(n) => f(&n.to_string()),
         Value::Int(i) => f(&i.to_string()),
-        Value::Bool(b) => f(&b.to_string()),
+        Value::Bool(b) => f(bool_text(*b)),
         Value::Clause(_) => f(""),
     }
 }
@@ -134,4 +139,19 @@ pub struct SavedEventTarget {
     pub location: SourceLocation,
     /// True = global (`save_global_event_target_as`).
     pub is_global: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bool_values_render_as_script_spelling() {
+        let table = StringTable::new();
+        for (value, text) in [(true, "yes"), (false, "no")] {
+            let value = Value::Bool(value);
+            assert_eq!(leaf_value_string(&value, &table), text);
+            assert_eq!(with_leaf_value_str(&value, &table, str::to_string), text);
+        }
+    }
 }

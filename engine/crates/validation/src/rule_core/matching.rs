@@ -251,9 +251,7 @@ pub(super) fn classify_pattern_match(
         }
         PatternKind::Enum => match ruleset.enum_by_name().get(name) {
             Some(&idx) if !ruleset.enums[idx].values.is_empty() => {
-                if ruleset.enum_values_contains_ci(idx, middle)
-                    || ruleset.enum_has_at_constant(idx)
-                    || enum_is_authoritative(&ruleset.enums[idx])
+                if ruleset.enum_values_contains_ci(idx, middle) || ruleset.enum_has_at_constant(idx)
                 {
                     PatternMatch::Confident
                 } else {
@@ -392,17 +390,9 @@ pub(crate) fn field_matches_key(
         NewField::ValueField(ValueType::Enum(enum_name)) => {
             match ruleset.enum_by_name().get(enum_name.as_str()) {
                 Some(&idx) => {
-                    let def = &ruleset.enums[idx];
-                    if def.values.is_empty() {
-                        return true;
-                    }
-                    if ruleset.enum_values_contains_ci(idx, key) {
-                        return true;
-                    }
-                    if ruleset.enum_has_at_constant(idx) {
-                        return true;
-                    }
-                    enum_is_authoritative(def)
+                    ruleset.enums[idx].values.is_empty()
+                        || ruleset.enum_values_contains_ci(idx, key)
+                        || ruleset.enum_has_at_constant(idx)
                 }
                 None => supplied_enum_has_key(enum_name, key, ruleset, type_index),
             }

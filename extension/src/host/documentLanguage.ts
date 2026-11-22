@@ -78,7 +78,13 @@ export async function registerDocumentLanguage(
 	): Promise<void> {
 		if (doc.languageId !== "plaintext") return;
 		if (!looksLikeGameScript(doc)) return;
-		await vscode.languages.setTextDocumentLanguage(doc, languageId);
+		// A document can close between the check and the change. That rejection
+		// must not fail activation or escape the open-document listener.
+		try {
+			await vscode.languages.setTextDocumentLanguage(doc, languageId);
+		} catch (err) {
+			logError("setTextDocumentLanguage failed", err);
+		}
 	}
 
 	async function setGraphFile(value: boolean): Promise<void> {
@@ -98,10 +104,13 @@ export async function registerDocumentLanguage(
 			const editorPath = editor.document.uri.toString();
 			await upgradePlaintextDocument(editor.document);
 			if (gen !== generation) return;
-			if (
-				editor.document.languageId === languageId &&
-				shouldNotifyFocus(editorPath, lastFocusUri)
-			) {
+			// Only script files have types. Any other editor (settings, markdown,
+			// a diff, the output panel) needs no server round-trip.
+			if (editor.document.languageId !== languageId) {
+				await setGraphFile(false);
+				return;
+			}
+			if (shouldNotifyFocus(editorPath, lastFocusUri)) {
 				await client.sendNotification(didFocusFile, { uri: editorPath });
 				lastFocusUri = editorPath;
 			}

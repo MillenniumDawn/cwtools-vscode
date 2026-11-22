@@ -1,11 +1,16 @@
 import { suite, test } from "vitest";
 import * as assert from "assert";
+import { readFileSync } from "fs";
 import { Uri } from "vscode";
 import { FilesProvider, filesToTreeNodes } from "../../src/host/fileExplorer";
 import type { FileListItem } from "../../src/host/fileExplorer";
 
 function item(logicalpath: string, scope = "mod"): FileListItem {
-	return { scope, logicalpath, uri: `file:///ws/${scope}/${logicalpath}` };
+	return {
+		scope,
+		logicalpath: `${scope}/${logicalpath}`,
+		uri: `file:///C:/ws/${scope}/${logicalpath}`,
+	};
 }
 
 suite("filesToTreeNodes", () => {
@@ -24,7 +29,7 @@ suite("filesToTreeNodes", () => {
 			mod.children.map((c) => [c.fileName, c.isDirectory, c.uri]),
 			[
 				["buildings", true, ""],
-				["technology.txt", false, "file:///ws/mod/technology.txt"],
+				["technology.txt", false, "file:///C:/ws/mod/technology.txt"],
 			],
 		);
 		assert.deepStrictEqual(
@@ -68,7 +73,7 @@ suite("filesToTreeNodes", () => {
 			],
 		);
 		assert.strictEqual(mod.children[1].children[0].fileName, "b.txt");
-		assert.strictEqual(mod.children[2].uri, "file:///ws/mod/toString");
+		assert.strictEqual(mod.children[2].uri, "file:///C:/ws/mod/toString");
 	});
 
 	test("keeps the server's order for integer-like names", () => {
@@ -86,6 +91,25 @@ suite("filesToTreeNodes", () => {
 });
 
 suite("FilesProvider", () => {
+	test("renders the server file-list contract once and preserves reveal across refresh", () => {
+		// The server integration test checks its emitted entry against this same
+		// fixture, so this exercises the actual protocol contract on both sides.
+		const entry = JSON.parse(
+			readFileSync("extension/test/fixtures/file-list-entry.json", "utf8"),
+		) as Pick<FileListItem, "scope" | "logicalpath">;
+		const uri = "file:///C:/ws/common/national_focus/f.txt";
+		const files = new FilesProvider([{ ...entry, uri }]);
+		let node = files.getChildren()[0];
+		assert.strictEqual(node.fileName, "common");
+		node = node.children[0];
+		assert.strictEqual(node.fileName, "national_focus");
+		assert.strictEqual(node.children[0].fileName, "f.txt");
+		assert.strictEqual(files.findNodeByUri(Uri.parse(uri)), node.children[0]);
+		files.refresh([]);
+		assert.strictEqual(files.findNodeByUri(Uri.parse(uri)), undefined);
+		files.refresh([{ ...entry, uri }]);
+		assert.strictEqual(files.findNodeByUri(Uri.parse(uri))?.fileName, "f.txt");
+	});
 	const provider = () =>
 		new FilesProvider([item("events/irm.txt"), item("events/irm_faction.txt")]);
 
@@ -115,10 +139,10 @@ suite("FilesProvider", () => {
 
 	test("findNodeByUri locates a leaf and follows a refresh", () => {
 		const files = provider();
-		const faction = Uri.parse("file:///ws/mod/events/irm_faction.txt");
+		const faction = Uri.parse("file:///C:/ws/mod/events/irm_faction.txt");
 		assert.strictEqual(files.findNodeByUri(faction)?.fileName, "irm_faction.txt");
 		assert.strictEqual(
-			files.findNodeByUri(Uri.parse("file:///ws/mod/events/missing.txt")),
+			files.findNodeByUri(Uri.parse("file:///C:/ws/mod/events/missing.txt")),
 			undefined,
 		);
 

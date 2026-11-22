@@ -47,6 +47,10 @@ struct File {
 pub(crate) struct LocText {
     files: Vec<File>,
     file_ids: FxHashMap<Arc<str>, u32>,
+    /// Removed IDs whose entries still need to be swept.
+    retired: Vec<u32>,
+    /// IDs with no remaining entries; safe to reuse.
+    free: Vec<u32>,
     /// Never cleared: a removed uri that comes back gets its old rank.
     ranks: FxHashMap<Arc<str>, u32>,
     by_key: FxHashMap<Arc<str>, Vec<Entry>>,
@@ -59,16 +63,23 @@ impl LocText {
         if let Some(&id) = self.file_ids.get(uri) {
             return id;
         }
-        let id = self.files.len() as u32;
         let uri: Arc<str> = Arc::from(uri);
         let next_rank = self.ranks.len() as u32;
         let rank = *self.ranks.entry(Arc::clone(&uri)).or_insert(next_rank);
-        self.files.push(File {
+        let file = File {
             vanilla,
             rank,
             dead: false,
             entries: 0,
-        });
+        };
+        let id = if let Some(id) = self.free.pop() {
+            self.files[id as usize] = file;
+            id
+        } else {
+            let id = u32::try_from(self.files.len()).expect("too many localisation files");
+            self.files.push(file);
+            id
+        };
         self.file_ids.insert(uri, id);
         id
     }
@@ -149,8 +160,8 @@ impl LocText {
 
     /// Drops every translation `uri` contributed, the way an edit or a watched
     /// change re-reads that one file before inserting its entries again. The
-    /// file id is tombstoned, so the call is O(1) and a re-insert of the same
-    /// uri gets a fresh id; the map is only swept once the dead entries add up.
+    /// file id is tombstoned, so the call is O(1); it cannot be reused until
+    /// the map has been swept and all of its dead entries have been removed.
     pub(crate) fn remove_file(&mut self, uri: &str) {
         let Some(id) = self.file_ids.remove(uri) else {
             return;
@@ -158,9 +169,24 @@ impl LocText {
         let file = &mut self.files[id as usize];
         file.dead = true;
         self.dead_entries += file.entries;
+        self.retired.push(id);
         if self.dead_entries.saturating_mul(SWEEP_DEAD_SHARE) > self.total_entries {
             self.sweep();
         }
+    }
+
+    /// Move translations without changing their rank, retiring any replaced destination.
+    pub(crate) fn rename_file(&mut self, old_uri: &str, new_uri: &str) {
+        if old_uri == new_uri {
+            return;
+        }
+        self.remove_file(new_uri);
+        let Some(id) = self.file_ids.remove(old_uri) else {
+            return;
+        };
+        self.file_ids.insert(Arc::from(new_uri), id);
+        self.ranks
+            .insert(Arc::from(new_uri), self.files[id as usize].rank);
     }
 
     /// Drops the entries of every removed file and the keys left without one.
@@ -172,6 +198,8 @@ impl LocText {
         });
         self.total_entries -= self.dead_entries;
         self.dead_entries = 0;
+        // Only recycle after every reference to each retired ID is gone.
+        self.free.append(&mut self.retired);
     }
 
     /// Keys in the map, tombstoned ones included.
@@ -210,6 +238,71 @@ mod tests {
     }
 
     #[test]
+    fn recycled_file_slots_stay_bounded_and_never_revive_removed_entries() {
+        let mut map = LocText::default();
+        // Keep the dead share below the sweep threshold for several edits, so
+        // IDs must not be reused until their entries have actually been swept.
+        for i in 0..100 {
+            map.insert(
+                a(&format!("anchor{i}")),
+                "file:///anchor.yml",
+                Lang::English,
+                "anchor".into(),
+            );
+        }
+        map.insert(
+            a("shared"),
+            "file:///first.yml",
+            Lang::English,
+            "first".into(),
+        );
+        map.insert(
+            a("shared"),
+            "file:///second.yml",
+            Lang::English,
+            "second".into(),
+        );
+        map.insert_fallback(&a("shared"), Lang::English, "vanilla");
+        for i in 0..1_000 {
+            map.remove_file("file:///first.yml");
+            assert_eq!(map.get("shared").unwrap().next().unwrap().1, "second");
+            map.insert(
+                a("shared"),
+                "file:///first.yml",
+                Lang::English,
+                format!("first{i}"),
+            );
+            map.insert(
+                a(&format!("old{i}")),
+                "file:///first.yml",
+                Lang::English,
+                "old".into(),
+            );
+            if i > 0 {
+                assert!(map.get(&format!("old{}", i - 1)).is_none());
+            }
+            let order: Vec<_> = map
+                .get("shared")
+                .unwrap()
+                .map(|(_, text)| text.to_string())
+                .collect();
+            assert_eq!(
+                order,
+                [format!("first{i}"), "second".into(), "vanilla".into()]
+            );
+        }
+        assert!(
+            map.files.len() <= 20,
+            "file slots grew to {}",
+            map.files.len()
+        );
+        map.remove_file("file:///first.yml");
+        map.remove_file("file:///second.yml");
+        assert_eq!(map.get("shared").unwrap().next().unwrap().1, "vanilla");
+        assert!(map.get("old999").is_none());
+    }
+
+    #[test]
     fn remove_file_touches_only_that_file() {
         let mut map = LocText::default();
         map.insert(a("k"), "file:///en.yml", Lang::English, "Hello".into());
@@ -238,6 +331,34 @@ mod tests {
         assert!(map.get("gone").is_none());
         map.remove_file("file:///never-seen.yml");
         assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn rename_file_over_an_existing_target_replaces_it() {
+        let mut map = LocText::default();
+        map.insert(a("k"), "file:///a.yml", Lang::English, "from_a".into());
+        map.insert(a("k"), "file:///b.yml", Lang::French, "from_b".into());
+        map.rename_file("file:///a.yml", "file:///b.yml");
+        assert_eq!(
+            texts(&map, "k"),
+            Some(vec![(Lang::English, "from_a".to_string())]),
+            "the replaced target's entry must not survive the rename"
+        );
+        map.remove_file("file:///b.yml");
+        assert!(map.get("k").is_none(), "no phantom entry after removal");
+    }
+
+    #[test]
+    fn rename_file_to_the_same_uri_is_a_no_op() {
+        let mut map = LocText::default();
+        map.insert(a("k"), "file:///a.yml", Lang::English, "hi".into());
+        map.rename_file("file:///a.yml", "file:///a.yml");
+        assert_eq!(
+            texts(&map, "k"),
+            Some(vec![(Lang::English, "hi".to_string())])
+        );
+        map.remove_file("file:///a.yml");
+        assert!(map.get("k").is_none());
     }
 
     #[test]

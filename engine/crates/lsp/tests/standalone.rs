@@ -118,7 +118,7 @@ fn standalone_hoi4_diagnostics_versioned_edit_and_completion() {
     );
     assert_eq!(
         hint["message"],
-        "This is the default value (true) and can be omitted"
+        "This is the default value (yes) and can be omitted"
     );
     assert!(
         first["params"]["uri"]

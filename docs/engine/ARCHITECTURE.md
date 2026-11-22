@@ -95,7 +95,9 @@ files catch up on the next scan.
 everything from disk once into immutable-after-load state, then validate the whole
 set (`validate_all`). One `Session` per CLI run. `validate --watch` loads a fresh
 `Session` per pass and diffs the diagnostics against the last pass, rather than
-updating one.
+updating one. Each pass re-resolves the parents inferred from the workspace
+descriptor (explicit roots are resolved once), so watched roots can gain or lose
+a parent between passes; launcher `.mod` files outside the watched roots do not wake the watch by themselves.
 
 `validate --file`/`--since` scope the report, not the load: the directory is still
 indexed whole, because the cross-file checks need it. `validate_selected` then

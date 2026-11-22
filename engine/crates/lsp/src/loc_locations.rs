@@ -200,6 +200,19 @@ impl LocLocations {
         self.maybe_sweep();
     }
 
+    /// Move definition sites, retiring any replaced destination.
+    pub(crate) fn rename_file(&mut self, old_uri: &str, new_uri: &str) {
+        if old_uri == new_uri {
+            return;
+        }
+        self.remove_file(new_uri);
+        let Some(id) = self.file_ids.remove(old_uri) else {
+            return;
+        };
+        self.file_ids.insert(Arc::from(new_uri), id);
+        self.files[id as usize].uri = Some(Arc::from(new_uri));
+    }
+
     fn maybe_sweep(&mut self) {
         // insert_single can drop tombstoned sites before a sweep. Count the
         // retired records too so those zero-site tombstones cannot accumulate.
@@ -552,6 +565,34 @@ mod tests {
         assert_eq!(sites(&map, "k"), vec![("file:///en.yml".to_string(), 10)]);
         map.remove_file("file:///never-seen.yml");
         assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn rename_file_over_an_existing_target_replaces_it() {
+        let mut map = LocLocations::default();
+        let a_uri = a("file:///a.yml");
+        let b_uri = a("file:///b.yml");
+        map.insert(a("k"), &a_uri, 0, true);
+        map.insert(a("k"), &b_uri, 1, true);
+        map.rename_file("file:///a.yml", "file:///b.yml");
+        assert_eq!(
+            sites(&map, "k"),
+            vec![("file:///b.yml".to_string(), 0)],
+            "the replaced target's site must not survive the rename"
+        );
+        map.remove_file("file:///b.yml");
+        assert!(map.get("k").is_none(), "no phantom site after removal");
+    }
+
+    #[test]
+    fn rename_file_to_the_same_uri_is_a_no_op() {
+        let mut map = LocLocations::default();
+        let a_uri = a("file:///a.yml");
+        map.insert(a("k"), &a_uri, 0, true);
+        map.rename_file("file:///a.yml", "file:///a.yml");
+        assert_eq!(sites(&map, "k"), vec![("file:///a.yml".to_string(), 0)]);
+        map.remove_file("file:///a.yml");
+        assert!(map.get("k").is_none());
     }
 
     #[test]

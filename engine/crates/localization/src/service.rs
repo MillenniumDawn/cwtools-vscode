@@ -2,11 +2,27 @@ use crate::commands::{Lang, LocFile};
 use crate::csv_parser::parse_csv_loc_per_lang;
 use crate::yaml_parser::{LocFileParseError, parse_loc_text};
 use cwtools_file_manager::{FileEncoding, ScanBudget, ScanBytes, read_text_capped_with_encoding};
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 
 pub struct LocService {
     files: Vec<LocFile>,
     errors: Vec<(String, String)>,
+    sources: FxHashMap<String, SourceFingerprint>,
+}
+
+/// Raw byte length and content hash of a file as `from_paths` read it.
+#[derive(Clone, Copy)]
+struct SourceFingerprint {
+    len: u64,
+    hash: u64,
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hasher = FxHasher::default();
+    hasher.write(bytes);
+    hasher.finish()
 }
 
 impl LocService {
@@ -38,20 +54,24 @@ impl LocService {
         Self {
             files: parsed,
             errors,
+            sources: FxHashMap::default(),
         }
     }
 
     pub fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
         use rayon::prelude::*;
         let bytes = ScanBytes::new();
-        let results: Vec<Result<Vec<LocFile>, (String, String)>> = paths
+        let (results, sources): (Vec<_>, Vec<_>) = paths
             .into_par_iter()
             .map(|path| {
                 let path_str = path.to_string_lossy().to_string();
                 match read_text_capped_with_encoding(&path, budget.read_cap()) {
                     Ok((text, enc, n)) => {
                         if !bytes.try_reserve(n, budget.max_bytes) {
-                            return Err((path_str, "scan byte budget exceeded".to_string()));
+                            return (
+                                Err((path_str, "scan byte budget exceeded".to_string())),
+                                None,
+                            );
                         }
                         let is_csv = path
                             .extension()
@@ -61,20 +81,45 @@ impl LocService {
                             && let Some(lang) = loc_header_language(&text, &path_str)
                             && !langs.contains(&lang)
                         {
-                            return Ok(Vec::new());
+                            return (Ok(Vec::new()), None);
                         }
-                        parse_loc_file_entry(path_str, text, Some(enc))
+                        let source = SourceFingerprint {
+                            len: n,
+                            hash: hash_bytes(text.as_bytes()),
+                        };
+                        let fingerprint = (path_str.clone(), source);
+                        (
+                            parse_loc_file_entry(path_str, text, Some(enc)),
+                            Some(fingerprint),
+                        )
                     }
-                    Err(e) => Err((path_str, format!("IO error: {}", e))),
+                    Err(e) => (Err((path_str, format!("IO error: {}", e))), None),
                 }
             })
-            .collect();
-        Self::from_results(results)
+            .unzip();
+        let mut service = Self::from_results(results);
+        service.sources = sources.into_iter().flatten().collect();
+        service
+    }
+
+    /// Byte length `path` had when `from_paths` read it, for bounding a reread to compare
+    /// with [`LocService::source_matches`]. `None` for a path this service did not read.
+    pub fn source_len(&self, path: &str) -> Option<u64> {
+        self.sources.get(path).map(|source| source.len)
+    }
+
+    /// Whether `bytes` are exactly the content `from_paths` read from `path`. Use before
+    /// applying an edit built from this service's positions to the file on disk.
+    pub fn source_matches(&self, path: &str, bytes: &[u8]) -> bool {
+        self.sources.get(path).is_some_and(|source| {
+            source.len == bytes.len() as u64 && source.hash == hash_bytes(bytes)
+        })
     }
 
     pub fn merge_from(&mut self, mut other: Self) {
         self.files.append(&mut other.files);
         self.errors.append(&mut other.errors);
+        self.sources.extend(other.sources);
     }
 
     pub fn files(&self) -> &[LocFile] {
@@ -441,6 +486,27 @@ mod tests {
                 .and_then(|file| file.lang);
             assert_eq!(loc_header_language(text, "f.yml"), full);
         }
+    }
+
+    #[test]
+    fn source_fingerprint_detects_same_length_edits_and_survives_merge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a_l_english.yml");
+        let original = "\u{feff}l_english:\n key:0 \"caf\u{e9}\"\n";
+        std::fs::write(&path, original).unwrap();
+        let key = path.to_string_lossy();
+
+        let service = LocService::from_paths(vec![path.clone()], ScanBudget::default(), None);
+        assert_eq!(service.source_len(&key), Some(original.len() as u64));
+        assert!(service.source_matches(&key, original.as_bytes()));
+        assert!(!service.source_matches(&key, original.replace("caf", "cab").as_bytes()));
+        assert!(!service.source_matches(&key, &original.as_bytes()[1..]));
+        assert_eq!(service.source_len("missing_l_english.yml"), None);
+        assert!(!service.source_matches("missing_l_english.yml", original.as_bytes()));
+
+        let mut merged = LocService::from_files(Vec::new());
+        merged.merge_from(service);
+        assert!(merged.source_matches(&key, original.as_bytes()));
     }
 
     #[test]

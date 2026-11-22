@@ -23,6 +23,13 @@ pub fn hoi4_config() -> &'static Path {
     DIR.get_or_init(|| checkout("hoi4", "cwtools/cwtools-hoi4-config").join("Config"))
 }
 
+/// The `config` directory of `cwtools-vic3-config` at the pinned commit.
+/// Panics like [`stellaris_config`].
+pub fn vic3_config() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| checkout("vic3", "cwtools/cwtools-vic3-config").join("config"))
+}
+
 // Read at run time, so a bumped pin takes effect without a rebuild.
 fn pin(game: &str) -> String {
     let pins = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../rules-pins.json");

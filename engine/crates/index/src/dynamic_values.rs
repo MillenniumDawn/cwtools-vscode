@@ -2,6 +2,8 @@ use crate::dec_ref;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 use cwtools_parser::ast::{Child, Leaf, ParsedFile, Value};
 use cwtools_parser::unquote;
 use cwtools_rules::rules_types::{
@@ -15,8 +17,8 @@ type NameValuePair = (Arc<str>, Arc<str>);
 
 #[derive(Debug, Clone, Default)]
 pub struct NamedValueIndex {
-    by_name: HashMap<Arc<str>, HashMap<Arc<str>, usize>>,
-    per_file: HashMap<String, Vec<NameValuePair>>,
+    by_name: FxHashMap<Arc<str>, FxHashMap<Arc<str>, usize>>,
+    per_file: FxHashMap<String, Vec<NameValuePair>>,
 }
 
 impl NamedValueIndex {
@@ -28,15 +30,22 @@ impl NamedValueIndex {
         self.remove_file(file_uri);
         let mut flat: Vec<(Arc<str>, Arc<str>)> = Vec::new();
         for (name, values) in items {
-            let name_arc: Arc<str> = Arc::from(name.as_str());
+            if values.is_empty() {
+                continue;
+            }
+            // One allocation per distinct name and per distinct value: a file
+            // that repeats a flag another file already set shares its string.
+            let name_arc = match self.by_name.get_key_value(name.as_str()) {
+                Some((existing, _)) => Arc::clone(existing),
+                None => Arc::from(name.as_str()),
+            };
+            let vals = self.by_name.entry(Arc::clone(&name_arc)).or_default();
             for v in values {
-                let val_arc: Arc<str> = Arc::from(v.as_str());
-                *self
-                    .by_name
-                    .entry(Arc::clone(&name_arc))
-                    .or_default()
-                    .entry(Arc::clone(&val_arc))
-                    .or_insert(0) += 1;
+                let val_arc = match vals.get_key_value(v.as_str()) {
+                    Some((existing, _)) => Arc::clone(existing),
+                    None => Arc::from(v.as_str()),
+                };
+                *vals.entry(Arc::clone(&val_arc)).or_insert(0) += 1;
                 flat.push((Arc::clone(&name_arc), val_arc));
             }
         }
@@ -385,6 +394,24 @@ mod tests {
     fn ruleset_from(cwt: &str, table: &StringTable) -> RuleSet {
         let parsed = parse_string(cwt, table);
         ast_to_ruleset(&parsed, table)
+    }
+
+    #[test]
+    fn a_value_repeated_across_files_is_stored_once_and_outlives_one_file() {
+        let items = || HashMap::from([("flag".to_string(), vec!["shared".to_string()])]);
+        let mut index = NamedValueIndex::new();
+        index.merge_file("a.txt", items());
+        index.merge_file("b.txt", items());
+
+        let (name_a, value_a) = &index.per_file["a.txt"][0];
+        let (name_b, value_b) = &index.per_file["b.txt"][0];
+        assert!(Arc::ptr_eq(name_a, name_b));
+        assert!(Arc::ptr_eq(value_a, value_b));
+
+        index.remove_file("a.txt");
+        assert!(index.contains("flag", "shared"));
+        index.remove_file("b.txt");
+        assert!(index.is_empty());
     }
 
     #[test]

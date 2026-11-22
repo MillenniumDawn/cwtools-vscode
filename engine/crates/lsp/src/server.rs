@@ -337,32 +337,70 @@ impl Backend {
     /// Snapshot the document AST for `uri`, re-parsing the live text when none is cached so
     /// hover/goto/completion still resolve mid-edit. The fresh parse is memoized by
     /// `(uri, version)` (#87), since a document has no stored AST until its first validate.
+    /// The memoized parse of `text`, if `uri` is still at `version` with that text.
+    pub(crate) fn memoized_parse(
+        &self,
+        uri: &str,
+        version: i32,
+        text: &str,
+    ) -> Option<Arc<ParsedFile>> {
+        self.state
+            .fresh_ast_cache
+            .lock()
+            .as_ref()
+            .filter(|fresh| fresh.matches(uri, version, text))
+            .map(|fresh| Arc::clone(&fresh.ast))
+    }
+
+    /// Memoize `ast` as the parse of `text`, unless the document has moved on.
+    /// A parse can finish after its document was edited, or closed and reopened
+    /// with its versions starting again; storing it then would hand an old tree
+    /// to whoever asks for that version next. The check and the store happen
+    /// under the document lock, the order `did_close` evicts in.
+    pub(crate) fn memoize_parse(&self, uri: &str, version: i32, text: &str, ast: &Arc<ParsedFile>) {
+        let documents = self.state.documents.lock();
+        let Some(document) = documents.get(uri) else {
+            return;
+        };
+        if document.version != version || !crate::state::same_text(&document.text, text) {
+            return;
+        }
+        *self.state.fresh_ast_cache.lock() = Some(crate::state::FreshAst {
+            uri: uri.to_string(),
+            version,
+            text: Arc::clone(&document.text),
+            ast: Arc::clone(ast),
+        });
+    }
+
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
+        self.ast_snapshot(uri, true)
+    }
+
+    /// `allow_stale` hands back the AST of an earlier version while the debounced
+    /// validation of the current one is pending. Completion wants that: the text
+    /// being typed is usually malformed. Everything else maps positions with the
+    /// current text, so it needs the tree of that same text.
+    fn ast_snapshot(&self, uri: &str, allow_stale: bool) -> Option<AstSnapshot> {
         let (text, version) = {
             let docs = self.state.documents.lock();
             let doc = docs.get(uri)?;
             if let Some(ast) = &doc.ast {
-                let source = if doc.ast_version == Some(doc.version) {
-                    AstSource::StoredCurrent
-                } else {
-                    AstSource::StoredStale
-                };
-                return Some(AstSnapshot {
-                    ast: ast.clone(),
-                    source,
-                });
+                let current = doc.ast_version == Some(doc.version);
+                if current || allow_stale {
+                    return Some(AstSnapshot {
+                        ast: ast.clone(),
+                        source: if current {
+                            AstSource::StoredCurrent
+                        } else {
+                            AstSource::StoredStale
+                        },
+                    });
+                }
             }
             (doc.text.clone(), doc.version)
         };
-        let cached = {
-            let guard = self.state.fresh_ast_cache.lock();
-            guard
-                .as_ref()
-                .filter(|(cached_uri, cached_version, _)| {
-                    cached_uri == uri && *cached_version == version
-                })
-                .map(|(_, _, ast)| Arc::clone(ast))
-        };
+        let cached = self.memoized_parse(uri, version, &text);
         if let Some(ast) = cached {
             return Some(AstSnapshot {
                 ast,
@@ -375,7 +413,7 @@ impl Backend {
         let table = self.state.string_table.with_overlay();
         tokio::task::block_in_place(|| {
             let ast = Arc::new(cwtools_parser::parser::parse_string(&text, &table));
-            *self.state.fresh_ast_cache.lock() = Some((uri.to_string(), version, Arc::clone(&ast)));
+            self.memoize_parse(uri, version, &text, &ast);
             Some(AstSnapshot {
                 ast,
                 source: AstSource::FreshParse,
@@ -383,8 +421,12 @@ impl Backend {
         })
     }
 
+    /// The AST of the document's current text: the stored one when validation has
+    /// caught up, otherwise a parse memoized per `(uri, version)`. A stale tree
+    /// under new positions resolves the wrong element, and semantic tokens built
+    /// from one are cached against the new text until the next edit.
     pub(crate) fn ast_for(&self, uri: &str) -> Option<Arc<ParsedFile>> {
-        self.ast_snapshot_for(uri).map(|snapshot| snapshot.ast)
+        self.ast_snapshot(uri, false).map(|snapshot| snapshot.ast)
     }
 
     pub(crate) fn element_at_cursor(
@@ -477,7 +519,7 @@ impl Backend {
 /// unit tests can drive them directly without a worker.
 impl Backend {
     pub(crate) async fn move_open_document(&self, old_uri: &str, new_uri: &str) -> bool {
-        let _publication = self.state.diagnostic_publication_lock.lock().await;
+        let publication = self.state.diagnostic_publication_lock.lock().await;
         let mut docs = self.state.documents.lock();
         let Some(content_hash) = docs.content_hash(old_uri) else {
             return false;
@@ -492,16 +534,144 @@ impl Backend {
             .is_err()
         {
             self.state.fixable_edits.lock().remove(old_uri);
+            // A rejected move has already removed the old buffer.
+            drop(docs);
+            self.relocate_uri_satellite_state(old_uri, None);
             return false;
         }
-        let mut fixable_edits = self.state.fixable_edits.lock();
-        if let Some(edits) = fixable_edits.remove(old_uri)
-            && edits.version == Some(document_version)
-            && edits.content_hash == Some(content_hash)
         {
-            fixable_edits.insert(new_uri.to_string(), edits);
+            let mut fixable_edits = self.state.fixable_edits.lock();
+            if let Some(edits) = fixable_edits.remove(old_uri)
+                && edits.version == Some(document_version)
+                && edits.content_hash == Some(content_hash)
+            {
+                fixable_edits.insert(new_uri.to_string(), edits);
+            }
         }
+        // Validation acquires doc_tokens before documents.
+        drop(docs);
+        self.relocate_uri_satellite_state(old_uri, Some(new_uri));
+        drop(publication);
+        // Revalidate pending edits and rules that depend on the new path.
+        let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.spawn_debounced_validate(
+            new_uri.to_string(),
+            document_version,
+            generation,
+            ValidateTrigger::DidChange,
+            0,
+        );
         true
+    }
+
+    /// Move URI-keyed state, or retire it when the buffer could not be moved.
+    fn relocate_uri_satellite_state(&self, old_uri: &str, new_uri: Option<&str>) {
+        {
+            let mut doc_tokens = self.state.doc_tokens.write();
+            let tokens = doc_tokens.remove(old_uri);
+            if let Some(new) = new_uri {
+                doc_tokens.remove(new);
+                if let Some(tokens) = tokens {
+                    doc_tokens.insert(new.to_string(), tokens);
+                }
+            }
+        }
+        let mut dropped_names: Vec<u64> = Vec::new();
+        {
+            let mut type_uses = self.state.type_uses.write();
+            let uses = type_uses.remove(old_uri);
+            let moved = uses.is_some();
+            let discarded = if let Some(new) = new_uri {
+                let replaced = type_uses.remove(new);
+                if let Some(uses) = uses {
+                    type_uses.insert(new.to_string(), uses);
+                }
+                replaced
+            } else {
+                uses
+            };
+            if moved || discarded.is_some() {
+                self.state
+                    .type_uses_revision
+                    .fetch_add(1, Ordering::Release);
+            }
+            if let Some(discarded) = discarded {
+                let gone: std::collections::HashSet<String> = discarded
+                    .changed_names(&Default::default())
+                    .into_iter()
+                    .collect();
+                dropped_names.extend(name_tokens(&gone));
+            }
+        }
+        {
+            let mut live = self.loc_live_overlay_mut();
+            let keys = live.remove(old_uri);
+            if let Some(new) = new_uri {
+                live.remove(new);
+                if let Some(keys) = keys {
+                    live.insert(new.to_string(), keys);
+                }
+            }
+        }
+        {
+            let mut watched = self.loc_watched_overlay_mut();
+            let keys = watched.remove(old_uri);
+            if let Some(new) = new_uri {
+                watched.remove(new);
+                if let Some(keys) = keys {
+                    watched.insert(new.to_string(), keys);
+                }
+            }
+        }
+        {
+            let mut loc_text = self.state.loc_text.write();
+            match new_uri {
+                Some(new) => loc_text.rename_file(old_uri, new),
+                None => loc_text.remove_file(old_uri),
+            }
+        }
+        {
+            let mut loc_locations = self.state.loc_locations.write();
+            match new_uri {
+                Some(new) => loc_locations.rename_file(old_uri, new),
+                None => loc_locations.remove_file(old_uri),
+            }
+        }
+        // The new path may no longer export the old definitions.
+        {
+            let mut info = self.state.info_service.write();
+            dropped_names.extend(export_name_tokens(&info, old_uri));
+            info.clear_file(old_uri);
+        }
+        self.bump_info_revision();
+        if let Some(name) = self.remove_inline_script(old_uri) {
+            self.state
+                .pending_changed_names
+                .lock()
+                .insert(name_token_hash(&name));
+        }
+        if !dropped_names.is_empty() {
+            self.state
+                .pending_changed_names
+                .lock()
+                .extend(dropped_names);
+        }
+        // Path-bound caches never follow a rename.
+        self.state.watched_signatures.lock().remove(old_uri);
+        self.state.completion_generation.lock().remove(old_uri);
+        {
+            let mut fresh = self.state.fresh_ast_cache.lock();
+            if fresh.as_ref().is_some_and(|cached| cached.uri == old_uri) {
+                *fresh = None;
+            }
+        }
+        // The document version/hash checks reject any in-flight old-path install.
+        let stale_validation = self.state.debounce_handles.lock().remove(old_uri);
+        if let Some(validation) = stale_validation {
+            validation.cancel();
+        }
+        // Invalidate snapshot-derived caches keyed on this counter.
+        self.state.edit_generation.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Warn the user once per URI and reason that an open or change was
@@ -741,7 +911,7 @@ impl Backend {
                 }
                 self.state.completion_generation.lock().remove(&uri);
                 let mut fresh = self.state.fresh_ast_cache.lock();
-                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                if fresh.as_ref().is_some_and(|cached| cached.uri == uri) {
                     *fresh = None;
                 }
             }
@@ -769,6 +939,11 @@ impl Backend {
         } else {
             None
         };
+
+        let disk_loc_keys = disk_loc_text.as_ref().map(|text| {
+            let path = crate::paths::uri_to_path_str(&uri);
+            tokio::task::block_in_place(|| crate::validate::loc_keys_of(text, &path))
+        });
 
         let (exports_before, names_before) = {
             let info = self.state.info_service.read();
@@ -799,7 +974,7 @@ impl Backend {
             DiskState::Absent
         };
 
-        let (exports_after, names_after, generation) = {
+        let (exports_after, names_after, generation, changed_loc_keys) = {
             let mut doc_tokens = self.state.doc_tokens.write();
             let documents = self.state.documents.lock();
             if documents.contains_key(&uri) {
@@ -845,11 +1020,27 @@ impl Backend {
                 }
             }
             doc_tokens.remove(&uri);
-            self.loc_live_overlay_mut().remove(&uri);
+            // A watched save may have been consumed while this document was
+            // open. Replace its live keys with the actual disk keys before a
+            // later didOpen can install another live overlay.
+            let mut live = self.loc_live_overlay_mut();
+            let mut watched = self.loc_watched_overlay_mut();
+            let old_live = live.remove(&uri);
+            let old_watched = watched.remove(&uri);
+            let previous = old_live.or(old_watched).unwrap_or_default();
+            let changed_loc_keys = if let Some(keys) = disk_loc_keys {
+                let changed = previous.symmetric_difference(&keys).cloned().collect();
+                watched.insert(uri.clone(), keys);
+                changed
+            } else {
+                previous
+            };
+            drop(watched);
+            drop(live);
             self.state.completion_generation.lock().remove(&uri);
             {
                 let mut fresh = self.state.fresh_ast_cache.lock();
-                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                if fresh.as_ref().is_some_and(|cached| cached.uri == uri) {
                     *fresh = None;
                 }
             }
@@ -859,6 +1050,7 @@ impl Backend {
                 info.export_fingerprint(&uri),
                 export_name_tokens(&info, &uri),
                 self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1,
+                changed_loc_keys,
             )
         };
 
@@ -907,6 +1099,11 @@ impl Backend {
                     .await;
                 }
             }
+        }
+
+        if !changed_loc_keys.is_empty() {
+            self.refresh_after_watched_loc_changes(&changed_loc_keys)
+                .await;
         }
 
         let mut changed_names: NameTokens = names_before
@@ -1166,7 +1363,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<SymbolInformation>>> {
         self.wait_for_notifications().await;
         self.mark_activity();
-        self.symbol_impl(params).await
+        self.symbol_request_impl(params).await
     }
 
     async fn folding_range(
@@ -1355,6 +1552,12 @@ impl LanguageServer for Backend {
                 } else {
                     backend.invalidate_semantic_tokens(old);
                     backend.invalidate_semantic_tokens(new);
+                    // Closed files can also have URI-keyed index entries.
+                    let _publication = backend.state.diagnostic_publication_lock.lock().await;
+                    backend.relocate_uri_satellite_state(old, Some(new));
+                }
+                if let Ok(old_url) = Url::parse(old) {
+                    backend.publish_if_closed(old_url, Vec::new(), None).await;
                 }
             }
             backend.request_semantic_refresh().await;

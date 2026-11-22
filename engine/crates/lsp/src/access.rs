@@ -182,6 +182,39 @@ fn canonicalize_for_containment(path: &Path) -> Option<PathBuf> {
 /// Contained so a `../` value in mod content can't probe the disk (#176); the plain join is
 /// returned, since a Windows `\\?\` prefix does not survive the round trip to a URI.
 pub(crate) async fn contained_search_path(roots: &[PathBuf], rel: &Path) -> Option<PathBuf> {
+    contained_search_paths(roots, vec![rel.to_path_buf()])
+        .await
+        .pop()
+        .flatten()
+}
+
+/// [`contained_search_path`] for a batch of references, in order. The roots are
+/// resolved once and every probe runs in one blocking task, so a file with
+/// hundreds of path fields costs one hop to the blocking pool, not several each.
+pub(crate) async fn contained_search_paths(
+    roots: &[PathBuf],
+    rels: Vec<PathBuf>,
+) -> Vec<Option<PathBuf>> {
+    let roots = roots.to_vec();
+    let count = rels.len();
+    tokio::task::spawn_blocking(move || {
+        let canonical_roots: Vec<Option<PathBuf>> = roots
+            .iter()
+            .map(|root| std::fs::canonicalize(root).ok())
+            .collect();
+        rels.iter()
+            .map(|rel| contained_in_roots(&roots, &canonical_roots, rel))
+            .collect()
+    })
+    .await
+    .unwrap_or_else(|_| vec![None; count])
+}
+
+fn contained_in_roots(
+    roots: &[PathBuf],
+    canonical_roots: &[Option<PathBuf>],
+    rel: &Path,
+) -> Option<PathBuf> {
     if rel
         .components()
         .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
@@ -189,15 +222,15 @@ pub(crate) async fn contained_search_path(roots: &[PathBuf], rel: &Path) -> Opti
         tracing::debug!(path = %rel.display(), "access: not a plain relative reference");
         return None;
     }
-    for root in roots {
+    for (root, canonical_root) in roots.iter().zip(canonical_roots) {
+        let Some(canonical_root) = canonical_root else {
+            continue;
+        };
         let target = root.join(rel);
-        let Ok(canonical) = tokio::fs::canonicalize(&target).await else {
+        let Ok(canonical) = std::fs::canonicalize(&target) else {
             continue;
         };
-        let Ok(canonical_root) = tokio::fs::canonicalize(root).await else {
-            continue;
-        };
-        if canonical.starts_with(&canonical_root) {
+        if canonical.starts_with(canonical_root) {
             return Some(target);
         }
         tracing::debug!(path = %canonical.display(), "access: reference outside its search root");

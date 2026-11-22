@@ -59,7 +59,7 @@ fn test_scan_checks_scripted_trigger_calls_against_base_game_and_mod_parameters(
 
     assert_eq!(
         line_codes(&diags),
-        [(2, "CW240")],
+        [(2, "CW263")],
         "only the call passing the undeclared BOGUS should be reported, got: {diags:?}"
     );
 }

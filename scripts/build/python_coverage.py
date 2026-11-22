@@ -13,9 +13,9 @@ from coverage import Coverage
 from coverage_metrics import FileCoverage, Metric
 
 ROOT = Path(__file__).resolve().parents[2]
-# Initial Linux/Python 3.12 baseline: 1999/2357 lines (84.8112%) and
-# 665/854 branch exits (77.8689%). See docs/CONTRIBUTING.md.
-FLOORS = {"lines": 84.8, "branches": 77.8}
+# Initial Linux/Python 3.12 baseline: 2299/2684 lines (85.6557%) and
+# 743/948 branch exits (78.3755%). See docs/CONTRIBUTING.md.
+FLOORS = {"lines": 85.6, "branches": 78.3}
 
 
 def _mapping(value: object) -> Mapping[str, object]:

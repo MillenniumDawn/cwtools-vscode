@@ -783,7 +783,7 @@ mod tests {
         assert!(backend.state.documents.lock().set_ast_with_use_sites(
             uri,
             1,
-            Arc::new(script.ast),
+            script.ast,
             script.use_sites,
         ));
         assert_eq!(

@@ -115,6 +115,24 @@ fn a_parameter_is_substituted_into_values_too() {
 }
 
 #[test]
+fn a_boolean_argument_reaches_a_bool_field_as_written() {
+    const BOOL_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    flag = bool
+}
+"#;
+    for value in ["yes", "no"] {
+        let errors = validate_inline(
+            BOOL_RULES,
+            &format!("foo = {{\n    inline_script = {{ script = toggle ENABLED = {value} }}\n}}\n"),
+            &[("common/inline_scripts/toggle.txt", "flag = $ENABLED$\n")],
+        );
+        assert!(errors.is_empty(), "ENABLED = {value}, got: {errors:?}");
+    }
+}
+
+#[test]
 fn a_field_the_body_supplies_counts_toward_the_callers_cardinality() {
     let errors = validate_inline(
         RULES,

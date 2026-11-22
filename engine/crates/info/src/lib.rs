@@ -739,7 +739,7 @@ impl InfoService {
     /// ruleset and type index. This deliberately avoids a workspace file index:
     /// a scan may have reindexed the on-disk version of this URI instead.
     pub fn file_reference_sites_for_ast(
-        &mut self,
+        &self,
         uri: &str,
         ast: &ParsedFile,
         table: &StringTable,

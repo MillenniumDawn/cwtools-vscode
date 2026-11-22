@@ -63,65 +63,77 @@ impl Backend {
         };
 
         let table = self.table_for(&ast);
-        let candidates = {
-            let info = self.state.info_service.read();
-            let inline_guard = self.state.inline_scripts.read();
-            let prepared = crate::validate::make_prepared(
-                &ruleset,
-                &table,
-                game,
-                &info.type_index,
-                &modifier_keys,
-                None,
-                None,
-                Some(&inline_guard),
-                scope_registry.as_ref(),
-                scope_checks,
-                var_checks,
-            );
-            let mut out = Vec::new();
-            let walk = LinkWalk {
-                ast: &ast,
-                table: &table,
-                prepared: &prepared,
-                ruleset: &ruleset,
-                logical_path: &logical_path,
-            };
-            walk.collect(&ast.root_children, None, &mut out);
-            out
-        };
-
-        let roots = self.search_roots();
-        let lines = DocLines::new(&text, encoding);
         let fallback = &params.text_document.uri;
-        let mut links = Vec::new();
-        for c in candidates.into_iter().take(MAX_LINKS) {
-            let value = unquote(&c.raw_value);
-            let line0 = c.key_line.saturating_sub(1);
-            let line = lines.line(line0);
-            let Some(from) = value_start_after_eq(line, c.key_col as u32) else {
-                continue;
+        // The rule walk and the column search are synchronous work over the whole
+        // file, so they stay off the async workers.
+        let (ranges, rels) = tokio::task::block_in_place(|| {
+            let candidates = {
+                let info = self.state.info_service.read();
+                let inline_guard = self.state.inline_scripts.read();
+                let prepared = crate::validate::make_prepared(
+                    &ruleset,
+                    &table,
+                    game,
+                    &info.type_index,
+                    &modifier_keys,
+                    None,
+                    None,
+                    Some(&inline_guard),
+                    scope_registry.as_ref(),
+                    scope_checks,
+                    var_checks,
+                );
+                let mut out = Vec::new();
+                let walk = LinkWalk {
+                    ast: &ast,
+                    table: &table,
+                    prepared: &prepared,
+                    ruleset: &ruleset,
+                    logical_path: &logical_path,
+                };
+                walk.collect(&ast.root_children, None, &mut out);
+                out
             };
-            let Some(col) = value_col_in_line(line, value, from) else {
-                continue;
-            };
-            let rel = std::path::Path::new(c.rel_path.trim_start_matches(['/', '\\']));
-            // Async, and contained before it is probed: a link request must not block the
-            // runtime on a sync filesystem syscall, and a leaf value is mod content that
-            // must not reach outside the roots (#176).
-            let Some(target) = crate::access::contained_search_path(&roots, rel).await else {
-                continue;
-            };
-            links.push(DocumentLink {
-                range: lines.token_range(line0, col, value),
-                target: Some(crate::paths::parse_uri(
-                    crate::paths::path_to_uri(&target),
-                    fallback,
-                )),
-                tooltip: None,
-                data: None,
-            });
-        }
+            let lines = DocLines::new(&text, encoding);
+            let mut ranges = Vec::new();
+            let mut rels = Vec::new();
+            for c in candidates.into_iter().take(MAX_LINKS) {
+                let value = unquote(&c.raw_value);
+                let line0 = c.key_line.saturating_sub(1);
+                let line = lines.line(line0);
+                let Some(from) = value_start_after_eq(line, c.key_col as u32) else {
+                    continue;
+                };
+                let Some(col) = value_col_in_line(line, value, from) else {
+                    continue;
+                };
+                ranges.push(lines.token_range(line0, col, value));
+                rels.push(std::path::PathBuf::from(
+                    c.rel_path.trim_start_matches(['/', '\\']),
+                ));
+            }
+            (ranges, rels)
+        });
+
+        // Contained before it is probed: a leaf value is mod content that must not
+        // reach outside the roots (#176).
+        let roots = self.search_roots();
+        let targets = crate::access::contained_search_paths(&roots, rels).await;
+        let links: Vec<DocumentLink> = ranges
+            .into_iter()
+            .zip(targets)
+            .filter_map(|(range, target)| {
+                Some(DocumentLink {
+                    range,
+                    target: Some(crate::paths::parse_uri(
+                        crate::paths::path_to_uri(&target?),
+                        fallback,
+                    )),
+                    tooltip: None,
+                    data: None,
+                })
+            })
+            .collect();
         if links.is_empty() {
             Ok(None)
         } else {

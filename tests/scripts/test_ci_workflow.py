@@ -3,11 +3,27 @@
 import re
 from pathlib import Path
 
-from workflow_helpers import workflow_step
+from workflow_helpers import job_scope, workflow_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LIVE_SETTINGS = REPO_ROOT / "extension" / "test" / "host" / "liveSettings.test.ts"
+
+
+def test_stellaris_guard_uses_resolved_pins_and_retains_failures() -> None:
+    workflow = CI.read_text(encoding="utf-8")
+    job = workflow.split("  stellaris:\n", 1)[1].split("  # One PR comment", 1)[0]
+    assert "needs: pins" in job
+    assert "needs.pins.outputs.stellaris_corpus_rev" in job
+    assert "needs.pins.outputs.stellaris_rules_rev" in job
+    # Empty pins fail the tier before any checkout can fall back to a default
+    # branch.
+    assert job.index("Require resolved Stellaris pins") < job.index("actions/checkout")
+    assert "scripts/guard.py stellaris --no-build" in job
+    assert "ui-prescripted-countries/ui-prescripted-countries" in job
+    assert "cwtools-stellaris-config/config" in job
+    assert "if: failure()" in job
+    assert "drift.diff" in job and "validate.log" in job
 
 
 def test_package_steps_do_not_run_after_cancellation() -> None:
@@ -55,3 +71,15 @@ def test_ci_keeps_distinct_host_suites_and_reuses_build_for_coverage() -> None:
     assert "always()" not in coverage
     assert "scripts/build/host_coverage.py" in coverage
     assert "--skip-compile" in coverage
+
+
+def test_rust_coverage_cleans_stale_instrumented_binaries_before_reporting() -> None:
+    workflow = CI.read_text(encoding="utf-8")
+    job = job_scope(workflow, "coverage-rs")
+    install = workflow_step(job, "Install cargo-llvm-cov")
+    cleanup = workflow_step(job, "Clean instrumented coverage artifacts")
+    report = workflow_step(job, "Run coverage (94.4% line floor)")
+    assert "working-directory: engine" in job.split("    steps:", 1)[0]
+    assert "run: cargo llvm-cov clean" in cleanup
+    assert "COVERAGE_THRESHOLD: 94.4" in report
+    assert job.index(install) < job.index(cleanup) < job.index(report)

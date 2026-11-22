@@ -45,6 +45,22 @@ pub(crate) fn resolve_parent_roots(
     game: Game,
     vanilla: Option<&Path>,
 ) -> Vec<PathBuf> {
+    let (roots, warnings) =
+        resolve_parent_roots_with_warnings(explicit_parents, workspace, game, vanilla);
+    for warning in warnings {
+        eprintln!("warn: {warning}");
+    }
+    roots
+}
+
+/// [`resolve_parent_roots`], still holding the warnings so a caller that
+/// re-resolves on a watch reload can print only the ones it has not printed yet.
+pub(crate) fn resolve_parent_roots_with_warnings(
+    explicit_parents: &[PathBuf],
+    workspace: &Path,
+    game: Game,
+    vanilla: Option<&Path>,
+) -> (Vec<PathBuf>, Vec<String>) {
     let entries = if !explicit_parents.is_empty() {
         let cwd = std::env::current_dir().unwrap_or_default();
         explicit_parents
@@ -58,23 +74,14 @@ pub(crate) fn resolve_parent_roots(
             })
             .collect::<Vec<_>>()
     } else {
-        let (roots, warnings) = cwtools_driver::parent_mods::discover_parent_roots(
+        return cwtools_driver::parent_mods::discover_parent_roots(
             workspace,
             &game.to_string(),
             vanilla,
             None,
         );
-        for warning in warnings {
-            eprintln!("warn: {warning}");
-        }
-        return roots;
     };
-    let (roots, warnings) =
-        cwtools_driver::parent_mods::resolve_parent_roots(&entries, Some(workspace), vanilla);
-    for warning in warnings {
-        eprintln!("warn: {warning}");
-    }
-    roots
+    cwtools_driver::parent_mods::resolve_parent_roots(&entries, Some(workspace), vanilla)
 }
 
 /// Resolve the run's config file, failing loudly on a broken one. `anchor` is
@@ -275,13 +282,13 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
     vanilla_dir: &Path,
     game: Game,
     use_parse_cache: bool,
-) {
+) -> bool {
     let ruleset = session.ruleset();
     let shadow = cwtools_driver::vanilla_replacement_shadow(mod_layers.primary, mod_layers.parents);
     let live_fingerprint =
         cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
     if cached_fingerprint == live_fingerprint {
-        return;
+        return false;
     }
     eprintln!(
         "  warn: vanilla cache is stale (cached: {cached_fingerprint}, live: {live_fingerprint}); rebuilding"
@@ -309,8 +316,17 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
     };
     match index {
         Ok(index) => {
-            let aux =
-                cwtools_driver::build_vanilla_cache_aux_with_shadow(vanilla_dir, &index, &shadow);
+            let aux = match cwtools_driver::build_vanilla_cache_aux_with_shadow(
+                vanilla_dir,
+                &index,
+                &shadow,
+            ) {
+                Ok(aux) => aux,
+                Err(error) => {
+                    eprintln!("  warn: could not discover base-game auxiliary data: {error}");
+                    return true;
+                }
+            };
             match vanilla_cache::save(
                 &index,
                 &game.to_string(),
@@ -318,19 +334,28 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
                 cache_path,
                 aux,
             ) {
-                Ok(n) => note(format!("  Rebuilt vanilla cache with {n} instances")),
-                Err(e) => eprintln!(
-                    "  warn: could not write rebuilt cache {}: {}",
-                    cache_path.display(),
-                    e
-                ),
+                Ok(n) => {
+                    note(format!("  Rebuilt vanilla cache with {n} instances"));
+                    false
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  warn: could not write rebuilt cache {}: {}",
+                        cache_path.display(),
+                        e
+                    );
+                    true
+                }
             }
         }
-        Err(e) => eprintln!(
-            "  warn: could not rebuild vanilla cache from {}: {}",
-            vanilla_dir.display(),
-            e
-        ),
+        Err(e) => {
+            eprintln!(
+                "  warn: could not rebuild vanilla cache from {}: {}",
+                vanilla_dir.display(),
+                e
+            );
+            true
+        }
     }
 }
 

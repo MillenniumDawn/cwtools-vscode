@@ -479,11 +479,24 @@ fn test_validate_help_lists_watch() {
         .stdout(predicate::str::contains("--watch"));
 }
 
-/// The watch loop end to end: an added file prints its delta, and Ctrl-C exits 0.
-/// Each wait is for an output line, bounded by one deadline, never a fixed sleep.
 #[cfg(unix)]
 #[test]
 fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_interrupt() {
+    watch_added_file_prints_its_delta(&[], "events/second.txt");
+}
+
+/// `nested` is a file glob here, so it matches nothing. Handed to the poller as
+/// an ignore-dirs pattern instead, it would prune `events/nested` and hide the new file.
+#[cfg(unix)]
+#[test]
+fn test_validate_watch_applies_ignore_files_to_files_not_directories() {
+    watch_added_file_prints_its_delta(&["--ignore-file", "nested"], "events/nested/second.txt");
+}
+
+/// The watch loop end to end: an added file prints its delta, and Ctrl-C exits 0.
+/// Each wait is for an output line, bounded by one deadline, never a fixed sleep.
+#[cfg(unix)]
+fn watch_added_file_prints_its_delta(extra_args: &[&str], added: &str) {
     use crate::common::{INHERITED_GIT_ENV, fixture_text, write_tree};
     use std::io::{BufRead, BufReader, Read};
     use std::process::{Command, Stdio};
@@ -514,6 +527,7 @@ fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_inte
         .arg(mod_dir.path())
         .arg("--rules")
         .arg(fixtures_dir().join("rules"))
+        .args(extra_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -537,11 +551,9 @@ fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_inte
     let deadline = Instant::now() + Duration::from_secs(60);
     let watching = wait_for_line(&lines, "Watching for changes", deadline);
     if watching {
-        std::fs::write(
-            mod_dir.path().join("events").join("second.txt"),
-            event.replace("test.1", "test.2"),
-        )
-        .unwrap();
+        let added = mod_dir.path().join(added);
+        std::fs::create_dir_all(added.parent().unwrap()).unwrap();
+        std::fs::write(added, event.replace("test.1", "test.2")).unwrap();
     }
     let delta = watching && wait_for_line(&lines, "CW107      -0 +1", deadline);
     // SAFETY: sends SIGINT to the child this test spawned.
@@ -552,6 +564,225 @@ fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_inte
 
     assert!(watching, "the watch never started");
     assert!(delta, "no CW107 delta after adding an event file");
+    assert_eq!(status.code(), Some(0), "unexpected exit status: {status:?}");
+}
+
+/// The `--watch` parent fixture: a `.gfx` referencing `parent_icon.dds`, so
+/// CW113 fires while that parent is missing, matching rules, and a launcher
+/// home whose `parent.mod` names the parent. `initial_descriptor` starts
+/// without dependencies; the tests can edit it to add them.
+#[cfg(unix)]
+fn watch_parent_fixture(
+    initial_descriptor: &str,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
+    use crate::common::write_tree;
+
+    let mod_dir = write_tree(&[
+        ("descriptor.mod", initial_descriptor),
+        (
+            "gfx/ref.gfx",
+            "spriteType = { texturefile = \"gfx/parent_icon.dds\" }\n",
+        ),
+    ]);
+    // Mirrors parents.rs: one spriteType entry and one type reading `gfx`.
+    let rules_dir = write_tree(&[(
+        "gfx.cwt",
+        "spriteType = { texturefile = filepath }\n\
+         types = { type[spriteType] = { path = \"gfx\" } }\n",
+    )]);
+    let parent_dir = write_tree(&[("gfx/parent_icon.dds", "")]);
+    let home = tempfile::tempdir().unwrap();
+    let documents = if cfg!(target_os = "linux") {
+        ".local/share"
+    } else {
+        "Documents"
+    };
+    let launcher = home
+        .path()
+        .join(documents)
+        .join("Paradox Interactive/Hearts of Iron IV/mod");
+    std::fs::create_dir_all(&launcher).unwrap();
+    std::fs::write(
+        launcher.join("parent.mod"),
+        format!(
+            "name = \"Parent\"\npath = \"{}\"\n",
+            parent_dir.path().display()
+        ),
+    )
+    .unwrap();
+    (mod_dir, rules_dir, parent_dir, home)
+}
+
+/// Spawn `validate --watch` over the parent fixture, streaming merged stdout
+/// and stderr as lines. `HOME` and `USERPROFILE` point at `home`, so launcher
+/// discovery is deterministic; the scratch env still guards the cwtools cache.
+#[cfg(unix)]
+fn spawn_watch_parents(
+    mod_dir: &std::path::Path,
+    rules_dir: &std::path::Path,
+    vanilla_dir: &std::path::Path,
+    home: &std::path::Path,
+    extra_args: &[&str],
+) -> (std::process::Child, std::sync::mpsc::Receiver<String>) {
+    use crate::common::INHERITED_GIT_ENV;
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cwtools"));
+    command
+        .env("RUST_LOG", "")
+        .envs(cwtools_test_support::scratch_home_env())
+        .env("HOME", home)
+        .env("USERPROFILE", home);
+    for key in INHERITED_GIT_ENV {
+        command.env_remove(key);
+    }
+    let mut child = command
+        .args(["validate", "--game", "hoi4", "--watch", "--directory"])
+        .arg(mod_dir)
+        .arg("--rules")
+        .arg(rules_dir)
+        .arg("--vanilla")
+        .arg(vanilla_dir)
+        .args(extra_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let (tx, lines) = mpsc::channel();
+    let streams: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().unwrap()),
+        Box::new(child.stderr.take().unwrap()),
+    ];
+    for stream in streams {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+    }
+    drop(tx);
+    (child, lines)
+}
+
+/// Reads streamed lines until one contains `needle`, or the deadline passes.
+#[cfg(unix)]
+fn wait_for_streamed_line(
+    lines: &std::sync::mpsc::Receiver<String>,
+    needle: &str,
+    deadline: std::time::Instant,
+) -> bool {
+    while let Ok(line) =
+        lines.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+    {
+        if line.contains(needle) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Kills the watch child when the test ends, pass or fail, so a failed
+/// assertion cannot leak a watch process that never exits.
+#[cfg(unix)]
+struct WatcherGuard(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Editing the workspace `descriptor.mod` to list a dependency wakes the watch,
+/// the reload re-resolves the launcher-discovered parents, and the parent's
+/// files are watched from then on: dropping the file the mod references brings
+/// CW113 back. Each wait is for an output line, bounded by one deadline.
+#[cfg(unix)]
+#[test]
+fn test_validate_watch_picks_up_a_parent_added_by_a_descriptor_edit() {
+    let (mod_dir, rules_dir, parent_dir, home) = watch_parent_fixture("name = Submod\n");
+    let vanilla_dir = tempfile::tempdir().unwrap();
+    let (child, lines) = spawn_watch_parents(
+        mod_dir.path(),
+        rules_dir.path(),
+        vanilla_dir.path(),
+        home.path(),
+        &[],
+    );
+    let mut child = WatcherGuard(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+
+    let watching = wait_for_streamed_line(&lines, "Watching for changes", deadline);
+    assert!(watching, "the watch never started");
+    std::fs::write(
+        mod_dir.path().join("descriptor.mod"),
+        "name = Submod\ndependencies = { \"Parent\" }\n",
+    )
+    .unwrap();
+    let gained = wait_for_streamed_line(&lines, "CW113      -1 +0", deadline);
+    assert!(gained, "the gained dependency was not picked up");
+
+    // The discovered parent is now a watched root, so this edit wakes too.
+    std::fs::remove_file(parent_dir.path().join("gfx/parent_icon.dds")).unwrap();
+    let lost = wait_for_streamed_line(&lines, "CW113      -0 +1", deadline);
+    assert!(lost, "the discovered parent root is not watched");
+
+    // SAFETY: sends SIGINT to the child this test spawned.
+    unsafe {
+        libc::kill(child.0.id() as libc::pid_t, libc::SIGINT);
+    }
+    let status = child.0.wait().unwrap();
+    assert_eq!(status.code(), Some(0), "unexpected exit status: {status:?}");
+}
+
+/// Explicit `--parent` roots keep precedence under `--watch`: a descriptor
+/// dependency edit still wakes (the descriptor is watched) but the pass keeps
+/// the explicit parents, so the diagnostics stay put and the wake reports no
+/// change.
+#[cfg(unix)]
+#[test]
+fn test_validate_watch_keeps_explicit_parents_when_a_descriptor_edit_adds_dependencies() {
+    let (mod_dir, rules_dir, _parent_dir, home) = watch_parent_fixture("name = Submod\n");
+    let vanilla_dir = tempfile::tempdir().unwrap();
+    let other_parent = tempfile::tempdir().unwrap();
+    let (child, lines) = spawn_watch_parents(
+        mod_dir.path(),
+        rules_dir.path(),
+        vanilla_dir.path(),
+        home.path(),
+        &["--parent", other_parent.path().to_str().unwrap()],
+    );
+    let mut child = WatcherGuard(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+
+    let watching = wait_for_streamed_line(&lines, "Watching for changes", deadline);
+    assert!(watching, "the watch never started");
+    std::fs::write(
+        mod_dir.path().join("descriptor.mod"),
+        "name = Submod\ndependencies = { \"Parent\" }\n",
+    )
+    .unwrap();
+    let unchanged = wait_for_streamed_line(&lines, "no change", deadline);
+    assert!(
+        unchanged,
+        "the descriptor edit did not wake the watch with the explicit parents intact"
+    );
+
+    // SAFETY: sends SIGINT to the child this test spawned.
+    unsafe {
+        libc::kill(child.0.id() as libc::pid_t, libc::SIGINT);
+    }
+    let status = child.0.wait().unwrap();
     assert_eq!(status.code(), Some(0), "unexpected exit status: {status:?}");
 }
 
