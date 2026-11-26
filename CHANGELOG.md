@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.10
+
 #### Tooling
 
 * Lock the complete Python helper environment with `uv.lock`, which replaces `requirements-dev.txt`, and install it with `uv sync --locked` in CI. Gate Python line and branch coverage at measured floors and show it in the coverage comment. (#1225, #1226)
