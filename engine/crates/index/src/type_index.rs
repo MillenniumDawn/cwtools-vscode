@@ -434,18 +434,17 @@ impl VarIndex {
     }
 }
 
-/// Scripted-loc names (`defined_text = { name = X }`) read off the files in a scripted-loc
-/// folder, since the HOI4 config types `scripted_loc` under Stellaris's folder and every use
-/// read as an unknown command (#348). Lowercased and refcounted per file, like [`VarIndex`].
+/// Storage and per-file reference counting shared by the two scripted-name
+/// indexes. Each public index owns a separate instance of this storage.
 #[derive(Debug, Clone, Default)]
-pub struct ScriptedLocIndex {
+struct ScriptedNameIndex {
     names: FxHashMap<Arc<str>, usize>,
     per_file: FxHashMap<Arc<str>, Vec<Arc<str>>>,
     vanilla_names: FxHashSet<Arc<str>>,
 }
 
-impl ScriptedLocIndex {
-    pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
+impl ScriptedNameIndex {
+    fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
         self.remove_file(file_uri);
         if names.is_empty() {
             return;
@@ -459,7 +458,7 @@ impl ScriptedLocIndex {
         self.per_file.insert(Arc::from(file_uri), flat);
     }
 
-    pub fn remove_file(&mut self, file_uri: &str) {
+    fn remove_file(&mut self, file_uri: &str) {
         let Some(flat) = self.per_file.remove(file_uri) else {
             return;
         };
@@ -468,7 +467,7 @@ impl ScriptedLocIndex {
         }
     }
 
-    pub fn set_vanilla_names(&mut self, names: &[String]) {
+    fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names = names
             .iter()
             .filter(|n| !n.is_empty())
@@ -476,72 +475,58 @@ impl ScriptedLocIndex {
             .collect();
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.names.is_empty() && self.vanilla_names.is_empty()
     }
 
-    pub fn contains(&self, name: &str) -> bool {
+    fn contains(&self, name: &str) -> bool {
         let lower = name.to_ascii_lowercase();
         self.names.contains_key(lower.as_str()) || self.vanilla_names.contains(lower.as_str())
     }
 
-    pub fn names(&self) -> impl Iterator<Item = &str> {
+    fn names(&self) -> impl Iterator<Item = &str> {
         self.names.keys().map(Arc::as_ref)
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ScriptedGuiIndex {
-    names: FxHashMap<Arc<str>, usize>,
-    per_file: FxHashMap<Arc<str>, Vec<Arc<str>>>,
-    vanilla_names: FxHashSet<Arc<str>>,
+// Preserve the public types and method signatures; their contents must remain
+// independent so that GUI callbacks cannot satisfy scripted-localisation names.
+macro_rules! scripted_name_index {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Debug, Clone, Default)]
+        pub struct $name(ScriptedNameIndex);
+
+        impl $name {
+            pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
+                self.0.merge_file(file_uri, names);
+            }
+
+            pub fn remove_file(&mut self, file_uri: &str) {
+                self.0.remove_file(file_uri);
+            }
+
+            pub fn set_vanilla_names(&mut self, names: &[String]) {
+                self.0.set_vanilla_names(names);
+            }
+
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
+
+            pub fn contains(&self, name: &str) -> bool {
+                self.0.contains(name)
+            }
+
+            pub fn names(&self) -> impl Iterator<Item = &str> {
+                self.0.names()
+            }
+        }
+    };
 }
 
-impl ScriptedGuiIndex {
-    pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
-        self.remove_file(file_uri);
-        if names.is_empty() {
-            return;
-        }
-        let mut flat = Vec::with_capacity(names.len());
-        for name in names {
-            let key: Arc<str> = Arc::from(name.to_ascii_lowercase().as_str());
-            *self.names.entry(Arc::clone(&key)).or_insert(0) += 1;
-            flat.push(key);
-        }
-        self.per_file.insert(Arc::from(file_uri), flat);
-    }
-
-    pub fn remove_file(&mut self, file_uri: &str) {
-        let Some(flat) = self.per_file.remove(file_uri) else {
-            return;
-        };
-        for name in flat {
-            dec_ref(&mut self.names, name.as_ref());
-        }
-    }
-
-    pub fn set_vanilla_names(&mut self, names: &[String]) {
-        self.vanilla_names = names
-            .iter()
-            .filter(|name| !name.is_empty())
-            .map(|name| Arc::from(name.to_ascii_lowercase().as_str()))
-            .collect();
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty() && self.vanilla_names.is_empty()
-    }
-
-    pub fn contains(&self, name: &str) -> bool {
-        let lower = name.to_ascii_lowercase();
-        self.names.contains_key(lower.as_str()) || self.vanilla_names.contains(lower.as_str())
-    }
-
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.names.keys().map(Arc::as_ref)
-    }
-}
+scripted_name_index!(ScriptedLocIndex, "Per-file scripted localisation name index.");
+scripted_name_index!(ScriptedGuiIndex, "Per-file scripted GUI callback name index.");
 
 #[derive(Debug, Default, Clone)]
 struct NameRefs {
@@ -1962,6 +1947,28 @@ mod tests {
     }
 
     // ── ScriptedLocIndex (#348) ───────────────────────────────────────────────
+
+    #[test]
+    fn scripted_loc_and_gui_namespaces_remain_independent() {
+        let mut loc = ScriptedLocIndex::default();
+        let mut gui = ScriptedGuiIndex::default();
+        loc.merge_file("a.txt", vec!["OnlyLoc".into(), "Shared".into()]);
+        gui.merge_file("a.txt", vec!["OnlyGui".into(), "Shared".into()]);
+        gui.merge_file("b.txt", vec!["shared".into()]);
+        gui.set_vanilla_names(&["BaseGui".into()]);
+        assert!(!loc.contains("OnlyGui"));
+        assert!(!gui.contains("OnlyLoc"));
+        assert!(!loc.contains("BaseGui"));
+        gui.remove_file("a.txt");
+        assert!(gui.contains("SHARED"));
+        gui.remove_file("b.txt");
+        assert!(!gui.contains("shared"));
+        assert!(loc.contains("shared"));
+        gui.set_vanilla_names(&["Replacement".into()]);
+        assert!(!gui.contains("BaseGui"));
+        assert!(gui.contains("replacement"));
+        assert_eq!(gui.names().count(), 0);
+    }
 
     fn scripted_loc_index_with(file: &str, names: &[&str]) -> ScriptedLocIndex {
         let mut idx = ScriptedLocIndex::default();
