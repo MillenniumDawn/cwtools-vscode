@@ -525,8 +525,14 @@ macro_rules! scripted_name_index {
     };
 }
 
-scripted_name_index!(ScriptedLocIndex, "Per-file scripted localisation name index.");
-scripted_name_index!(ScriptedGuiIndex, "Per-file scripted GUI callback name index.");
+scripted_name_index!(
+    ScriptedLocIndex,
+    "Per-file scripted localisation name index."
+);
+scripted_name_index!(
+    ScriptedGuiIndex,
+    "Per-file scripted GUI callback name index."
+);
 
 #[derive(Debug, Default, Clone)]
 struct NameRefs {
