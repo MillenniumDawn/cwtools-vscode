@@ -561,15 +561,21 @@ impl Backend {
                 }
             }
         };
-        let loc_signature =
-            match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
-                Ok(signature) => Some(signature),
+        let (loc_discovery, loc_signature) =
+            match tokio::task::block_in_place(|| {
+                self.discover_loc(&root_path, cwtools_file_manager::file_manager::ScanBudget::default())
+                    .map(|discovery| {
+                        let signature = discovery.signature();
+                        (discovery, signature)
+                    })
+            }) {
+                Ok((discovery, signature)) => (Some(discovery), Some(signature)),
                 Err(error) => {
-                    // No signature means this pass cannot match, or become, a quiet-scan baseline.
+                    // A partial discovery may not replace the last good localisation index.
                     loc_incomplete = true;
                     self.warn_incomplete("localisation discovery", &error.to_string())
                         .await;
-                    None
+                    (None, None)
                 }
             };
         let files_to_validate: Vec<std::path::PathBuf> =
@@ -1049,9 +1055,11 @@ impl Backend {
             loc_signature.is_some() && *self.state.last_loc_signature.lock() == loc_signature;
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
-        } else if !self.rebuild_and_publish_loc(&root_path).await {
-            // The rebuild keeps the previous localisation index and diagnostics.
-            loc_incomplete = true;
+        } else if let Some(discovery) = &loc_discovery {
+            if !self.rebuild_and_publish_discovered_loc(discovery, cwtools_file_manager::file_manager::ScanBudget::default()).await {
+                // The rebuild keeps the previous localisation index and diagnostics.
+                loc_incomplete = true;
+            }
         }
         if cancel.is_cancelled() {
             return false;

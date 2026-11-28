@@ -86,6 +86,7 @@ fn localisation_paths(
 fn parent_localisation_paths(
     parent_roots: &[std::path::PathBuf],
     root_path: &std::path::Path,
+    primary: &[DiscoveredPath],
     ignore_files: &[String],
     ignore_dirs: &[String],
     budget: ScanBudget,
@@ -93,26 +94,29 @@ fn parent_localisation_paths(
     if parent_roots.is_empty() {
         return Ok(Vec::new());
     }
-    let primary = localisation_files(
-        &[root_path.to_path_buf()],
-        ignore_files,
-        ignore_dirs,
-        cwtools_driver::DiscoveryPolicy::Workspace,
-        budget,
-    )?;
     Ok(
         cwtools_driver::discover_parent_localisation_files_with_budget(
-            parent_roots,
-            root_path,
-            &primary,
-            ignore_files,
-            ignore_dirs,
-            budget,
+            parent_roots, root_path, primary, ignore_files, ignore_dirs, budget,
         )?
         .into_iter()
         .map(|file| file.path)
         .collect(),
     )
+}
+
+/// Complete discovery snapshot for one workspace scan, including parent shadowing.
+pub(crate) struct LocDiscovery {
+    workspace_paths: Vec<std::path::PathBuf>,
+    parent_paths: Vec<std::path::PathBuf>,
+    parent_roots: Vec<std::path::PathBuf>,
+}
+
+impl LocDiscovery {
+    pub(crate) fn signature(&self) -> u64 {
+        let mut files = self.workspace_paths.clone();
+        files.extend(self.parent_paths.iter().cloned());
+        stat_signature_for(&files)
+    }
 }
 
 pub(crate) type ParentLocKey = (Vec<std::path::PathBuf>, Option<Vec<Lang>>, Lang, bool, u64);
@@ -157,10 +161,11 @@ pub(crate) fn collect_loc_display(
 }
 
 impl Backend {
-    pub(crate) fn compute_loc_signature(
+    pub(crate) fn discover_loc(
         &self,
         root_path: &std::path::Path,
-    ) -> Result<u64, FileError> {
+        budget: ScanBudget,
+    ) -> Result<LocDiscovery, FileError> {
         let (parent_roots, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
@@ -169,21 +174,25 @@ impl Backend {
                 config.ignore_dir_patterns.clone(),
             )
         };
-        let mut files = localisation_paths(
-            &[root_path.to_path_buf()],
-            &ignore_files,
-            &ignore_dirs,
-            cwtools_driver::DiscoveryPolicy::Workspace,
-            ScanBudget::default(),
+        let primary = localisation_files(
+            &[root_path.to_path_buf()], &ignore_files, &ignore_dirs,
+            cwtools_driver::DiscoveryPolicy::Workspace, budget,
         )?;
-        files.extend(parent_localisation_paths(
-            &parent_roots,
-            root_path,
-            &ignore_files,
-            &ignore_dirs,
-            ScanBudget::default(),
-        )?);
-        Ok(stat_signature_for(&files))
+        let parent_paths = parent_localisation_paths(
+            &parent_roots, root_path, &primary, &ignore_files, &ignore_dirs, budget,
+        )?;
+        Ok(LocDiscovery {
+            workspace_paths: primary.into_iter().map(|file| file.path).collect(),
+            parent_paths,
+            parent_roots,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compute_loc_signature(
+        &self, root_path: &std::path::Path,
+    ) -> Result<u64, FileError> {
+        Ok(self.discover_loc(root_path, ScanBudget::default())?.signature())
     }
 
     /// The parent mods' loc, layered under the workspace and over the base
@@ -191,28 +200,14 @@ impl Backend {
     /// staged by the caller until all localisation discovery succeeds.
     fn parent_loc(
         &self,
-        root_path: &std::path::Path,
+        discovery: &LocDiscovery,
         loc_languages: Option<&[Lang]>,
         primary_lang: Lang,
         hover_all: bool,
         cached: &mut LocCache<ParentLocKey>,
-        budget: ScanBudget,
     ) -> Result<Option<Arc<VanillaLoc>>, FileError> {
-        let (parent_roots, ignore_files, ignore_dirs) = {
-            let config = self.state.config.read();
-            (
-                config.parent_roots.clone(),
-                config.ignore_file_patterns.clone(),
-                config.ignore_dir_patterns.clone(),
-            )
-        };
-        let paths = parent_localisation_paths(
-            &parent_roots,
-            root_path,
-            &ignore_files,
-            &ignore_dirs,
-            budget,
-        )?;
+        let parent_roots = discovery.parent_roots.clone();
+        let paths = &discovery.parent_paths;
         if paths.is_empty() {
             *cached = None;
             return Ok(None);
@@ -222,7 +217,7 @@ impl Backend {
             loc_languages.map(<[_]>::to_vec),
             primary_lang,
             hover_all,
-            stat_signature_for(&paths),
+            stat_signature_for(paths),
         );
         if let Some((cached_key, loc)) = cached.as_ref()
             && *cached_key == key
@@ -230,7 +225,7 @@ impl Backend {
             return Ok(Some(Arc::clone(loc)));
         }
         let service = cwtools_localization::LocService::from_paths(
-            paths,
+            paths.to_vec(),
             cwtools_file_manager::file_manager::ScanBudget::default(),
             loc_languages,
         );
@@ -316,19 +311,29 @@ impl Backend {
         Ok(Some(built))
     }
 
-    #[tracing::instrument(skip_all)]
+    #[cfg(test)]
     pub(crate) async fn rebuild_and_publish_loc(&self, root_path: &std::path::Path) -> bool {
-        let budget = ScanBudget::default();
-        #[cfg(test)]
-        let budget = (*self.state.loc_scan_budget_override.lock()).unwrap_or(budget);
-        let (loc_languages, ignore_files, ignore_dirs) = {
-            let config = self.state.config.read();
-            (
-                config.loc_languages.clone(),
-                config.ignore_file_patterns.clone(),
-                config.ignore_dir_patterns.clone(),
-            )
+        let budget = (*self.state.loc_scan_budget_override.lock()).unwrap_or_default();
+        let discovery = match tokio::task::block_in_place(|| self.discover_loc(root_path, budget)) {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                self.warn_incomplete(
+                    "localisation discovery",
+                    &format!("{error}; keeping the previous localisation index and diagnostics"),
+                ).await;
+                return false;
+            }
         };
+        self.rebuild_and_publish_discovered_loc(&discovery, budget).await
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub(crate) async fn rebuild_and_publish_discovered_loc(
+        &self,
+        discovery: &LocDiscovery,
+        budget: ScanBudget,
+    ) -> bool {
+        let loc_languages = self.state.config.read().loc_languages.clone();
 
         let hover_all = self
             .state
@@ -360,26 +365,16 @@ impl Backend {
             .map(|(path, _)| path)
             .collect();
         let rebuilt = tokio::task::block_in_place(|| {
-            // The base game is read once per session and reused; only the workspace
-            // is walked again (#89).
-            let workspace_paths = localisation_paths(
-                &[root_path.to_path_buf()],
-                &ignore_files,
-                &ignore_dirs,
-                cwtools_driver::DiscoveryPolicy::Workspace,
-                budget,
-            )?;
             // Stage both layer caches: failure in a later layer must not
             // replace an earlier cache or consume the cached vanilla keys.
             let mut parent_cache = self.state.parent_loc.lock().clone();
             let mut vanilla_cache = self.state.vanilla_loc.lock().clone();
             let parent = self.parent_loc(
-                root_path,
+                discovery,
                 parsed_languages,
                 primary_lang,
                 hover_all,
                 &mut parent_cache,
-                budget,
             )?;
             let vanilla = self.vanilla_loc(
                 parsed_languages,
@@ -397,8 +392,9 @@ impl Backend {
                 }
             };
             let service = cwtools_localization::LocService::from_paths(
-                workspace_paths
-                    .into_iter()
+                discovery.workspace_paths
+                    .iter()
+                    .cloned()
                     .filter(|path| !baseline_files.contains(path))
                     .collect(),
                 cwtools_file_manager::file_manager::ScanBudget::default(),
@@ -621,27 +617,14 @@ mod tests {
         write_loc(primary.path(), "first", "first_key");
         write_loc(primary.path(), "second", "second_key");
         write_loc(parent.path(), "parent", "parent_key");
-        let result = parent_localisation_paths(
-            &[parent.path().to_path_buf()],
-            primary.path(),
-            &[],
-            &[],
-            ScanBudget {
-                max_files: 1,
-                ..Default::default()
-            },
-        );
-        assert!(matches!(result, Err(FileError::FileCountBudget(_))));
-        assert!(
-            parent_localisation_paths(
-                &[parent.path().join("missing")],
-                primary.path(),
-                &[],
-                &[],
-                ScanBudget::default(),
-            )
-            .is_err()
-        );
+        let backend = test_backend();
+        backend.state.config.write().parent_roots = vec![parent.path().to_path_buf()];
+        assert!(matches!(
+            backend.discover_loc(primary.path(), ScanBudget { max_files: 1, ..Default::default() }),
+            Err(FileError::FileCountBudget(_))
+        ));
+        backend.state.config.write().parent_roots = vec![parent.path().join("missing")];
+        assert!(backend.discover_loc(primary.path(), ScanBudget::default()).is_err());
     }
 
     #[test]
@@ -732,6 +715,35 @@ mod tests {
             assert!(backend.state.loc_text.read().get(&key).is_some());
             assert!(backend.state.loc_locations.read().contains_key(&key));
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rebuild_uses_discovered_workspace_and_parent_paths() {
+        let backend = test_backend();
+        let primary = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        write_loc(primary.path(), "workspace", "workspace_key");
+        write_loc(parent.path(), "parent", "parent_key");
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![primary.path().to_path_buf()];
+            config.parent_roots = vec![parent.path().to_path_buf()];
+        }
+        let discovery = backend.discover_loc(primary.path(), ScanBudget::default()).unwrap();
+        let signature = discovery.signature();
+        // New paths after discovery are not read in this scan. The next scan will
+        // see them; the current rebuild must use the same set as its signature.
+        write_loc(primary.path(), "late", "late_workspace_key");
+        write_loc(parent.path(), "late_parent", "late_parent_key");
+        assert!(backend.rebuild_and_publish_discovered_loc(&discovery, ScanBudget::default()).await);
+        let index = backend.state.loc_index.read();
+        let keys = index.as_ref().unwrap().union();
+        assert!(keys.contains("workspace_key"));
+        assert!(keys.contains("parent_key"));
+        assert!(!keys.contains("late_workspace_key"));
+        assert!(!keys.contains("late_parent_key"));
+        drop(index);
+        assert_ne!(signature, backend.discover_loc(primary.path(), ScanBudget::default()).unwrap().signature());
     }
 
     #[tokio::test(flavor = "multi_thread")]
