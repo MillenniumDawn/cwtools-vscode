@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.11
+
 #### Engine
 
 * Check each type's key filter once when picking the type of a root or wrapped definition, instead of a second time for its ranking. Type selection is unchanged. (#1372)
