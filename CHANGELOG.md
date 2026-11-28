@@ -6,6 +6,10 @@
 * Skip the editor's suppression reread for clean localization files while still clearing their previous diagnostics. Skip parent script and localization path processing in batch runs with no parent mods.
 * Put a closed inline script's indexed syntax tree into the inline-script registry instead of parsing it again (CLI) or decoding it from the parse cache again (editor). An open buffer still takes precedence, and a script that changed after indexing is reloaded. (#1370)
 
+#### Tooling
+
+* Find the `md_bench` example's corpus through the shared test-support checkout helper instead of a local copy of it. (#1375)
+
 ### 4.0.10
 
 #### Tooling
