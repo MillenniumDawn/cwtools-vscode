@@ -694,7 +694,8 @@ impl Backend {
             .map(|(path, _)| path)
             .collect();
         let finish =
-            |file: &ScannedFile, (cache_hit, parsed, source_hash, inline_ignored, source_key): LoadedFile| {
+            |file: &ScannedFile,
+             (cache_hit, parsed, source_hash, inline_ignored, source_key): LoadedFile| {
                 let logical_path = scan_logical_path(file, &workspace_prefix);
                 let ignored = baseline_files.contains(&file.path)
                     || cwtools_file_manager::file_manager::is_ignored_path(
@@ -1075,7 +1076,11 @@ impl Backend {
         } else {
             Some(tokio::task::block_in_place(|| {
                 self.rebuild_inline_scripts(
-                    &scan_files, &parsed_files, &source_keys, &source_hashes, cache_info.as_ref(),
+                    &scan_files,
+                    &parsed_files,
+                    &source_keys,
+                    &source_hashes,
+                    cache_info.as_ref(),
                 )
             }))
         };
@@ -1507,7 +1512,12 @@ impl Backend {
         assert_eq!(scan_files.len(), parsed_files.len());
         assert_eq!(scan_files.len(), source_keys.len());
         assert_eq!(scan_files.len(), source_hashes.len());
-        for (((file, indexed), source_key), source_hash) in scan_files.iter().zip(parsed_files).zip(source_keys).zip(source_hashes) {
+        for (((file, indexed), source_key), source_hash) in scan_files
+            .iter()
+            .zip(parsed_files)
+            .zip(source_keys)
+            .zip(source_hashes)
+        {
             let logical_path = match &file.parent_logical_path {
                 Some(logical) => logical.clone(),
                 None => logical_path_from_uri(&file.uri, &ws_prefix),
@@ -1531,15 +1541,22 @@ impl Backend {
             // Metadata is unavailable or changed. Compare bounded source text to the
             // content captured by the index pass before using its tree. This retains
             // the stronger content check on platforms without trusted metadata keys.
-            if open_text.is_none() && let (Some(indexed), Some(hash)) = (indexed, source_hash) {
+            if open_text.is_none()
+                && let (Some(indexed), Some(hash)) = (indexed, source_hash)
+            {
                 match self.read_scan_source(&file.path) {
                     Ok((text, _)) if workspace_cache::content_hash(&text) == *hash => {
                         registry.insert_shared(&logical_path, Arc::clone(indexed));
                     }
                     Ok((text, _)) => {
-                        registry.insert(&logical_path, parse_string_without_comments(&text, &self.state.string_table));
+                        registry.insert(
+                            &logical_path,
+                            parse_string_without_comments(&text, &self.state.string_table),
+                        );
                     }
-                    Err(error) => tracing::warn!(path = %file.path.display(), error = %error, "scan: skipping unreadable inline script"),
+                    Err(error) => {
+                        tracing::warn!(path = %file.path.display(), error = %error, "scan: skipping unreadable inline script")
+                    }
                 }
                 continue;
             }
@@ -2979,7 +2996,8 @@ mod tests {
         };
         let key = workspace_cache::source_cache_key(&path).unwrap();
         let tree = Arc::new(parse_string_without_comments(
-            "first = { }\n", &backend.state.string_table,
+            "first = { }\n",
+            &backend.state.string_table,
         ));
         let files = vec![file];
         let indexed = vec![Some(Arc::clone(&tree))];
@@ -2988,31 +3006,56 @@ mod tests {
         let before = backend.state.scan_source_reads.load(Ordering::Relaxed);
         let registry = backend.rebuild_inline_scripts(&files, &indexed, &keys, &hashes, None);
         assert_eq!(registry.len(), 1);
-        assert_eq!(Arc::strong_count(&tree), 3, "registry holds the indexed tree");
-        assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), before);
+        assert_eq!(
+            Arc::strong_count(&tree),
+            3,
+            "registry holds the indexed tree"
+        );
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before
+        );
         drop(registry);
 
         // Platforms without trustworthy metadata must read for a content hash,
         // but can still reuse the indexed tree without a second parse or decode.
         let registry = backend.rebuild_inline_scripts(&files, &indexed, &[None], &hashes, None);
         assert_eq!(Arc::strong_count(&tree), 3);
-        assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), before + 1);
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before + 1
+        );
         drop(registry);
 
         std::fs::write(&path, "different_key = { yes = yes }\n").unwrap();
         let registry = backend.rebuild_inline_scripts(&files, &indexed, &keys, &hashes, None);
         assert_eq!(registry.len(), 1);
-        assert_eq!(Arc::strong_count(&tree), 2, "stale indexed tree was not reused");
-        assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), before + 2);
+        assert_eq!(
+            Arc::strong_count(&tree),
+            2,
+            "stale indexed tree was not reused"
+        );
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before + 2
+        );
         drop(registry);
 
         // Even a still-current indexed tree must not override a live editor buffer.
         let current_key = workspace_cache::source_cache_key(&path).unwrap();
         crate::testing::open_document(&backend, &files[0].uri, "open_buffer = { }\n");
-        let registry = backend.rebuild_inline_scripts(&files, &indexed, &[Some(current_key)], &hashes, None);
+        let registry =
+            backend.rebuild_inline_scripts(&files, &indexed, &[Some(current_key)], &hashes, None);
         assert_eq!(registry.len(), 1);
-        assert_eq!(Arc::strong_count(&tree), 2, "open buffer wins over indexed tree");
-        assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), before + 2);
+        assert_eq!(
+            Arc::strong_count(&tree),
+            2,
+            "open buffer wins over indexed tree"
+        );
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before + 2
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

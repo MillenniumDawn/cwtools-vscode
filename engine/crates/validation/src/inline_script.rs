@@ -356,13 +356,25 @@ mod tests {
         scripts.insert_shared("common/inline_scripts/bonus.txt", Arc::clone(&tree));
         drop(tree); // The registry must keep the tree and overlay alive itself.
         let (parsed, idx) = call_leaf(
-            "inline_script = { script = bonus WHICH = air_bonus HOW_MUCH = 5 }", &table,
+            "inline_script = { script = bonus WHICH = air_bonus HOW_MUCH = 5 }",
+            &table,
         );
-        let expanded = expand(&parsed.arena.leaves[idx as usize], &parsed.arena, &table, &scripts, &[])
-            .expect("shared tree expands");
-        let Child::Leaf(body_idx) = expanded.ast.root_children[0] else { panic!("expected leaf"); };
+        let expanded = expand(
+            &parsed.arena.leaves[idx as usize],
+            &parsed.arena,
+            &table,
+            &scripts,
+            &[],
+        )
+        .expect("shared tree expands");
+        let Child::Leaf(body_idx) = expanded.ast.root_children[0] else {
+            panic!("expected leaf");
+        };
         let body = &expanded.ast.arena.leaves[body_idx as usize];
-        assert_eq!(table.get_string(body.key.normal).as_deref(), Some("air_bonus"));
+        assert_eq!(
+            table.get_string(body.key.normal).as_deref(),
+            Some("air_bonus")
+        );
         assert_eq!(leaf_value_to_string(&body.value, &table), "5");
     }
 

@@ -1354,10 +1354,16 @@ fn take_indexed_inline_scripts(
                 read_source_snapshot(&source).map(|_| ())
             };
             match unchanged {
-                Ok(()) => { scripts.insert(&source.logical_path, file.parsed); }
+                Ok(()) => {
+                    scripts.insert(&source.logical_path, file.parsed);
+                }
                 Err(error) => {
                     incomplete = true;
-                    eprintln!("warn: skipping inline script {}: {}", source.path.display(), error);
+                    eprintln!(
+                        "warn: skipping inline script {}: {}",
+                        source.path.display(),
+                        error
+                    );
                 }
             }
         }
@@ -2990,8 +2996,16 @@ mod tests {
             bytes: &bytes,
             incomplete: &incomplete,
         };
-        let loaded = load_or_parse(&path, &table, None, ParseCacheUse::Full, Some(&budget), None)
-            .unwrap().unwrap();
+        let loaded = load_or_parse(
+            &path,
+            &table,
+            None,
+            ParseCacheUse::Full,
+            Some(&budget),
+            None,
+        )
+        .unwrap()
+        .unwrap();
         let (sources, registry, incomplete) = take_indexed_inline_scripts(vec![ParsedFileSource {
             path,
             logical_path: "common/inline_scripts/test.txt".into(),
