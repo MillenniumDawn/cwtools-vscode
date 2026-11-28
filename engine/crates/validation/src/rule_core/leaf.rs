@@ -531,13 +531,9 @@ pub(crate) fn field_matches_value(
         (NewField::SpecificField(s), Value::Float(f)) => s == &f.to_string(),
         (NewField::SpecificField(_), Value::Clause(_)) => true,
 
-        (NewField::TypeField(TypeType::Simple(type_name)), Value::String(t))
-        | (NewField::TypeField(TypeType::Simple(type_name)), Value::QString(t)) => table
-            .with_string(t.normal, |s| validate_type_reference(s, type_name))
-            .unwrap_or(false),
-        (NewField::TypeField(TypeType::Complex { name, .. }), Value::String(t))
-        | (NewField::TypeField(TypeType::Complex { name, .. }), Value::QString(t)) => table
-            .with_string(t.normal, |s| validate_type_reference(s, name))
+        (NewField::TypeField(_), Value::String(t))
+        | (NewField::TypeField(_), Value::QString(t)) => table
+            .with_string(t.normal, |s| !s.is_empty())
             .unwrap_or(false),
         (NewField::TypeField(_), Value::Int(_) | Value::Float(_)) => true,
 
@@ -622,10 +618,6 @@ pub(crate) fn field_matches_value(
             _,
         ) => false,
     }
-}
-
-fn validate_type_reference(text: &str, _expected_type: &str) -> bool {
-    !text.is_empty()
 }
 
 fn field_to_description(field: &NewField) -> String {
@@ -783,6 +775,61 @@ mod tests {
                 field_matches_value(field, value, &table, &ruleset),
                 "{field:?} must accept {value:?}"
             );
+        }
+    }
+
+    #[test]
+    fn type_reference_shapes_do_not_depend_on_lookup_or_complex_affixes() {
+        let table = StringTable::new();
+        let ruleset = RuleSet::default();
+        let fields = [
+            NewField::TypeField(TypeType::Simple("missing_type".into())),
+            NewField::TypeField(TypeType::Complex {
+                prefix: "pre_".into(),
+                name: "missing_type".into(),
+                suffix: "_post".into(),
+            }),
+        ];
+        for field in &fields {
+            for text in ["unresolved_id", "pre_unresolved_id_post"] {
+                assert!(field_matches_value(
+                    field,
+                    &Value::String(table.intern(text)),
+                    &table,
+                    &ruleset
+                ));
+                assert!(field_matches_value(
+                    field,
+                    &Value::QString(table.intern(text)),
+                    &table,
+                    &ruleset
+                ));
+            }
+            assert!(!field_matches_value(
+                field,
+                &Value::String(table.intern("")),
+                &table,
+                &ruleset
+            ));
+            assert!(!field_matches_value(
+                field,
+                &Value::QString(table.intern("")),
+                &table,
+                &ruleset
+            ));
+            assert!(field_matches_value(
+                field,
+                &Value::Int(42),
+                &table,
+                &ruleset
+            ));
+            assert!(!field_matches_value(
+                field,
+                &Value::Bool(true),
+                &table,
+                &ruleset
+            ));
+            assert!(!field_matches_value(field, &clause(), &table, &ruleset));
         }
     }
 

@@ -8,6 +8,7 @@
 * Skip the editor's suppression reread for clean localization files while still clearing their previous diagnostics. Skip parent script and localization path processing in batch runs with no parent mods.
 * Share one name index type between scripted localization and scripted GUI callbacks. Each namespace keeps its own instance, so lookups are unchanged. (#1371)
 * Put a closed inline script's indexed syntax tree into the inline-script registry instead of parsing it again (CLI) or decoding it from the parse cache again (editor). An open buffer still takes precedence, and a script that changed after indexing is reloaded. (#1370)
+* Fold the identical simple and complex type-reference shape checks into one match arm and drop the helper that ignored its type name. (#1373)
 
 #### Tooling
 
