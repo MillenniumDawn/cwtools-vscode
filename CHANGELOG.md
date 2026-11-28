@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Skip the editor's suppression reread for clean localization files while still clearing their previous diagnostics. Skip parent script and localization path processing in batch runs with no parent mods.
+
 ### 4.0.10
 
 #### Tooling

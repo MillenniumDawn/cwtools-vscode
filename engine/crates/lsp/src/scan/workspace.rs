@@ -1534,7 +1534,7 @@ impl Backend {
         registry
     }
 
-    fn read_scan_source(
+    pub(super) fn read_scan_source(
         &self,
         path: &std::path::Path,
     ) -> Result<(String, u64), cwtools_file_manager::file_manager::FileError> {
