@@ -434,17 +434,19 @@ impl VarIndex {
     }
 }
 
-/// Storage and per-file reference counting shared by the two scripted-name
-/// indexes. Each public index owns a separate instance of this storage.
+/// Scripted-loc names (`defined_text = { name = X }`) or scripted-GUI callback names read
+/// off the files in their folder. The HOI4 config types `scripted_loc` under Stellaris's
+/// folder, so every use read as an unknown command (#348). Lowercased and refcounted per
+/// file, like [`VarIndex`]. [`TypeIndex`] keeps a separate instance per namespace.
 #[derive(Debug, Clone, Default)]
-struct ScriptedNameIndex {
+pub struct ScriptedNameIndex {
     names: FxHashMap<Arc<str>, usize>,
     per_file: FxHashMap<Arc<str>, Vec<Arc<str>>>,
     vanilla_names: FxHashSet<Arc<str>>,
 }
 
 impl ScriptedNameIndex {
-    fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
+    pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
         self.remove_file(file_uri);
         if names.is_empty() {
             return;
@@ -458,7 +460,7 @@ impl ScriptedNameIndex {
         self.per_file.insert(Arc::from(file_uri), flat);
     }
 
-    fn remove_file(&mut self, file_uri: &str) {
+    pub fn remove_file(&mut self, file_uri: &str) {
         let Some(flat) = self.per_file.remove(file_uri) else {
             return;
         };
@@ -467,7 +469,7 @@ impl ScriptedNameIndex {
         }
     }
 
-    fn set_vanilla_names(&mut self, names: &[String]) {
+    pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names = names
             .iter()
             .filter(|n| !n.is_empty())
@@ -475,64 +477,19 @@ impl ScriptedNameIndex {
             .collect();
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.names.is_empty() && self.vanilla_names.is_empty()
     }
 
-    fn contains(&self, name: &str) -> bool {
+    pub fn contains(&self, name: &str) -> bool {
         let lower = name.to_ascii_lowercase();
         self.names.contains_key(lower.as_str()) || self.vanilla_names.contains(lower.as_str())
     }
 
-    fn names(&self) -> impl Iterator<Item = &str> {
+    pub fn names(&self) -> impl Iterator<Item = &str> {
         self.names.keys().map(Arc::as_ref)
     }
 }
-
-// Preserve the public types and method signatures; their contents must remain
-// independent so that GUI callbacks cannot satisfy scripted-localisation names.
-macro_rules! scripted_name_index {
-    ($name:ident, $doc:literal) => {
-        #[doc = $doc]
-        #[derive(Debug, Clone, Default)]
-        pub struct $name(ScriptedNameIndex);
-
-        impl $name {
-            pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
-                self.0.merge_file(file_uri, names);
-            }
-
-            pub fn remove_file(&mut self, file_uri: &str) {
-                self.0.remove_file(file_uri);
-            }
-
-            pub fn set_vanilla_names(&mut self, names: &[String]) {
-                self.0.set_vanilla_names(names);
-            }
-
-            pub fn is_empty(&self) -> bool {
-                self.0.is_empty()
-            }
-
-            pub fn contains(&self, name: &str) -> bool {
-                self.0.contains(name)
-            }
-
-            pub fn names(&self) -> impl Iterator<Item = &str> {
-                self.0.names()
-            }
-        }
-    };
-}
-
-scripted_name_index!(
-    ScriptedLocIndex,
-    "Per-file scripted localisation name index."
-);
-scripted_name_index!(
-    ScriptedGuiIndex,
-    "Per-file scripted GUI callback name index."
-);
 
 #[derive(Debug, Default, Clone)]
 struct NameRefs {
@@ -610,8 +567,8 @@ pub struct TypeIndex {
     derived: DerivedIndex,
     pub file_index: FileIndex,
     pub var_index: VarIndex,
-    pub scripted_loc_index: ScriptedLocIndex,
-    pub scripted_gui_index: ScriptedGuiIndex,
+    pub scripted_loc_index: ScriptedNameIndex,
+    pub scripted_gui_index: ScriptedNameIndex,
     pub complete: bool,
     pub complex_enum_values: dynamic_values::NamedValueIndex,
     pub value_set_values: dynamic_values::NamedValueIndex,
@@ -1952,32 +1909,21 @@ mod tests {
         );
     }
 
-    // ── ScriptedLocIndex (#348) ───────────────────────────────────────────────
+    // ── ScriptedNameIndex (#348) ──────────────────────────────────────────────
 
     #[test]
-    fn scripted_loc_and_gui_namespaces_remain_independent() {
-        let mut loc = ScriptedLocIndex::default();
-        let mut gui = ScriptedGuiIndex::default();
-        loc.merge_file("a.txt", vec!["OnlyLoc".into(), "Shared".into()]);
-        gui.merge_file("a.txt", vec!["OnlyGui".into(), "Shared".into()]);
-        gui.merge_file("b.txt", vec!["shared".into()]);
-        gui.set_vanilla_names(&["BaseGui".into()]);
-        assert!(!loc.contains("OnlyGui"));
-        assert!(!gui.contains("OnlyLoc"));
-        assert!(!loc.contains("BaseGui"));
-        gui.remove_file("a.txt");
-        assert!(gui.contains("SHARED"));
-        gui.remove_file("b.txt");
-        assert!(!gui.contains("shared"));
-        assert!(loc.contains("shared"));
-        gui.set_vanilla_names(&["Replacement".into()]);
-        assert!(!gui.contains("BaseGui"));
-        assert!(gui.contains("replacement"));
-        assert_eq!(gui.names().count(), 0);
+    fn scripted_loc_and_gui_names_stay_separate() {
+        let mut idx = TypeIndex::new();
+        idx.scripted_loc_index
+            .merge_file("a.txt", vec!["OnlyLoc".into()]);
+        idx.scripted_gui_index
+            .merge_file("a.txt", vec!["OnlyGui".into()]);
+        assert!(!idx.scripted_loc_index.contains("OnlyGui"));
+        assert!(!idx.scripted_gui_index.contains("OnlyLoc"));
     }
 
-    fn scripted_loc_index_with(file: &str, names: &[&str]) -> ScriptedLocIndex {
-        let mut idx = ScriptedLocIndex::default();
+    fn scripted_loc_index_with(file: &str, names: &[&str]) -> ScriptedNameIndex {
+        let mut idx = ScriptedNameIndex::default();
         idx.merge_file(file, names.iter().map(|s| s.to_string()).collect());
         idx
     }
@@ -1992,7 +1938,7 @@ mod tests {
 
     #[test]
     fn scripted_loc_empty_until_a_name_lands() {
-        let mut idx = ScriptedLocIndex::default();
+        let mut idx = ScriptedNameIndex::default();
         assert!(idx.is_empty(), "no names means the check has no data");
         idx.merge_file("a.txt", vec!["Foo".into()]);
         assert!(!idx.is_empty());
@@ -2028,7 +1974,7 @@ mod tests {
 
     #[test]
     fn scripted_loc_vanilla_remerge_replaces_not_accumulates() {
-        let mut idx = ScriptedLocIndex::default();
+        let mut idx = ScriptedNameIndex::default();
         idx.set_vanilla_names(&["First".into()]);
         idx.set_vanilla_names(&["Second".into()]);
         assert!(!idx.contains("First"));
@@ -2057,7 +2003,7 @@ mod tests {
 
     #[test]
     fn scripted_gui_lookup_is_case_insensitive() {
-        let mut idx = ScriptedGuiIndex::default();
+        let mut idx = ScriptedNameIndex::default();
         idx.merge_file("a.txt", vec!["Topbar_Icon_Click".into()]);
         assert!(idx.contains("topbar_icon_click"));
         assert!(idx.contains("TOPBAR_ICON_CLICK"));
@@ -2065,7 +2011,7 @@ mod tests {
 
     #[test]
     fn scripted_gui_reindex_and_removal_are_per_file() {
-        let mut idx = ScriptedGuiIndex::default();
+        let mut idx = ScriptedNameIndex::default();
         idx.merge_file("a.txt", vec!["Old".into(), "Shared".into()]);
         idx.merge_file("b.txt", vec!["Shared".into()]);
         idx.merge_file("a.txt", vec!["New".into()]);
@@ -2078,7 +2024,7 @@ mod tests {
 
     #[test]
     fn scripted_gui_vanilla_survives_workspace_removal() {
-        let mut idx = ScriptedGuiIndex::default();
+        let mut idx = ScriptedNameIndex::default();
         idx.merge_file("a.txt", vec!["Shared".into()]);
         idx.set_vanilla_names(&["Shared".into(), "VanillaOnly".into()]);
         idx.remove_file("a.txt");
