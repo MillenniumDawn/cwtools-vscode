@@ -96,7 +96,12 @@ fn parent_localisation_paths(
     }
     Ok(
         cwtools_driver::discover_parent_localisation_files_with_budget(
-            parent_roots, root_path, primary, ignore_files, ignore_dirs, budget,
+            parent_roots,
+            root_path,
+            primary,
+            ignore_files,
+            ignore_dirs,
+            budget,
         )?
         .into_iter()
         .map(|file| file.path)
@@ -175,11 +180,19 @@ impl Backend {
             )
         };
         let primary = localisation_files(
-            &[root_path.to_path_buf()], &ignore_files, &ignore_dirs,
-            cwtools_driver::DiscoveryPolicy::Workspace, budget,
+            &[root_path.to_path_buf()],
+            &ignore_files,
+            &ignore_dirs,
+            cwtools_driver::DiscoveryPolicy::Workspace,
+            budget,
         )?;
         let parent_paths = parent_localisation_paths(
-            &parent_roots, root_path, &primary, &ignore_files, &ignore_dirs, budget,
+            &parent_roots,
+            root_path,
+            &primary,
+            &ignore_files,
+            &ignore_dirs,
+            budget,
         )?;
         Ok(LocDiscovery {
             workspace_paths: primary.into_iter().map(|file| file.path).collect(),
@@ -190,9 +203,12 @@ impl Backend {
 
     #[cfg(test)]
     pub(crate) fn compute_loc_signature(
-        &self, root_path: &std::path::Path,
+        &self,
+        root_path: &std::path::Path,
     ) -> Result<u64, FileError> {
-        Ok(self.discover_loc(root_path, ScanBudget::default())?.signature())
+        Ok(self
+            .discover_loc(root_path, ScanBudget::default())?
+            .signature())
     }
 
     /// The parent mods' loc, layered under the workspace and over the base
@@ -320,11 +336,13 @@ impl Backend {
                 self.warn_incomplete(
                     "localisation discovery",
                     &format!("{error}; keeping the previous localisation index and diagnostics"),
-                ).await;
+                )
+                .await;
                 return false;
             }
         };
-        self.rebuild_and_publish_discovered_loc(&discovery, budget).await
+        self.rebuild_and_publish_discovered_loc(&discovery, budget)
+            .await
     }
 
     #[tracing::instrument(skip_all)]
@@ -392,7 +410,8 @@ impl Backend {
                 }
             };
             let service = cwtools_localization::LocService::from_paths(
-                discovery.workspace_paths
+                discovery
+                    .workspace_paths
                     .iter()
                     .cloned()
                     .filter(|path| !baseline_files.contains(path))
@@ -620,11 +639,21 @@ mod tests {
         let backend = test_backend();
         backend.state.config.write().parent_roots = vec![parent.path().to_path_buf()];
         assert!(matches!(
-            backend.discover_loc(primary.path(), ScanBudget { max_files: 1, ..Default::default() }),
+            backend.discover_loc(
+                primary.path(),
+                ScanBudget {
+                    max_files: 1,
+                    ..Default::default()
+                }
+            ),
             Err(FileError::FileCountBudget(_))
         ));
         backend.state.config.write().parent_roots = vec![parent.path().join("missing")];
-        assert!(backend.discover_loc(primary.path(), ScanBudget::default()).is_err());
+        assert!(
+            backend
+                .discover_loc(primary.path(), ScanBudget::default())
+                .is_err()
+        );
     }
 
     #[test]
@@ -729,13 +758,19 @@ mod tests {
             config.workspace_roots = vec![primary.path().to_path_buf()];
             config.parent_roots = vec![parent.path().to_path_buf()];
         }
-        let discovery = backend.discover_loc(primary.path(), ScanBudget::default()).unwrap();
+        let discovery = backend
+            .discover_loc(primary.path(), ScanBudget::default())
+            .unwrap();
         let signature = discovery.signature();
         // New paths after discovery are not read in this scan. The next scan will
         // see them; the current rebuild must use the same set as its signature.
         write_loc(primary.path(), "late", "late_workspace_key");
         write_loc(parent.path(), "late_parent", "late_parent_key");
-        assert!(backend.rebuild_and_publish_discovered_loc(&discovery, ScanBudget::default()).await);
+        assert!(
+            backend
+                .rebuild_and_publish_discovered_loc(&discovery, ScanBudget::default())
+                .await
+        );
         let index = backend.state.loc_index.read();
         let keys = index.as_ref().unwrap().union();
         assert!(keys.contains("workspace_key"));
@@ -743,7 +778,13 @@ mod tests {
         assert!(!keys.contains("late_workspace_key"));
         assert!(!keys.contains("late_parent_key"));
         drop(index);
-        assert_ne!(signature, backend.discover_loc(primary.path(), ScanBudget::default()).unwrap().signature());
+        assert_ne!(
+            signature,
+            backend
+                .discover_loc(primary.path(), ScanBudget::default())
+                .unwrap()
+                .signature()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

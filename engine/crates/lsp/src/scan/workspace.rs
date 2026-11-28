@@ -561,23 +561,25 @@ impl Backend {
                 }
             }
         };
-        let (loc_discovery, loc_signature) =
-            match tokio::task::block_in_place(|| {
-                self.discover_loc(&root_path, cwtools_file_manager::file_manager::ScanBudget::default())
-                    .map(|discovery| {
-                        let signature = discovery.signature();
-                        (discovery, signature)
-                    })
-            }) {
-                Ok((discovery, signature)) => (Some(discovery), Some(signature)),
-                Err(error) => {
-                    // A partial discovery may not replace the last good localisation index.
-                    loc_incomplete = true;
-                    self.warn_incomplete("localisation discovery", &error.to_string())
-                        .await;
-                    (None, None)
-                }
-            };
+        let (loc_discovery, loc_signature) = match tokio::task::block_in_place(|| {
+            self.discover_loc(
+                &root_path,
+                cwtools_file_manager::file_manager::ScanBudget::default(),
+            )
+            .map(|discovery| {
+                let signature = discovery.signature();
+                (discovery, signature)
+            })
+        }) {
+            Ok((discovery, signature)) => (Some(discovery), Some(signature)),
+            Err(error) => {
+                // A partial discovery may not replace the last good localisation index.
+                loc_incomplete = true;
+                self.warn_incomplete("localisation discovery", &error.to_string())
+                    .await;
+                (None, None)
+            }
+        };
         let files_to_validate: Vec<std::path::PathBuf> =
             primary_files.into_iter().map(|f| f.path).collect();
         let primary_len = files_to_validate.len();
@@ -1056,7 +1058,13 @@ impl Backend {
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
         } else if let Some(discovery) = &loc_discovery {
-            if !self.rebuild_and_publish_discovered_loc(discovery, cwtools_file_manager::file_manager::ScanBudget::default()).await {
+            if !self
+                .rebuild_and_publish_discovered_loc(
+                    discovery,
+                    cwtools_file_manager::file_manager::ScanBudget::default(),
+                )
+                .await
+            {
                 // The rebuild keeps the previous localisation index and diagnostics.
                 loc_incomplete = true;
             }
