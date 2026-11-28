@@ -389,31 +389,45 @@ mod tests {
         ];
         // Positive/negative filters are case-insensitive; ties keep the first.
         assert_eq!(
-            find_type_from_candidates(&candidates, Some("ALLOWED")).unwrap().name,
+            find_type_from_candidates(&candidates, Some("ALLOWED"))
+                .unwrap()
+                .name,
             "positive"
         );
         assert_eq!(
-            find_type_from_candidates(&candidates, Some("blocked")).unwrap().name,
+            find_type_from_candidates(&candidates, Some("blocked"))
+                .unwrap()
+                .name,
             "generic"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &positive, &tied, &negative], "ALLOWED").unwrap().name,
+            find_grandchild_type(&[&generic, &positive, &tied, &negative], "ALLOWED")
+                .unwrap()
+                .name,
             "positive"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &positive, &negative], "blocked").unwrap().name,
+            find_grandchild_type(&[&generic, &positive, &negative], "blocked")
+                .unwrap()
+                .name,
             "generic"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &negative], "allow_other").unwrap().name,
+            find_grandchild_type(&[&generic, &negative], "allow_other")
+                .unwrap()
+                .name,
             "negative"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &negative], "allowed").unwrap().name,
+            find_grandchild_type(&[&generic, &negative], "allowed")
+                .unwrap()
+                .name,
             "generic"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &negative], "other").unwrap().name,
+            find_grandchild_type(&[&generic, &negative], "other")
+                .unwrap()
+                .name,
             "generic"
         );
 
@@ -432,15 +446,21 @@ mod tests {
         ];
         // A wrapper root must not be excluded by its child-only filter.
         assert_eq!(
-            find_type_from_candidates(&wrappers, Some("wrapper")).unwrap().name,
+            find_type_from_candidates(&wrappers, Some("wrapper"))
+                .unwrap()
+                .name,
             "wrapper"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &wrapper], "child").unwrap().name,
+            find_grandchild_type(&[&generic, &wrapper], "child")
+                .unwrap()
+                .name,
             "wrapper"
         );
         assert_eq!(
-            find_grandchild_type(&[&generic, &wrapper], "other").unwrap().name,
+            find_grandchild_type(&[&generic, &wrapper], "other")
+                .unwrap()
+                .name,
             "generic"
         );
     }
