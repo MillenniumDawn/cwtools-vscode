@@ -2088,6 +2088,9 @@ fn discover_parent_script_files_inner(
     ignore_dirs: &[String],
     status: &mut ParentDiscoveryStatus,
 ) -> Vec<DiscoveredFile> {
+    if parent_roots.is_empty() {
+        return Vec::new();
+    }
     let primary: Vec<&str> = primary_files
         .iter()
         .map(|file| file.logical_path.as_str())
@@ -2154,6 +2157,9 @@ fn discover_parent_localisation_files_inner(
     ignore_dirs: &[String],
     status: &mut ParentDiscoveryStatus,
 ) -> Vec<DiscoveredPath> {
+    if parent_roots.is_empty() {
+        return Vec::new();
+    }
     let primary: Vec<&str> = primary_files
         .iter()
         .map(|file| file.root_relative_path.as_str())

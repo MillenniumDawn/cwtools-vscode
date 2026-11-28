@@ -5358,6 +5358,37 @@ mod ignored_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn clean_loc_rebuild_clears_diagnostics_without_a_suppression_reread() {
+        let workspace = tempfile::tempdir().unwrap();
+        let loc_dir = workspace.path().join("localisation");
+        std::fs::create_dir(&loc_dir).unwrap();
+        let path = loc_dir.join("test_l_english.yml");
+        let (backend, mut socket) =
+            handshaken_backend_with_workspace(&crate::paths::path_to_uri(workspace.path())).await;
+
+        for bom in ["", "\u{feff}"] {
+            std::fs::write(&path, format!("{bom}l_english:\n key:0 \"Hello\"\n")).unwrap();
+            assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
+            let message = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(message.method(), "textDocument/publishDiagnostics");
+            let published: PublishDiagnosticsParams =
+                serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+            assert_eq!(published.uri.as_str(), crate::paths::path_to_uri(&path));
+            if bom.is_empty() {
+                assert!(published.diagnostics.iter().any(|d| matches!(
+                    &d.code, Some(NumberOrString::String(code)) if code == "CW254"
+                )));
+            } else {
+                assert!(published.diagnostics.is_empty());
+            }
+            assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn loc_rebuild_skips_a_file_opened_while_it_publishes() {
         let workspace = tempfile::tempdir().unwrap();
         let loc_dir = workspace.path().join("localisation");

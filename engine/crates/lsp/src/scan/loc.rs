@@ -521,22 +521,20 @@ impl Backend {
                 continue;
             }
             if let Ok(uri_obj) = Url::parse(&uri) {
-                let file_path = std::path::PathBuf::from(&file);
-                let inline_ignored = tokio::task::spawn_blocking(move || {
-                    cwtools_file_manager::file_manager::read_text_capped(
-                        &file_path,
-                        crate::access::MAX_URI_READ_BYTES,
-                    )
-                    .ok()
-                    .map(|(text, _)| {
-                        cwtools_validation::inline_ignore::extract_inline_ignored_codes(&text)
+                if !diags.is_empty() {
+                    let file_path = std::path::PathBuf::from(&file);
+                    let backend = self.clone();
+                    let inline_ignored = tokio::task::spawn_blocking(move || {
+                        backend.read_scan_source(&file_path).ok().map(|(text, _)| {
+                            cwtools_validation::inline_ignore::extract_inline_ignored_codes(&text)
+                        })
                     })
-                })
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-                crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                    crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
+                }
                 self.publish_if_closed(uri_obj, diags, source_hashes.get(&file).copied())
                     .await;
             }
