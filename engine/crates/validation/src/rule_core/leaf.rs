@@ -817,8 +817,18 @@ mod tests {
                 &table,
                 &ruleset
             ));
-            assert!(field_matches_value(field, &Value::Int(42), &table, &ruleset));
-            assert!(!field_matches_value(field, &Value::Bool(true), &table, &ruleset));
+            assert!(field_matches_value(
+                field,
+                &Value::Int(42),
+                &table,
+                &ruleset
+            ));
+            assert!(!field_matches_value(
+                field,
+                &Value::Bool(true),
+                &table,
+                &ruleset
+            ));
             assert!(!field_matches_value(field, &clause(), &table, &ruleset));
         }
     }
