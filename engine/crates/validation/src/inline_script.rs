@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use cwtools_parser::ast::{Arena, Child, Leaf, LeafValue, ParsedFile, Value};
 use cwtools_string_table::string_table::StringTable;
@@ -17,11 +18,16 @@ pub struct InlineScripts {
 
 struct InlineScript {
     logical_path: String,
-    ast: ParsedFile,
+    ast: Arc<ParsedFile>,
 }
 
 impl InlineScripts {
     pub fn insert(&mut self, logical_path: &str, ast: ParsedFile) -> Option<String> {
+        self.insert_shared(logical_path, Arc::new(ast))
+    }
+
+    /// Share an already indexed tree with a caller that still validates it.
+    pub fn insert_shared(&mut self, logical_path: &str, ast: Arc<ParsedFile>) -> Option<String> {
         let name = script_name(logical_path)?;
         self.scripts.insert(
             name.clone(),
@@ -340,6 +346,36 @@ mod tests {
             substitute("$A$_$B$", &args(&[("A", "x")])).as_deref(),
             Some("x_$B$")
         );
+    }
+
+    #[test]
+    fn shared_index_tree_expands_like_an_owned_tree() {
+        let table = StringTable::new();
+        let tree = Arc::new(parse_string("$WHICH$ = $HOW_MUCH$", &table));
+        let mut scripts = InlineScripts::default();
+        scripts.insert_shared("common/inline_scripts/bonus.txt", Arc::clone(&tree));
+        drop(tree); // The registry must keep the tree and overlay alive itself.
+        let (parsed, idx) = call_leaf(
+            "inline_script = { script = bonus WHICH = air_bonus HOW_MUCH = 5 }",
+            &table,
+        );
+        let expanded = expand(
+            &parsed.arena.leaves[idx as usize],
+            &parsed.arena,
+            &table,
+            &scripts,
+            &[],
+        )
+        .expect("shared tree expands");
+        let Child::Leaf(body_idx) = expanded.ast.root_children[0] else {
+            panic!("expected leaf");
+        };
+        let body = &expanded.ast.arena.leaves[body_idx as usize];
+        assert_eq!(
+            table.get_string(body.key.normal).as_deref(),
+            Some("air_bonus")
+        );
+        assert_eq!(leaf_value_to_string(&body.value, &table), "5");
     }
 
     #[test]
