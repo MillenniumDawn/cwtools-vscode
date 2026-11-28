@@ -165,6 +165,7 @@ struct ParseOutcome {
     cache_hit: bool,
     parsed: cwtools_parser::ast::ParsedFile,
     source_hash: Option<u64>,
+    source_key: Option<workspace_cache::SourceCacheKey>,
     inline_ignored: InlineIgnoreMap,
     /// An ignore pattern matches the file, so its index entry is cleared.
     ignored: bool,
@@ -561,17 +562,25 @@ impl Backend {
                 }
             }
         };
-        let loc_signature =
-            match tokio::task::block_in_place(|| self.compute_loc_signature(&root_path)) {
-                Ok(signature) => Some(signature),
-                Err(error) => {
-                    // No signature means this pass cannot match, or become, a quiet-scan baseline.
-                    loc_incomplete = true;
-                    self.warn_incomplete("localisation discovery", &error.to_string())
-                        .await;
-                    None
-                }
-            };
+        let (loc_discovery, loc_signature) = match tokio::task::block_in_place(|| {
+            self.discover_loc(
+                &root_path,
+                cwtools_file_manager::file_manager::ScanBudget::default(),
+            )
+            .map(|discovery| {
+                let signature = discovery.signature();
+                (discovery, signature)
+            })
+        }) {
+            Ok((discovery, signature)) => (Some(discovery), Some(signature)),
+            Err(error) => {
+                // A partial discovery may not replace the last good localisation index.
+                loc_incomplete = true;
+                self.warn_incomplete("localisation discovery", &error.to_string())
+                    .await;
+                (None, None)
+            }
+        };
         let files_to_validate: Vec<std::path::PathBuf> =
             primary_files.into_iter().map(|f| f.path).collect();
         let primary_len = files_to_validate.len();
@@ -678,6 +687,7 @@ impl Backend {
             cwtools_parser::ast::ParsedFile,
             Option<u64>,
             InlineIgnoreMap,
+            Option<workspace_cache::SourceCacheKey>,
         );
         // Nothing inside the parallel pass may take a `Backend` lock: the locks
         // are fair, so a queued writer would stall every worker that reads.
@@ -692,7 +702,8 @@ impl Backend {
             .map(|(path, _)| path)
             .collect();
         let finish =
-            |file: &ScannedFile, (cache_hit, parsed, source_hash, inline_ignored): LoadedFile| {
+            |file: &ScannedFile,
+             (cache_hit, parsed, source_hash, inline_ignored, source_key): LoadedFile| {
                 let logical_path = scan_logical_path(file, &workspace_prefix);
                 let ignored = baseline_files.contains(&file.path)
                     || cwtools_file_manager::file_manager::is_ignored_path(
@@ -715,6 +726,7 @@ impl Backend {
                     cache_hit,
                     parsed,
                     source_hash,
+                    source_key,
                     inline_ignored,
                     ignored,
                     collected,
@@ -794,6 +806,7 @@ impl Backend {
                                 parsed,
                                 Some(source.content_hash),
                                 source.inline_ignored,
+                                source_key.clone(),
                             ),
                         );
                     }
@@ -831,6 +844,7 @@ impl Backend {
                                 parsed,
                                 Some(cwtools_cache::workspace::content_hash(&text)),
                                 extract_inline_ignored_codes(&text),
+                                None,
                             ),
                         );
                     }
@@ -867,6 +881,7 @@ impl Backend {
                             parsed,
                             Some(source.content_hash),
                             source.inline_ignored,
+                            source_key,
                         ),
                     )
                 })
@@ -882,9 +897,10 @@ impl Backend {
             workspace_cache::prune(cache_dir, *fingerprint);
         }
 
-        let mut parsed_files: Vec<Option<cwtools_parser::ast::ParsedFile>> =
+        let mut parsed_files: Vec<Option<Arc<cwtools_parser::ast::ParsedFile>>> =
             Vec::with_capacity(scan_files.len());
         let mut source_hashes: Vec<Option<u64>> = Vec::with_capacity(scan_files.len());
+        let mut source_keys = Vec::with_capacity(scan_files.len());
         let mut inline_ignores: Vec<InlineIgnoreMap> = Vec::with_capacity(scan_files.len());
         for (i, (file, outcome)) in scan_files.iter().zip(outcomes).enumerate() {
             let parsed = match outcome {
@@ -892,6 +908,7 @@ impl Backend {
                     cache_hit,
                     parsed,
                     source_hash,
+                    source_key,
                     inline_ignored,
                     ignored,
                     collected,
@@ -911,11 +928,13 @@ impl Backend {
                         cache_misses += 1;
                     }
                     source_hashes.push(source_hash);
+                    source_keys.push(source_key);
                     inline_ignores.push(inline_ignored);
-                    Some(parsed)
+                    Some(Arc::new(parsed))
                 }
                 None => {
                     source_hashes.push(None);
+                    source_keys.push(None);
                     inline_ignores.push(InlineIgnoreMap::new());
                     None
                 }
@@ -1049,7 +1068,14 @@ impl Backend {
             loc_signature.is_some() && *self.state.last_loc_signature.lock() == loc_signature;
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
-        } else if !self.rebuild_and_publish_loc(&root_path).await {
+        } else if let Some(discovery) = &loc_discovery
+            && !self
+                .rebuild_and_publish_discovered_loc(
+                    discovery,
+                    cwtools_file_manager::file_manager::ScanBudget::default(),
+                )
+                .await
+        {
             // The rebuild keeps the previous localisation index and diagnostics.
             loc_incomplete = true;
         }
@@ -1064,7 +1090,13 @@ impl Backend {
             None
         } else {
             Some(tokio::task::block_in_place(|| {
-                self.rebuild_inline_scripts(&scan_files, cache_info.as_ref())
+                self.rebuild_inline_scripts(
+                    &scan_files,
+                    &parsed_files,
+                    &source_keys,
+                    &source_hashes,
+                    cache_info.as_ref(),
+                )
             }))
         };
 
@@ -1165,7 +1197,7 @@ impl Backend {
             &cancel,
             ChunkMapper {
                 map: |file: &ScannedFile,
-                      parsed_opt: &Option<cwtools_parser::ast::ParsedFile>,
+                      parsed_opt: &Option<Arc<cwtools_parser::ast::ParsedFile>>,
                       source_hash: &Option<u64>,
                       inline_ignored: &InlineIgnoreMap| {
                     #[cfg(test)]
@@ -1479,17 +1511,28 @@ impl Backend {
         true
     }
 
-    /// Read and parse every `common/inline_scripts` file this scan discovered into a fresh
-    /// registry (#259). An open script's live buffer is read, and a closed one comes from the
-    /// parse cache by metadata key (#867). Synchronous: call inside `block_in_place`.
+    /// Build a fresh inline registry. Open buffers take precedence; otherwise share the
+    /// indexed tree while its metadata still matches, falling back to a fresh load if not.
+    /// Synchronous: call inside `block_in_place`.
     fn rebuild_inline_scripts(
         &self,
         scan_files: &[ScannedFile],
+        parsed_files: &[Option<Arc<cwtools_parser::ast::ParsedFile>>],
+        source_keys: &[Option<workspace_cache::SourceCacheKey>],
+        source_hashes: &[Option<u64>],
         cache: Option<&(std::path::PathBuf, u64)>,
     ) -> cwtools_validation::InlineScripts {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let mut registry = cwtools_validation::InlineScripts::default();
-        for file in scan_files {
+        assert_eq!(scan_files.len(), parsed_files.len());
+        assert_eq!(scan_files.len(), source_keys.len());
+        assert_eq!(scan_files.len(), source_hashes.len());
+        for (((file, indexed), source_key), source_hash) in scan_files
+            .iter()
+            .zip(parsed_files)
+            .zip(source_keys)
+            .zip(source_hashes)
+        {
             let logical_path = match &file.parent_logical_path {
                 Some(logical) => logical.clone(),
                 None => logical_path_from_uri(&file.uri, &ws_prefix),
@@ -1503,6 +1546,35 @@ impl Backend {
                 .lock()
                 .get(&file.uri)
                 .map(|doc| doc.text.to_string());
+            if open_text.is_none()
+                && let (Some(parsed), Some(expected)) = (indexed, source_key)
+                && workspace_cache::source_cache_key(&file.path).as_ref() == Some(expected)
+            {
+                registry.insert_shared(&logical_path, Arc::clone(parsed));
+                continue;
+            }
+            // Metadata is unavailable or changed. Compare bounded source text to the
+            // content captured by the index pass before using its tree. This retains
+            // the stronger content check on platforms without trusted metadata keys.
+            if open_text.is_none()
+                && let (Some(indexed), Some(hash)) = (indexed, source_hash)
+            {
+                match self.read_scan_source(&file.path) {
+                    Ok((text, _)) if workspace_cache::content_hash(&text) == *hash => {
+                        registry.insert_shared(&logical_path, Arc::clone(indexed));
+                    }
+                    Ok((text, _)) => {
+                        registry.insert(
+                            &logical_path,
+                            parse_string_without_comments(&text, &self.state.string_table),
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(path = %file.path.display(), error = %error, "scan: skipping unreadable inline script")
+                    }
+                }
+                continue;
+            }
             let parsed = match open_text {
                 Some(text) => parse_string_without_comments(&text, &self.state.string_table),
                 None => match cache.and_then(|(dir, fingerprint)| {
@@ -2920,6 +2992,85 @@ mod tests {
             + summary.total_hints;
         let reads = backend.state.scan_source_reads.load(Ordering::Relaxed);
         (reported, summary.validated_files, reads)
+    }
+
+    #[test]
+    fn inline_registry_shares_current_tree_but_reloads_changed_files() {
+        if !workspace_cache::PATH_METADATA_CACHE_SUPPORTED {
+            return; // Other platforms intentionally use the content-safe fallback.
+        }
+        let (backend, tmp) = setup_workspace(None);
+        let dir = tmp.path().join("common/inline_scripts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("reuse.txt");
+        std::fs::write(&path, "first = { }\n").unwrap();
+        let file = ScannedFile {
+            uri: path_to_uri(&path),
+            path: path.clone(),
+            parent_logical_path: Some("common/inline_scripts/reuse.txt".into()),
+        };
+        let key = workspace_cache::source_cache_key(&path).unwrap();
+        let tree = Arc::new(parse_string_without_comments(
+            "first = { }\n",
+            &backend.state.string_table,
+        ));
+        let files = vec![file];
+        let indexed = vec![Some(Arc::clone(&tree))];
+        let keys = vec![Some(key)];
+        let hashes = vec![Some(workspace_cache::content_hash("first = { }\n"))];
+        let before = backend.state.scan_source_reads.load(Ordering::Relaxed);
+        let registry = backend.rebuild_inline_scripts(&files, &indexed, &keys, &hashes, None);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(
+            Arc::strong_count(&tree),
+            3,
+            "registry holds the indexed tree"
+        );
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before
+        );
+        drop(registry);
+
+        // Platforms without trustworthy metadata must read for a content hash,
+        // but can still reuse the indexed tree without a second parse or decode.
+        let registry = backend.rebuild_inline_scripts(&files, &indexed, &[None], &hashes, None);
+        assert_eq!(Arc::strong_count(&tree), 3);
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before + 1
+        );
+        drop(registry);
+
+        std::fs::write(&path, "different_key = { yes = yes }\n").unwrap();
+        let registry = backend.rebuild_inline_scripts(&files, &indexed, &keys, &hashes, None);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(
+            Arc::strong_count(&tree),
+            2,
+            "stale indexed tree was not reused"
+        );
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before + 2
+        );
+        drop(registry);
+
+        // Even a still-current indexed tree must not override a live editor buffer.
+        let current_key = workspace_cache::source_cache_key(&path).unwrap();
+        crate::testing::open_document(&backend, &files[0].uri, "open_buffer = { }\n");
+        let registry =
+            backend.rebuild_inline_scripts(&files, &indexed, &[Some(current_key)], &hashes, None);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(
+            Arc::strong_count(&tree),
+            2,
+            "open buffer wins over indexed tree"
+        );
+        assert_eq!(
+            backend.state.scan_source_reads.load(Ordering::Relaxed),
+            before + 2
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
