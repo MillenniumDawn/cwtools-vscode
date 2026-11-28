@@ -5419,14 +5419,15 @@ mod ignored_tests {
                     &d.code, Some(NumberOrString::String(code)) if code == "CW268"
                 ) && !crate::code_action::fixable_span_edits(d).is_empty())
         );
-        let fixes = backend.state.fixable_edits.lock();
-        let snapshot = fixes.get(&uri).expect("fixable diagnostic retained");
-        assert_eq!(
-            snapshot.content_hash,
-            Some(cwtools_cache::workspace::content_hash(original))
-        );
-        assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), 0);
-        drop(fixes);
+        {
+            let fixes = backend.state.fixable_edits.lock();
+            let snapshot = fixes.get(&uri).expect("fixable diagnostic retained");
+            assert_eq!(
+                snapshot.content_hash,
+                Some(cwtools_cache::workspace::content_hash(original))
+            );
+            assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), 0);
+        }
         // The existing edit-time hash guard must reject this different disk text.
         std::fs::write(&path, "changed after scan").unwrap();
         let summary = backend.fix_all_workspace_impl().await;
