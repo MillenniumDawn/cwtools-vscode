@@ -1,26 +1,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// A Millennium-Dawn checkout: `CWTOOLS_CORPUS`, else under `CWTOOLS_PROJECTS`,
-/// else beside this repo.
-fn corpus_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_CORPUS") {
-        return Some(PathBuf::from(dir));
-    }
-    let projects = match std::env::var("CWTOOLS_PROJECTS") {
-        Ok(dir) => PathBuf::from(dir),
-        // From crates/cli, the repo root is ../../.., and siblings sit next to it.
-        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../..")
-            .canonicalize()
-            .ok()?,
-    };
-    let dir = projects.join("Millennium-Dawn");
-    dir.is_dir().then_some(dir)
-}
-
 fn main() {
-    let Some(md) = corpus_dir() else {
+    let Some(md) = cwtools_test_support::checkout("CWTOOLS_CORPUS", "Millennium-Dawn") else {
         eprintln!(
             "md_bench: no corpus. Set CWTOOLS_CORPUS to a Millennium-Dawn checkout (or \
              CWTOOLS_PROJECTS to the folder holding it)"

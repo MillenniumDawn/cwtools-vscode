@@ -692,17 +692,12 @@ impl Session {
                 .scripted_gui_index
                 .merge_file(&file_uri, scripted_guis);
         }
-        let mut source_files: Vec<SourceFile> = parsed
-            .into_iter()
-            .map(|src| SourceFile {
-                path: src.path,
-                logical_path: src.logical_path,
-                fingerprint: src.fingerprint,
-            })
-            .collect();
-        // Parents sit after the primary files; they supply inline scripts but
-        // are not validated.
-        let (inline_scripts, inline_incomplete) = load_inline_scripts(&source_files, &rules_table);
+        // The indexing parse is already the correct tree for closed inline
+        // scripts. Move only those trees into the registry; other ASTs are
+        // released immediately, preserving the batch driver's memory bound.
+        // Parents sit after primary files and also supply inline scripts.
+        let (mut source_files, inline_scripts, inline_incomplete) =
+            take_indexed_inline_scripts(parsed);
         discovery_incomplete |= inline_incomplete;
         source_files.truncate(primary_file_count);
 
@@ -1333,31 +1328,48 @@ fn read_source_snapshot(file: &SourceFile) -> Result<String, FileError> {
     Ok(text)
 }
 
-fn load_inline_scripts(files: &[SourceFile], table: &StringTable) -> (InlineScripts, bool) {
+/// Retain already-indexed inline trees after checking the source still matches
+/// the indexing snapshot. Metadata-less/content-cache sources use the existing
+/// bounded snapshot comparison rather than silently accepting stale content.
+fn take_indexed_inline_scripts(
+    files: Vec<ParsedFileSource>,
+) -> (Vec<SourceFile>, InlineScripts, bool) {
+    let mut sources = Vec::with_capacity(files.len());
     let mut scripts = InlineScripts::default();
     let mut incomplete = false;
-    for file in files
-        .iter()
-        .filter(|file| InlineScripts::is_script_path(&file.logical_path))
-    {
-        match read_source_snapshot(file) {
-            Ok(text) => {
-                scripts.insert(
-                    &file.logical_path,
-                    parse_string_without_comments(&text, table),
-                );
-            }
-            Err(error) => {
-                incomplete = true;
-                eprintln!(
-                    "warn: skipping inline script {}: {}",
-                    file.path.display(),
-                    error
-                );
+    for file in files {
+        let source = SourceFile {
+            path: file.path,
+            logical_path: file.logical_path,
+            fingerprint: file.fingerprint,
+        };
+        if InlineScripts::is_script_path(&source.logical_path) {
+            let unchanged = if source.fingerprint.metadata.is_some()
+                && source.fingerprint.content_hash.is_none()
+            {
+                (workspace_cache::source_cache_key(&source.path) == source.fingerprint.metadata)
+                    .then_some(())
+                    .ok_or_else(source_changed)
+            } else {
+                read_source_snapshot(&source).map(|_| ())
+            };
+            match unchanged {
+                Ok(()) => {
+                    scripts.insert(&source.logical_path, file.parsed);
+                }
+                Err(error) => {
+                    incomplete = true;
+                    eprintln!(
+                        "warn: skipping inline script {}: {}",
+                        source.path.display(),
+                        error
+                    );
+                }
             }
         }
+        sources.push(source);
     }
-    (scripts, incomplete)
+    (sources, scripts, incomplete)
 }
 
 fn parse_errors_to_validation(
@@ -2971,6 +2983,41 @@ mod tests {
     }
 
     #[test]
+    fn inline_registry_retains_only_successfully_indexed_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("inline.txt");
+        std::fs::write(&path, "one = yes\n").unwrap();
+        let table = StringTable::new();
+        let bytes = ScanBytes::new();
+        let incomplete = AtomicBool::new(false);
+        let budget = ParseReadBudget {
+            max_file_size: 1024,
+            max_scan_bytes: 1024,
+            bytes: &bytes,
+            incomplete: &incomplete,
+        };
+        let loaded = load_or_parse(
+            &path,
+            &table,
+            None,
+            ParseCacheUse::Full,
+            Some(&budget),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let (sources, registry, incomplete) = take_indexed_inline_scripts(vec![ParsedFileSource {
+            path,
+            logical_path: "common/inline_scripts/test.txt".into(),
+            parsed: loaded.parsed,
+            fingerprint: loaded.fingerprint,
+        }]);
+        assert!(!incomplete);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
     fn validation_and_inline_rereads_reject_a_grown_source() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("script.txt");
@@ -3011,7 +3058,12 @@ mod tests {
             )
             .is_err()
         );
-        let (_, inline_incomplete) = load_inline_scripts(&[file], &table);
+        let (_, _, inline_incomplete) = take_indexed_inline_scripts(vec![ParsedFileSource {
+            path: file.path,
+            logical_path: file.logical_path,
+            fingerprint: file.fingerprint,
+            parsed: loaded.parsed,
+        }]);
         assert!(
             inline_incomplete,
             "a changed inline script makes the run incomplete"
