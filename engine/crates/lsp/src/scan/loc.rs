@@ -409,16 +409,28 @@ impl Backend {
                     cached.loc_keys.clone()
                 }
             };
-            let service = cwtools_localization::LocService::from_paths(
-                discovery
-                    .workspace_paths
-                    .iter()
-                    .filter(|&path| !baseline_files.contains(path))
-                    .cloned()
-                    .collect(),
-                cwtools_file_manager::file_manager::ScanBudget::default(),
-                parsed_languages,
-            );
+            let (service, source_metadata) =
+                cwtools_localization::LocService::from_paths_with_source(
+                    discovery
+                        .workspace_paths
+                        .iter()
+                        .filter(|&path| !baseline_files.contains(path))
+                        .cloned()
+                        .collect(),
+                    cwtools_file_manager::file_manager::ScanBudget::default(),
+                    parsed_languages,
+                    |_, text, bytes| {
+                        // Match the cap formerly used for each closed-file reread.
+                        (bytes <= crate::access::MAX_URI_READ_BYTES).then(|| {
+                            (
+                                cwtools_cache::workspace::content_hash(text),
+                                cwtools_validation::inline_ignore::extract_inline_ignored_codes(
+                                    text,
+                                ),
+                            )
+                        })
+                    },
+                );
             let mut idx =
                 cwtools_localization::LocIndex::build_scoped(&service, loc_languages.as_deref());
             for layer in parent.iter().chain(&vanilla) {
@@ -460,23 +472,6 @@ impl Backend {
                 &mut lt,
                 &mut ll,
             );
-            let source_hashes = by_file
-                .iter()
-                .filter_map(|(file, diagnostics)| {
-                    let has_fix = diagnostics
-                        .iter()
-                        .any(|d| !crate::code_action::fixable_span_edits(d).is_empty());
-                    if !has_fix {
-                        return None;
-                    }
-                    let (text, _) = cwtools_file_manager::file_manager::read_text_capped(
-                        std::path::Path::new(file),
-                        crate::access::MAX_URI_READ_BYTES,
-                    )
-                    .ok()?;
-                    Some((file.clone(), cwtools_cache::workspace::content_hash(&text)))
-                })
-                .collect::<HashMap<_, _>>();
             for layer in parent.iter().chain(&vanilla) {
                 for (key, lang, text) in layer.text.entries() {
                     lt.insert_fallback(key, lang, text);
@@ -487,9 +482,9 @@ impl Backend {
             }
             *self.state.parent_loc.lock() = parent_cache;
             *self.state.vanilla_loc.lock() = vanilla_cache;
-            Ok::<_, FileError>((idx, by_file, lt, ll, source_hashes))
+            Ok::<_, FileError>((idx, by_file, lt, ll, source_metadata))
         });
-        let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) = match rebuilt {
+        let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_metadata) = match rebuilt {
             Ok(rebuilt) => rebuilt,
             Err(error) => {
                 self.warn_incomplete(
@@ -536,22 +531,19 @@ impl Backend {
                 continue;
             }
             if let Ok(uri_obj) = Url::parse(&uri) {
-                if !diags.is_empty() {
-                    let file_path = std::path::PathBuf::from(&file);
-                    let backend = self.clone();
-                    let inline_ignored = tokio::task::spawn_blocking(move || {
-                        backend.read_scan_source(&file_path).ok().map(|(text, _)| {
-                            cwtools_validation::inline_ignore::extract_inline_ignored_codes(&text)
-                        })
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                    crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
+                let metadata = source_metadata.get(&file);
+                if !diags.is_empty()
+                    && let Some((_, inline_ignored)) = metadata
+                {
+                    crate::validate::drop_inline_suppressed(&mut diags, inline_ignored);
                 }
-                self.publish_if_closed(uri_obj, diags, source_hashes.get(&file).copied())
-                    .await;
+                let source_hash = metadata.and_then(|(hash, _)| {
+                    diags
+                        .iter()
+                        .any(|d| !crate::code_action::fixable_span_edits(d).is_empty())
+                        .then_some(*hash)
+                });
+                self.publish_if_closed(uri_obj, diags, source_hash).await;
             }
         }
         cwtools_profiling::log_rss("loc_rebuild_done");

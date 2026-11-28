@@ -59,9 +59,21 @@ impl LocService {
     }
 
     pub fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
+        Self::from_paths_with_source(paths, budget, langs, |_, _, _| None::<()>).0
+    }
+
+    /// Inspect the same bounded decoded source used for parsing without retaining text.
+    /// The callback runs once per accepted source on a worker thread. Callers should
+    /// return compact metadata, not a copy of the source.
+    pub fn from_paths_with_source<T: Send>(
+        paths: Vec<PathBuf>,
+        budget: ScanBudget,
+        langs: Option<&[Lang]>,
+        inspect: impl Fn(&str, &str, u64) -> Option<T> + Sync + Send,
+    ) -> (Self, FxHashMap<String, T>) {
         use rayon::prelude::*;
         let bytes = ScanBytes::new();
-        let (results, sources): (Vec<_>, Vec<_>) = paths
+        let records: Vec<_> = paths
             .into_par_iter()
             .map(|path| {
                 let path_str = path.to_string_lossy().to_string();
@@ -70,6 +82,7 @@ impl LocService {
                         if !bytes.try_reserve(n, budget.max_bytes) {
                             return (
                                 Err((path_str, "scan byte budget exceeded".to_string())),
+                                None,
                                 None,
                             );
                         }
@@ -81,25 +94,40 @@ impl LocService {
                             && let Some(lang) = loc_header_language(&text, &path_str)
                             && !langs.contains(&lang)
                         {
-                            return (Ok(Vec::new()), None);
+                            return (Ok(Vec::new()), None, None);
                         }
                         let source = SourceFingerprint {
                             len: n,
                             hash: hash_bytes(text.as_bytes()),
                         };
                         let fingerprint = (path_str.clone(), source);
+                        let metadata =
+                            inspect(&path_str, &text, n).map(|value| (path_str.clone(), value));
                         (
                             parse_loc_file_entry(path_str, text, Some(enc)),
                             Some(fingerprint),
+                            metadata,
                         )
                     }
-                    Err(e) => (Err((path_str, format!("IO error: {}", e))), None),
+                    Err(e) => (Err((path_str, format!("IO error: {}", e))), None, None),
                 }
             })
-            .unzip();
+            .collect();
+        let mut results = Vec::with_capacity(records.len());
+        let mut sources = FxHashMap::default();
+        let mut inspected = FxHashMap::default();
+        for (result, source, metadata) in records {
+            results.push(result);
+            if let Some((path, fingerprint)) = source {
+                sources.insert(path, fingerprint);
+            }
+            if let Some((path, value)) = metadata {
+                inspected.insert(path, value);
+            }
+        }
         let mut service = Self::from_results(results);
-        service.sources = sources.into_iter().flatten().collect();
-        service
+        service.sources = sources;
+        (service, inspected)
     }
 
     /// Byte length `path` had when `from_paths` read it, for bounding a reread to compare
@@ -206,6 +234,35 @@ fn loc_header_language(text: &str, path: &str) -> Option<Lang> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_observer_receives_the_parsed_snapshot_once_per_file() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("fixture_l_english.yml");
+        let original = "l_english:\n key:0 \"value\" # cwtools-ignore CW254\n";
+        std::fs::write(&path, original).unwrap();
+        let observed = AtomicUsize::new(0);
+        let (service, metadata) = LocService::from_paths_with_source(
+            vec![path.clone()],
+            ScanBudget::default(),
+            None,
+            |_, text, bytes| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                Some((text.to_owned(), bytes))
+            },
+        );
+        assert_eq!(observed.load(Ordering::Relaxed), 1);
+        assert_eq!(service.files().len(), 1);
+        let key = path.to_string_lossy().to_string();
+        assert_eq!(metadata[&key].0, original);
+        assert_eq!(metadata[&key].1, original.len() as u64);
+        std::fs::write(&path, "changed").unwrap();
+        assert_eq!(
+            metadata[&key].0, original,
+            "metadata describes the parsed snapshot"
+        );
+    }
 
     #[test]
     fn from_files_parses_yaml_and_records_language() {
