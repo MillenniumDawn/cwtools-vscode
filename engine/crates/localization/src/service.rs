@@ -101,7 +101,8 @@ impl LocService {
                             hash: hash_bytes(text.as_bytes()),
                         };
                         let fingerprint = (path_str.clone(), source);
-                        let metadata = inspect(&path_str, &text, n).map(|value| (path_str.clone(), value));
+                        let metadata =
+                            inspect(&path_str, &text, n).map(|value| (path_str.clone(), value));
                         (
                             parse_loc_file_entry(path_str, text, Some(enc)),
                             Some(fingerprint),
@@ -243,7 +244,9 @@ mod tests {
         std::fs::write(&path, original).unwrap();
         let observed = AtomicUsize::new(0);
         let (service, metadata) = LocService::from_paths_with_source(
-            vec![path.clone()], ScanBudget::default(), None,
+            vec![path.clone()],
+            ScanBudget::default(),
+            None,
             |_, text, bytes| {
                 observed.fetch_add(1, Ordering::Relaxed);
                 Some((text.to_owned(), bytes))
@@ -255,7 +258,10 @@ mod tests {
         assert_eq!(metadata[&key].0, original);
         assert_eq!(metadata[&key].1, original.len() as u64);
         std::fs::write(&path, "changed").unwrap();
-        assert_eq!(metadata[&key].0, original, "metadata describes the parsed snapshot");
+        assert_eq!(
+            metadata[&key].0, original,
+            "metadata describes the parsed snapshot"
+        );
     }
 
     #[test]

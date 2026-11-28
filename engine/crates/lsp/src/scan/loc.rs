@@ -396,23 +396,26 @@ impl Backend {
                     cached.loc_keys.clone()
                 }
             };
-            let (service, source_metadata) = cwtools_localization::LocService::from_paths_with_source(
-                workspace_paths
-                    .into_iter()
-                    .filter(|path| !baseline_files.contains(path))
-                    .collect(),
-                cwtools_file_manager::file_manager::ScanBudget::default(),
-                parsed_languages,
-                |_, text, bytes| {
-                    // Match the cap formerly used for each closed-file reread.
-                    (bytes <= crate::access::MAX_URI_READ_BYTES).then(|| {
-                        (
-                            cwtools_cache::workspace::content_hash(text),
-                            cwtools_validation::inline_ignore::extract_inline_ignored_codes(text),
-                        )
-                    })
-                },
-            );
+            let (service, source_metadata) =
+                cwtools_localization::LocService::from_paths_with_source(
+                    workspace_paths
+                        .into_iter()
+                        .filter(|path| !baseline_files.contains(path))
+                        .collect(),
+                    cwtools_file_manager::file_manager::ScanBudget::default(),
+                    parsed_languages,
+                    |_, text, bytes| {
+                        // Match the cap formerly used for each closed-file reread.
+                        (bytes <= crate::access::MAX_URI_READ_BYTES).then(|| {
+                            (
+                                cwtools_cache::workspace::content_hash(text),
+                                cwtools_validation::inline_ignore::extract_inline_ignored_codes(
+                                    text,
+                                ),
+                            )
+                        })
+                    },
+                );
             let mut idx =
                 cwtools_localization::LocIndex::build_scoped(&service, loc_languages.as_deref());
             for layer in parent.iter().chain(&vanilla) {
@@ -520,7 +523,8 @@ impl Backend {
                     crate::validate::drop_inline_suppressed(&mut diags, inline_ignored);
                 }
                 let source_hash = metadata.and_then(|(hash, _)| {
-                    diags.iter()
+                    diags
+                        .iter()
                         .any(|d| !crate::code_action::fixable_span_edits(d).is_empty())
                         .then_some(*hash)
                 });

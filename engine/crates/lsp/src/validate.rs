@@ -5402,26 +5402,39 @@ mod ignored_tests {
             handshaken_backend_with_workspace(&crate::paths::path_to_uri(workspace.path())).await;
         assert!(backend.rebuild_and_publish_loc(workspace.path()).await);
         let message = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
-            .await.unwrap().unwrap();
+            .await
+            .unwrap()
+            .unwrap();
         let published: PublishDiagnosticsParams =
             serde_json::from_value(message.params().cloned().unwrap()).unwrap();
         assert_eq!(published.uri.as_str(), uri);
         assert!(!published.diagnostics.iter().any(|d| matches!(
             &d.code, Some(NumberOrString::String(code)) if code == "CW254"
         )));
-        assert!(published.diagnostics.iter().any(|d| matches!(
-            &d.code, Some(NumberOrString::String(code)) if code == "CW268"
-        ) && !crate::code_action::fixable_span_edits(d).is_empty()));
+        assert!(
+            published
+                .diagnostics
+                .iter()
+                .any(|d| matches!(
+                    &d.code, Some(NumberOrString::String(code)) if code == "CW268"
+                ) && !crate::code_action::fixable_span_edits(d).is_empty())
+        );
         let fixes = backend.state.fixable_edits.lock();
         let snapshot = fixes.get(&uri).expect("fixable diagnostic retained");
-        assert_eq!(snapshot.content_hash, Some(cwtools_cache::workspace::content_hash(original)));
+        assert_eq!(
+            snapshot.content_hash,
+            Some(cwtools_cache::workspace::content_hash(original))
+        );
         assert_eq!(backend.state.scan_source_reads.load(Ordering::Relaxed), 0);
         drop(fixes);
         // The existing edit-time hash guard must reject this different disk text.
         std::fs::write(&path, "changed after scan").unwrap();
         let summary = backend.fix_all_workspace_impl().await;
         assert!(summary.contains("stale"), "{summary}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "changed after scan");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "changed after scan"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
