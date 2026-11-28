@@ -1057,17 +1057,16 @@ impl Backend {
             loc_signature.is_some() && *self.state.last_loc_signature.lock() == loc_signature;
         if quiet && loc_unchanged {
             tracing::info!("quiet scan: loc signature unchanged, skipping loc rebuild");
-        } else if let Some(discovery) = &loc_discovery {
-            if !self
+        } else if let Some(discovery) = &loc_discovery
+            && !self
                 .rebuild_and_publish_discovered_loc(
                     discovery,
                     cwtools_file_manager::file_manager::ScanBudget::default(),
                 )
                 .await
-            {
-                // The rebuild keeps the previous localisation index and diagnostics.
-                loc_incomplete = true;
-            }
+        {
+            // The rebuild keeps the previous localisation index and diagnostics.
+            loc_incomplete = true;
         }
         if cancel.is_cancelled() {
             return false;

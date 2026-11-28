@@ -413,8 +413,8 @@ impl Backend {
                 discovery
                     .workspace_paths
                     .iter()
+                    .filter(|&path| !baseline_files.contains(path))
                     .cloned()
-                    .filter(|path| !baseline_files.contains(path))
                     .collect(),
                 cwtools_file_manager::file_manager::ScanBudget::default(),
                 parsed_languages,
