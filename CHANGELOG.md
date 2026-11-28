@@ -4,6 +4,10 @@
 
 * Skip the editor's suppression reread for clean localization files while still clearing their previous diagnostics. Skip parent script and localization path processing in batch runs with no parent mods.
 
+#### Tooling
+
+* Find the `md_bench` example's corpus through the shared test-support checkout helper instead of a local copy of it. (#1375)
+
 ### 4.0.10
 
 #### Tooling
