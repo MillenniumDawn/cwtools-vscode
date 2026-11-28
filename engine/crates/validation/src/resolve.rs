@@ -165,15 +165,10 @@ pub(crate) fn find_type_from_candidates<'a>(
         {
             continue;
         }
+        // The predicate above has already checked the filter for an ordinary
+        // root. Wrapper types deliberately bypass it until the child is seen.
         let tkf_bonus = match (root_key, t.skip_root_key.is_empty(), &t.type_key_filter) {
-            (Some(rk), true, Some((keys, negate))) => {
-                let hit = keys.iter().any(|k| k.eq_ignore_ascii_case(rk));
-                if hit != *negate {
-                    5_000
-                } else {
-                    continue; // filter excludes this key: the type does not apply
-                }
-            }
+            (Some(_), true, Some(_)) => 5_000,
             _ => 0,
         };
         let skip_key_bonus = match root_key {
@@ -220,12 +215,7 @@ pub(crate) fn find_grandchild_type<'a>(
             continue;
         }
         match &t.type_key_filter {
-            Some((keys, negative)) => {
-                let in_list = keys.iter().any(|k| k.eq_ignore_ascii_case(gc_key));
-                if in_list != *negative {
-                    return Some(t);
-                }
-            }
+            Some(_) => return Some(t),
             None => {
                 if generic.is_none() {
                     generic = Some(t);
@@ -359,6 +349,121 @@ mod tests {
     use cwtools_parser::parser::parse_string;
     use cwtools_rules::rules_converter::ast_to_ruleset;
     use cwtools_string_table::string_table::StringTable;
+
+    fn sample_type(name: &str) -> TypeDefinition {
+        let table = StringTable::new();
+        let parsed = parse_string("types = { type[foo] = { path = \"common/foo\" } }", &table);
+        let mut td = ast_to_ruleset(&parsed, &table).types.remove(0);
+        td.name = name.to_string();
+        td
+    }
+
+    #[test]
+    fn filtered_candidates_keep_root_and_grandchild_precedence() {
+        let generic = sample_type("generic");
+        let mut positive = sample_type("positive");
+        positive.type_key_filter = Some((vec!["allowed".into()], false));
+        let mut tied = positive.clone();
+        tied.name = "tied".into();
+        let mut negative = sample_type("negative");
+        negative.type_key_filter = Some((vec!["blocked".into()], true));
+        negative.starts_with = Some("allow".into());
+        negative.key_prefix = Some("allow_".into());
+        let candidates = [
+            PathCandidate {
+                type_def: &generic,
+                base_weight: 10,
+            },
+            PathCandidate {
+                type_def: &positive,
+                base_weight: 10,
+            },
+            PathCandidate {
+                type_def: &tied,
+                base_weight: 10,
+            },
+            PathCandidate {
+                type_def: &negative,
+                base_weight: 10,
+            },
+        ];
+        // Positive/negative filters are case-insensitive; ties keep the first.
+        assert_eq!(
+            find_type_from_candidates(&candidates, Some("ALLOWED"))
+                .unwrap()
+                .name,
+            "positive"
+        );
+        assert_eq!(
+            find_type_from_candidates(&candidates, Some("blocked"))
+                .unwrap()
+                .name,
+            "generic"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &positive, &tied, &negative], "ALLOWED")
+                .unwrap()
+                .name,
+            "positive"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &positive, &negative], "blocked")
+                .unwrap()
+                .name,
+            "generic"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &negative], "allow_other")
+                .unwrap()
+                .name,
+            "negative"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &negative], "allowed")
+                .unwrap()
+                .name,
+            "generic"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &negative], "other")
+                .unwrap()
+                .name,
+            "generic"
+        );
+
+        let mut wrapper = sample_type("wrapper");
+        wrapper.skip_root_key = vec![SkipRootKey::SpecificKey("wrapper".into())];
+        wrapper.type_key_filter = Some((vec!["child".into()], false));
+        let wrappers = [
+            PathCandidate {
+                type_def: &generic,
+                base_weight: 10,
+            },
+            PathCandidate {
+                type_def: &wrapper,
+                base_weight: 10,
+            },
+        ];
+        // A wrapper root must not be excluded by its child-only filter.
+        assert_eq!(
+            find_type_from_candidates(&wrappers, Some("wrapper"))
+                .unwrap()
+                .name,
+            "wrapper"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &wrapper], "child")
+                .unwrap()
+                .name,
+            "wrapper"
+        );
+        assert_eq!(
+            find_grandchild_type(&[&generic, &wrapper], "other")
+                .unwrap()
+                .name,
+            "generic"
+        );
+    }
 
     #[test]
     fn path_candidates_handle_backslash_paths() {

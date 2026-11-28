@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Check each type's key filter once when picking the type of a root or wrapped definition, instead of a second time for its ranking. Type selection is unchanged. (#1372)
 * Walk the workspace localization folder once per editor scan. The change signature, the parent-mod shadowing filter and the rebuild used to walk it separately, up to four times. The rebuild now reads the file list the signature was taken from, and a failed walk keeps the last good index and diagnostics. (#1367)
 * Take the editor's localization fix hashes and inline suppressions from the text the rebuild parsed, instead of reopening a file that has a fixable diagnostic. They can no longer come from a different version of the file than the diagnostics. (#1368)
 * Skip the editor's suppression reread for clean localization files while still clearing their previous diagnostics. Skip parent script and localization path processing in batch runs with no parent mods.
